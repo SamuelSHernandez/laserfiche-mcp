@@ -4,18 +4,22 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that lets
 Claude (Desktop, Code, or any MCP client) search and read documents in a
 [Laserfiche](https://www.laserfiche.com) repository.
 
-> **v1 status:** read-only, self-hosted Repository API Server.
-> Cloud and write tools are scoped for v2 / v1.1.
+> **Current release: v0.2.0** — read-only, self-hosted Repository API V2.
+> Endpoint paths and auth flow are validated against the official
+> [`Laserfiche/lf-repository-api-client-java`](https://github.com/Laserfiche/lf-repository-api-client-java)
+> client. Cloud (JWT-signed client_credentials) and write tools are scoped
+> for v2 / v1.1.
 
 ## What you can do with it
 
 Once connected, Claude can:
 
-- Search the repository with native Laserfiche search syntax
+- Search the repository with native Laserfiche search syntax (or by name pattern via the convenience tool)
 - List the contents of any folder
 - Look up an entry by ID or full path
 - Read all template field values on an entry
-- Download an electronic document and read its text
+- Read a document's Laserfiche-extracted text
+- Inspect document metadata (size of the raw Edoc, without dumping bytes into the model)
 
 ## Requirements
 
@@ -46,7 +50,7 @@ cp .env.example .env
 $EDITOR .env
 ```
 
-Minimum required variables for self-hosted basic auth:
+Minimum required variables for self-hosted password-grant auth:
 
 | Variable             | Example                                       |
 | -------------------- | --------------------------------------------- |
@@ -54,11 +58,17 @@ Minimum required variables for self-hosted basic auth:
 | `LF_REPOSITORY_ID`   | `my-repo`                                     |
 | `LF_USERNAME`        | `service-account`                             |
 | `LF_PASSWORD`        | (your service account password)               |
-| `LF_AUTH_MODE`       | `basic`                                       |
+| `LF_AUTH_MODE`       | `password`                                    |
 | `LF_READ_ONLY`       | `true` (default — write tools are not yet implemented) |
 
-See [`.env.example`](.env.example) for the full list including pagination
-limits, request timeout, and reserved OAuth/cloud fields.
+See [`.env.example`](.env.example) for the full list including OAuth
+config, pagination limits, request timeout, retry attempts, and SSL
+verification.
+
+> **Auth note:** Laserfiche self-hosted does not accept HTTP Basic auth.
+> The server exchanges your username/password for a bearer token at
+> `POST /v2/{repository_id}/Token` on first request and refreshes it
+> automatically before expiry.
 
 ## Connect to Claude Desktop
 
@@ -76,7 +86,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
         "LF_REPOSITORY_ID": "my-repo",
         "LF_USERNAME": "service-account",
         "LF_PASSWORD": "replace-me",
-        "LF_AUTH_MODE": "basic",
+        "LF_AUTH_MODE": "password",
         "LF_READ_ONLY": "true"
       }
     }
@@ -107,14 +117,16 @@ specific Repository API Server version before wiring it into Claude.
 
 ## Tools
 
-| Tool                 | Purpose                                                              |
-| -------------------- | -------------------------------------------------------------------- |
-| `search_entries`     | Run a Laserfiche search query, e.g. `{LF:Name="*.pdf"}`              |
-| `list_folder`        | List children of a folder by ID                                       |
-| `get_entry`          | Fetch metadata for one entry by ID                                    |
-| `get_entry_by_path`  | Resolve a full path (e.g. `\Imports\2024\Smith,John`) to an entry     |
-| `get_field_values`   | Read all template fields assigned to an entry                         |
-| `get_document_text`  | Download an electronic document's content as text (truncated by default) |
+| Tool                 | Purpose                                                                 |
+| -------------------- | ----------------------------------------------------------------------- |
+| `search_entries`     | Run a raw Laserfiche search query, e.g. `{LF:Name="*.pdf"}`             |
+| `search_by_name`     | Convenience wrapper: name pattern + optional folder scope               |
+| `list_folder`        | List children of a folder by ID                                          |
+| `get_entry`          | Fetch metadata for one entry by ID                                       |
+| `get_entry_by_path`  | Resolve a full path (e.g. `\Imports\2024\Smith,John`) to an entry        |
+| `get_field_values`   | Read all template fields assigned to an entry                            |
+| `get_document_text`  | Download a document's Laserfiche-extracted text (truncated by default)   |
+| `get_document_edoc`  | Inspect raw electronic document metadata (size + hint, never raw bytes) |
 
 All tool descriptions are written to read like prompts — they tell the
 model when to use the tool, valid input shapes, and what kind of follow-up
@@ -122,9 +134,9 @@ is expected. See [`src/laserfiche_mcp/server.py`](src/laserfiche_mcp/server.py).
 
 ## Roadmap
 
-- **v1.1** — Write tools (`update_field_values`, `move_entry`) gated behind `LF_READ_ONLY=false`; OAuth/LFDS auth.
-- **v2** — Laserfiche Cloud support.
-- **Beyond** — Workflow trigger tools, batch field updates, advanced search builders.
+- **v1.1** — Write tools (`update_field_values`, `move_entry`, rename) gated behind `LF_READ_ONLY=false`.
+- **v2** — Laserfiche Cloud support (`signin.laserfiche.com` JWT-signed `client_credentials` flow).
+- **Beyond** — Workflow trigger tools, batch field updates, advanced search builders, async search for large result sets.
 
 ## Development
 
@@ -144,9 +156,9 @@ use the MCP Inspector pointed at `uv run laserfiche-mcp` with a populated
 
 Issues and PRs welcome — particularly:
 
-- Endpoint corrections for older Repository API Server versions
-- LFDS OAuth token discovery in `auth.py`
-- Cloud (`api.laserfiche.com`) client implementation
+- Endpoint corrections for older Repository API Server versions (v0.2.0 targets V2)
+- Laserfiche Cloud client + JWT-signed `client_credentials` assertion flow
+- Write tools (`update_field_values`, `move_entry`) and async-search support
 
 This is a community project, **not** affiliated with or endorsed by
 Laserfiche.
