@@ -1,0 +1,87 @@
+# Smithery (https://smithery.ai) install manifest.
+# Lets users install with: npx -y @smithery/cli install laserfiche-mcp --client claude
+
+startCommand:
+  type: stdio
+  command: uvx
+  args:
+    - laserfiche-mcp
+
+configSchema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  required:
+    - LF_REPO_API_URL
+    - LF_REPOSITORY_ID
+    - LF_USERNAME
+    - LF_PASSWORD
+  properties:
+    LF_DEPLOYMENT_MODE:
+      type: string
+      enum: [self_hosted]
+      default: self_hosted
+      description: "Currently only self_hosted is supported. Cloud is reserved for v2."
+    LF_REPO_API_URL:
+      type: string
+      format: uri
+      description: "Base URL of the Laserfiche Repository API Server, e.g. https://lf.example.com/LFRepositoryAPI"
+    LF_REPOSITORY_ID:
+      type: string
+      description: "Repository name or ID to operate against."
+    LF_AUTH_MODE:
+      type: string
+      enum: [password, oauth]
+      default: password
+      description: "Auth strategy. 'password' exchanges username/password for a bearer token via /v2/{repo}/Token. 'oauth' uses a client_credentials grant against an LFDS-compatible OAuth server."
+    LF_USERNAME:
+      type: string
+      description: "Service account username (for password mode)."
+    LF_PASSWORD:
+      type: string
+      format: password
+      description: "Service account password (for password mode)."
+    LF_OAUTH_TOKEN_URL:
+      type: string
+      format: uri
+      description: "OAuth token endpoint (for oauth mode)."
+    LF_CLIENT_ID:
+      type: string
+      description: "OAuth client ID (for oauth mode)."
+    LF_CLIENT_SECRET:
+      type: string
+      format: password
+      description: "OAuth client secret (for oauth mode)."
+    LF_OAUTH_SCOPE:
+      type: string
+      description: "Optional OAuth scope (for oauth mode)."
+    LF_READ_ONLY:
+      type: boolean
+      default: true
+      description: "When true, only read tools are registered. Default true for safety."
+    LF_VERIFY_SSL:
+      type: boolean
+      default: true
+      description: "Verify the server's TLS certificate. Set false only for self-signed cert dev environments."
+    LF_RETRY_ATTEMPTS:
+      type: integer
+      minimum: 0
+      maximum: 10
+      default: 3
+      description: "Retries on transient 5xx/429/connection failures with exponential backoff."
+    LF_REQUEST_TIMEOUT_SECONDS:
+      type: number
+      default: 30
+      description: "Per-request HTTP timeout in seconds."
+    LF_MAX_RESULTS_DEFAULT:
+      type: integer
+      default: 25
+      description: "Default page size for list/search tools."
+    LF_MAX_RESULTS_CEILING:
+      type: integer
+      default: 200
+      description: "Hard cap on page size regardless of caller-requested value."
+    LF_LOG_LEVEL:
+      type: string
+      enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+      default: INFO
+      description: "Python logging verbosity."

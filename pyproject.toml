@@ -1,6 +1,6 @@
 [project]
 name = "laserfiche-mcp"
-version = "0.2.0"
+version = "0.2.1"
 description = "Model Context Protocol server for Laserfiche document management systems"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -10,7 +10,7 @@ authors = [
 ]
 keywords = ["mcp", "laserfiche", "claude", "anthropic", "ecm", "document-management"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
@@ -18,7 +18,11 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications",
     "Topic :: Office/Business",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 dependencies = [
     "mcp[cli]>=1.2.0",
@@ -41,6 +45,9 @@ laserfiche-mcp = "laserfiche_mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/SamuelSHernandez/laserfiche-mcp"
+Repository = "https://github.com/SamuelSHernandez/laserfiche-mcp"
+Documentation = "https://github.com/SamuelSHernandez/laserfiche-mcp#readme"
+Changelog = "https://github.com/SamuelSHernandez/laserfiche-mcp/blob/main/CHANGELOG.md"
 Issues = "https://github.com/SamuelSHernandez/laserfiche-mcp/issues"
 
 [build-system]
@@ -49,6 +56,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/laserfiche_mcp"]
+
+# Ensure the PEP 561 marker ships in the wheel so downstream type checkers
+# treat the package as typed.
+[tool.hatch.build.targets.wheel.force-include]
+"src/laserfiche_mcp/py.typed" = "laserfiche_mcp/py.typed"
 
 [tool.ruff]
 line-length = 100

@@ -1,5 +1,13 @@
 # laserfiche-mcp
 
+[![PyPI version](https://img.shields.io/pypi/v/laserfiche-mcp.svg)](https://pypi.org/project/laserfiche-mcp/)
+[![Python versions](https://img.shields.io/pypi/pyversions/laserfiche-mcp.svg)](https://pypi.org/project/laserfiche-mcp/)
+[![CI](https://github.com/SamuelSHernandez/laserfiche-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelSHernandez/laserfiche-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-1f6feb.svg)](https://modelcontextprotocol.io)
+
+> **Community project — not affiliated with or endorsed by Laserfiche.**
+
 A [Model Context Protocol](https://modelcontextprotocol.io) server that lets
 Claude (Desktop, Code, or any MCP client) search and read documents in a
 [Laserfiche](https://www.laserfiche.com) repository.
