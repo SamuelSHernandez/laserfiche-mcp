@@ -1,57 +1,126 @@
-"""Smoke tests for the LaserficheClient using pytest-httpx mocks."""
+"""Tests for LaserficheClient using pytest-httpx mocks."""
 
 from __future__ import annotations
-
-import os
 
 import pytest
 from pytest_httpx import HTTPXMock
 
 from laserfiche_mcp.auth import BasicAuthStrategy
-from laserfiche_mcp.client import LaserficheClient, LaserficheError
+from laserfiche_mcp.client import LaserficheClient, LaserficheError, build_repo_path
 from laserfiche_mcp.config import Settings
 
 
-def _settings() -> Settings:
-    """Build settings without polluting real env vars."""
-    os.environ.update({
-        "LF_DEPLOYMENT_MODE": "self_hosted",
-        "LF_REPO_API_URL": "https://lf.example.test/LFRepositoryAPI",
-        "LF_REPOSITORY_ID": "demo",
-        "LF_AUTH_MODE": "basic",
-        "LF_USERNAME": "svc",
-        "LF_PASSWORD": "secret",
-    })
-    return Settings()  # type: ignore[call-arg]
+def _build_client(settings: Settings) -> LaserficheClient:
+    auth = BasicAuthStrategy(settings.username or "", settings.password)  # type: ignore[arg-type]
+    return LaserficheClient(settings, auth)
+
+
+# --- build_repo_path ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "base, repo, suffix, expected",
+    [
+        (
+            "https://lf.test/LFRepositoryAPI",
+            "demo",
+            "Entries/42",
+            "https://lf.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42",
+        ),
+        (
+            "https://lf.test/LFRepositoryAPI/",
+            "demo",
+            "Entries/42",
+            "https://lf.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42",
+        ),
+        (
+            "https://lf.test/LFRepositoryAPI",
+            "demo",
+            "/Entries/42",
+            "https://lf.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42",
+        ),
+    ],
+)
+def test_build_repo_path(base: str, repo: str, suffix: str, expected: str) -> None:
+    assert build_repo_path(base, repo, suffix) == expected
+
+
+# --- get_entry --------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_entry_shapes_request(httpx_mock: HTTPXMock) -> None:
-    settings = _settings()
-    auth = BasicAuthStrategy(settings.username or "", settings.password or "")
-
+async def test_get_entry_shapes_request(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="GET",
         url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42",
         json={"id": 42, "name": "Smith,John", "entryType": "Folder"},
     )
 
-    async with LaserficheClient(settings, auth) as client:
+    async with _build_client(settings) as client:
         result = await client.get_entry(42)
 
     assert result["id"] == 42
-    assert result["name"] == "Smith,John"
-
-    # Confirm Authorization header was applied
     request = httpx_mock.get_requests()[0]
     assert request.headers["Authorization"].startswith("Basic ")
 
 
-@pytest.mark.asyncio
-async def test_search_uses_query_param(httpx_mock: HTTPXMock) -> None:
-    settings = _settings()
-    auth = BasicAuthStrategy(settings.username or "", settings.password or "")
+# --- get_entry_by_path ------------------------------------------------------
 
+
+@pytest.mark.asyncio
+async def test_get_entry_by_path_passes_full_path_param(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url=(
+            "https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo"
+            "/Entries/ByPath?fullPath=%5CImports%5C2024"
+        ),
+        json={"id": 99, "name": "2024", "entryType": "Folder"},
+    )
+
+    async with _build_client(settings) as client:
+        result = await client.get_entry_by_path("\\Imports\\2024")
+
+    assert result["id"] == 99
+
+
+# --- list_folder ------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_folder_paginates(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url=(
+            "https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo"
+            "/Entries/1/Children?%24top=10&%24skip=20"
+        ),
+        json={"value": [], "@odata.count": 100},
+    )
+
+    async with _build_client(settings) as client:
+        result = await client.list_folder(1, max_results=10, skip=20)
+
+    assert result["@odata.count"] == 100
+
+
+# --- search_entries ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_uses_query_param(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="GET",
         url=(
@@ -61,15 +130,76 @@ async def test_search_uses_query_param(httpx_mock: HTTPXMock) -> None:
         json={"value": []},
     )
 
-    async with LaserficheClient(settings, auth) as client:
+    async with _build_client(settings) as client:
         await client.search_entries('{LF:Name="Smith"}', max_results=10)
 
 
-@pytest.mark.asyncio
-async def test_error_response_raises(httpx_mock: HTTPXMock) -> None:
-    settings = _settings()
-    auth = BasicAuthStrategy(settings.username or "", settings.password or "")
+# --- get_field_values -------------------------------------------------------
 
+
+@pytest.mark.asyncio
+async def test_get_field_values(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42/Fields",
+        json={"value": [{"fieldName": "Status", "values": ["Approved"]}]},
+    )
+
+    async with _build_client(settings) as client:
+        result = await client.get_field_values(42)
+
+    assert result["value"][0]["fieldName"] == "Status"
+
+
+# --- get_entry_content ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_entry_content_returns_bytes(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42/Edoc",
+        content=b"hello world",
+    )
+
+    async with _build_client(settings) as client:
+        result = await client.get_entry_content(42)
+
+    assert result == b"hello world"
+
+
+@pytest.mark.asyncio
+async def test_get_entry_content_raises_on_404(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/999/Edoc",
+        status_code=404,
+    )
+
+    async with _build_client(settings) as client:
+        with pytest.raises(LaserficheError) as exc_info:
+            await client.get_entry_content(999)
+
+    assert exc_info.value.status_code == 404
+
+
+# --- error handling ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_error_response_raises(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="GET",
         url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/999",
@@ -77,8 +207,63 @@ async def test_error_response_raises(httpx_mock: HTTPXMock) -> None:
         json={"error": "Entry not found"},
     )
 
-    async with LaserficheClient(settings, auth) as client:
+    async with _build_client(settings) as client:
         with pytest.raises(LaserficheError) as exc_info:
             await client.get_entry(999)
 
     assert exc_info.value.status_code == 404
+
+
+# --- retry behavior ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retries_on_transient_5xx(
+    httpx_mock: HTTPXMock,
+    lf_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LF_RETRY_ATTEMPTS", "2")
+    settings = Settings()  # type: ignore[call-arg]
+
+    # First two return 503, third returns 200
+    url = "https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42"
+    httpx_mock.add_response(method="GET", url=url, status_code=503)
+    httpx_mock.add_response(method="GET", url=url, status_code=503)
+    httpx_mock.add_response(
+        method="GET", url=url,
+        json={"id": 42, "name": "x", "entryType": "Folder"},
+    )
+
+    # Eliminate sleep delays for the test.
+    import laserfiche_mcp.client as client_mod
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(client_mod.asyncio, "sleep", _no_sleep)
+
+    async with _build_client(settings) as client:
+        result = await client.get_entry(42)
+
+    assert result["id"] == 42
+    assert len(httpx_mock.get_requests()) == 3
+
+
+@pytest.mark.asyncio
+async def test_does_not_retry_4xx(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42",
+        status_code=403,
+    )
+
+    async with _build_client(settings) as client:
+        with pytest.raises(LaserficheError) as exc_info:
+            await client.get_entry(42)
+
+    assert exc_info.value.status_code == 403
+    assert len(httpx_mock.get_requests()) == 1

@@ -4,14 +4,14 @@ Supports two deployment modes:
   - "self_hosted": Repository API Server (on-premise)
   - "cloud":      api.laserfiche.com (Laserfiche Cloud)
 
-Self-hosted is the v1 focus; cloud config fields are reserved for v2.
+Self-hosted is the v1 focus; cloud config is reserved for v2.
 """
 
 from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import Field, model_validator
+from pydantic import Field, HttpUrl, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,8 +22,8 @@ class DeploymentMode(str, Enum):
 
 class AuthMode(str, Enum):
     BASIC = "basic"            # username + password (self-hosted)
-    OAUTH = "oauth"            # LFDS OAuth (self-hosted) or cloud OAuth
-    API_KEY = "api_key"        # cloud service principal
+    OAUTH = "oauth"            # client_credentials grant (LFDS or cloud)
+    API_KEY = "api_key"        # cloud service principal (reserved for v2)
 
 
 class Settings(BaseSettings):
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     )
 
     # --- Self-hosted ---
-    repo_api_url: str | None = Field(
+    repo_api_url: HttpUrl | None = Field(
         default=None,
         description="Base URL of Repository API Server, e.g. https://lf.example.com/LFRepositoryAPI",
     )
@@ -51,60 +51,104 @@ class Settings(BaseSettings):
         description="Repository name or ID.",
     )
 
-    # --- Cloud (v2, reserved) ---
-    cloud_region: str | None = Field(
-        default=None,
-        description="Cloud region: 'us', 'ca', 'eu'. Used in v2.",
-    )
-
     # --- Auth ---
     auth_mode: AuthMode = Field(default=AuthMode.BASIC)
     username: str | None = None
-    password: str | None = None
-    client_id: str | None = None
-    client_secret: str | None = None
-    api_key: str | None = None
+    password: SecretStr | None = None
 
-    # --- Safety ---
+    # OAuth (client_credentials grant)
+    oauth_token_url: HttpUrl | None = None
+    oauth_scope: str | None = None
+    client_id: str | None = None
+    client_secret: SecretStr | None = None
+
+    # Cloud (reserved for v2)
+    api_key: SecretStr | None = None
+
+    # --- Network ---
+    verify_ssl: bool = Field(
+        default=True,
+        description="Verify the server's TLS certificate. Set false only for "
+        "self-signed cert dev environments — emits a warning when disabled.",
+    )
+    request_timeout_seconds: float = Field(default=30.0, gt=0)
+    retry_attempts: int = Field(
+        default=3, ge=0, le=10,
+        description="Number of times to retry transient failures (5xx, 429, "
+        "connection errors) with exponential backoff.",
+    )
+
+    # --- Behavior ---
     read_only: bool = Field(
         default=True,
         description="When true, write tools are not registered. Default true for safety.",
     )
     max_results_default: int = Field(
         default=25,
+        ge=1, le=500,
         description="Default page size for list/search tools.",
     )
     max_results_ceiling: int = Field(
         default=200,
+        ge=1, le=1000,
         description="Hard cap on page size regardless of caller-requested value.",
     )
-    request_timeout_seconds: float = Field(default=30.0)
+    log_level: str = Field(
+        default="INFO",
+        description="Python logging level for the server (DEBUG, INFO, WARNING, ERROR).",
+    )
 
     # --- Validation ---
     @model_validator(mode="after")
-    def _validate_required_for_mode(self) -> Settings:
-        if self.deployment_mode is DeploymentMode.SELF_HOSTED:
-            missing = [
-                name for name, value in {
-                    "LF_REPO_API_URL": self.repo_api_url,
-                    "LF_REPOSITORY_ID": self.repository_id,
-                }.items() if not value
-            ]
-            if missing:
-                raise ValueError(
-                    f"Missing required environment variables for self-hosted mode: "
-                    f"{', '.join(missing)}"
-                )
-
-            if self.auth_mode is AuthMode.BASIC and not (self.username and self.password):
-                raise ValueError(
-                    "auth_mode=basic requires LF_USERNAME and LF_PASSWORD."
-                )
-
+    def _validate(self) -> Settings:
         if self.deployment_mode is DeploymentMode.CLOUD:
             raise NotImplementedError(
                 "Cloud deployment mode is reserved for v2. "
                 "Set LF_DEPLOYMENT_MODE=self_hosted for now."
+            )
+
+        missing: list[str] = []
+        if not self.repo_api_url:
+            missing.append("LF_REPO_API_URL")
+        if not self.repository_id:
+            missing.append("LF_REPOSITORY_ID")
+
+        if self.auth_mode is AuthMode.BASIC:
+            if not self.username:
+                missing.append("LF_USERNAME")
+            if not self.password:
+                missing.append("LF_PASSWORD")
+        elif self.auth_mode is AuthMode.OAUTH:
+            if not self.oauth_token_url:
+                missing.append("LF_OAUTH_TOKEN_URL")
+            if not self.client_id:
+                missing.append("LF_CLIENT_ID")
+            if not self.client_secret:
+                missing.append("LF_CLIENT_SECRET")
+        elif self.auth_mode is AuthMode.API_KEY:
+            raise NotImplementedError(
+                "api_key auth is reserved for cloud (v2). "
+                "Use LF_AUTH_MODE=basic or oauth."
+            )
+
+        if missing:
+            raise ValueError(
+                "Missing required environment variables: "
+                + ", ".join(missing)
+                + ". See .env.example for the full list."
+            )
+
+        if self.max_results_default > self.max_results_ceiling:
+            raise ValueError(
+                "LF_MAX_RESULTS_DEFAULT must be <= LF_MAX_RESULTS_CEILING "
+                f"(got {self.max_results_default} > {self.max_results_ceiling})."
+            )
+
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if self.log_level.upper() not in valid_levels:
+            raise ValueError(
+                f"LF_LOG_LEVEL must be one of {sorted(valid_levels)}, "
+                f"got {self.log_level!r}."
             )
 
         return self

@@ -1,18 +1,23 @@
 """Authentication strategies for Laserfiche.
 
 Abstracts the difference between basic auth (self-hosted, simple) and OAuth
-(self-hosted via LFDS or cloud). The client only sees ``apply(headers)``.
+client-credentials (self-hosted via LFDS or cloud). The client only sees
+``apply(request)``.
 """
 
 from __future__ import annotations
 
 import base64
+import logging
 import time
 from abc import ABC, abstractmethod
 
 import httpx
+from pydantic import SecretStr
 
 from .config import AuthMode, Settings
+
+logger = logging.getLogger("laserfiche_mcp.auth")
 
 
 class AuthStrategy(ABC):
@@ -23,10 +28,14 @@ class AuthStrategy(ABC):
 
 
 class BasicAuthStrategy(AuthStrategy):
-    """HTTP Basic auth — simplest path for self-hosted dev/testing."""
+    """HTTP Basic auth — simplest path for self-hosted."""
 
-    def __init__(self, username: str, password: str) -> None:
-        token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    def __init__(self, username: str, password: SecretStr) -> None:
+        token = base64.b64encode(
+            f"{username}:{password.get_secret_value()}".encode()
+        ).decode()
+        # Encoded once; the SecretStr is dropped after this — we keep only
+        # the base64 form, which is no more sensitive than the original.
         self._header = f"Basic {token}"
 
     async def apply(self, request: httpx.Request) -> None:
@@ -34,24 +43,28 @@ class BasicAuthStrategy(AuthStrategy):
 
 
 class OAuthStrategy(AuthStrategy):
-    """OAuth 2.0 client credentials with token caching.
+    """OAuth 2.0 client_credentials grant with token caching.
 
-    Stub for v1.1 — a working implementation needs the LFDS or Laserfiche Cloud
-    token endpoint, which differs by deployment. The shape below is correct;
-    the token URL needs to be filled in once we wire up cloud support.
+    Refreshes ~30 seconds before expiry. Re-uses one short-lived
+    ``httpx.AsyncClient`` per refresh; tokens are kept in memory only and
+    are dropped on server restart.
     """
 
     def __init__(
         self,
         token_url: str,
         client_id: str,
-        client_secret: str,
+        client_secret: SecretStr,
         scope: str | None = None,
+        verify_ssl: bool = True,
+        timeout_seconds: float = 30.0,
     ) -> None:
         self._token_url = token_url
         self._client_id = client_id
         self._client_secret = client_secret
         self._scope = scope
+        self._verify_ssl = verify_ssl
+        self._timeout_seconds = timeout_seconds
         self._access_token: str | None = None
         self._expires_at: float = 0.0
 
@@ -61,11 +74,15 @@ class OAuthStrategy(AuthStrategy):
         request.headers["Authorization"] = f"Bearer {self._access_token}"
 
     async def _refresh(self) -> None:
-        async with httpx.AsyncClient() as client:
+        logger.debug("Refreshing OAuth access token from %s", self._token_url)
+        async with httpx.AsyncClient(
+            verify=self._verify_ssl,
+            timeout=self._timeout_seconds,
+        ) as client:
             data = {
                 "grant_type": "client_credentials",
                 "client_id": self._client_id,
-                "client_secret": self._client_secret,
+                "client_secret": self._client_secret.get_secret_value(),
             }
             if self._scope:
                 data["scope"] = self._scope
@@ -83,10 +100,19 @@ def build_auth_strategy(settings: Settings) -> AuthStrategy:
         return BasicAuthStrategy(settings.username, settings.password)
 
     if settings.auth_mode is AuthMode.OAUTH:
-        raise NotImplementedError(
-            "OAuth auth mode is not yet wired up. "
-            "Use LF_AUTH_MODE=basic for now, or contribute the LFDS token "
-            "endpoint discovery in auth.py."
+        assert (
+            settings.oauth_token_url
+            and settings.client_id
+            and settings.client_secret
+        )  # validated upstream
+        return OAuthStrategy(
+            token_url=str(settings.oauth_token_url),
+            client_id=settings.client_id,
+            client_secret=settings.client_secret,
+            scope=settings.oauth_scope,
+            verify_ssl=settings.verify_ssl,
+            timeout_seconds=settings.request_timeout_seconds,
         )
 
+    # Settings validation rejects API_KEY before we get here.
     raise NotImplementedError(f"Unsupported auth mode: {settings.auth_mode}")
