@@ -1,11 +1,22 @@
-"""Thin async client for the Laserfiche Repository API.
+"""Thin async client for the Laserfiche Repository API V2.
 
-Deliberately a thin pass-through over httpx — all the Laserfiche-specific
-shaping happens here, so ``server.py`` can stay focused on tool definitions
-and response framing.
+Endpoint paths follow the official self-hosted Repository API V2 conventions
+as documented at developer.laserfiche.com and confirmed against the official
+``Laserfiche/lf-repository-api-client-java`` client. Cloud will get a
+parallel client in v2.
 
-Endpoint paths follow the self-hosted Repository API Server v1/v2
-conventions. Cloud will get a parallel client in v2.
+Path summary (relative to ``/v2/Repositories/{repositoryId}/``):
+
+  GET  Entries/{id}                        — get entry by ID
+  GET  Entries/ByPath?fullPath=...         — resolve a backslash path
+  GET  Entries/{id}/Folder/Children        — list folder contents
+  GET  Entries/{id}/Fields                 — read template fields
+  POST Entries/{id}/Export                 — download Edoc / Text / Image
+  POST /v2/Repositories/{repo}/SimpleSearches
+                                           — synchronous search
+
+Note: search uses POST with a JSON body ``{"searchCommand": "<query>"}``,
+NOT a GET with a query string. The previous v0.x guess was wrong.
 """
 
 from __future__ import annotations
@@ -37,8 +48,7 @@ class LaserficheError(Exception):
 def build_repo_path(base_url: str, repository_id: str, suffix: str) -> str:
     """Construct a /v2/Repositories/{repo}/{suffix} URL.
 
-    Pulled out of ``LaserficheClient`` so it's directly unit-testable —
-    URL composition is one of the easier places to introduce subtle bugs.
+    Pulled out of ``LaserficheClient`` so it's directly unit-testable.
     """
     if not base_url.endswith("/"):
         base_url += "/"
@@ -47,7 +57,7 @@ def build_repo_path(base_url: str, repository_id: str, suffix: str) -> str:
 
 
 class LaserficheClient:
-    """Async client for the self-hosted Repository API Server."""
+    """Async client for the self-hosted Repository API V2."""
 
     def __init__(self, settings: Settings, auth: AuthStrategy) -> None:
         self._settings = settings
@@ -121,7 +131,7 @@ class LaserficheClient:
             f"Network error after {attempts} attempt(s): {last_exc}",
         ) from last_exc
 
-    async def _request(
+    async def _request_json(
         self,
         method: str,
         url: str,
@@ -149,13 +159,38 @@ class LaserficheClient:
             return {}
         return response.json()
 
+    async def _request_bytes(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None = None,
+    ) -> bytes:
+        if self._http is None:
+            raise RuntimeError("LaserficheClient must be used as an async context manager.")
+
+        request = self._http.build_request(method, url, json=json)
+        response = await self._send(request)
+        if response.status_code >= 400:
+            try:
+                detail = response.json()
+            except ValueError:
+                detail = response.text
+            raise LaserficheError(
+                f"Laserfiche API error {response.status_code}: {detail}",
+                status_code=response.status_code,
+            )
+        return response.content
+
     # --- Read operations (v1) ---------------------------------------------
 
     async def get_entry(self, entry_id: int) -> dict[str, Any]:
-        return await self._request("GET", self._repo_path(f"Entries/{entry_id}"))
+        """GET /Entries/{entryId}"""
+        return await self._request_json("GET", self._repo_path(f"Entries/{entry_id}"))
 
     async def get_entry_by_path(self, full_path: str) -> dict[str, Any]:
-        return await self._request(
+        """GET /Entries/ByPath?fullPath={path}"""
+        return await self._request_json(
             "GET",
             self._repo_path("Entries/ByPath"),
             params={"fullPath": full_path},
@@ -168,9 +203,10 @@ class LaserficheClient:
         max_results: int = 25,
         skip: int = 0,
     ) -> dict[str, Any]:
-        return await self._request(
+        """GET /Entries/{folderId}/Folder/Children?$top=&$skip="""
+        return await self._request_json(
             "GET",
-            self._repo_path(f"Entries/{folder_id}/Children"),
+            self._repo_path(f"Entries/{folder_id}/Folder/Children"),
             params={"$top": max_results, "$skip": skip},
         )
 
@@ -180,27 +216,39 @@ class LaserficheClient:
         *,
         max_results: int = 25,
     ) -> dict[str, Any]:
-        return await self._request(
-            "GET",
-            self._repo_path("Entries/SearchEntries"),
-            params={"searchCommand": query, "$top": max_results},
+        """POST /SimpleSearches with body {"searchCommand": "<query>"}.
+
+        Query syntax follows Laserfiche search syntax, e.g.:
+            {LF:Name="Onboarding*"}
+            {[Missionary Application]:[Last Name]="Smith"}
+        """
+        return await self._request_json(
+            "POST",
+            self._repo_path("SimpleSearches"),
+            params={"$top": max_results},
+            json={"searchCommand": query},
         )
 
     async def get_field_values(self, entry_id: int) -> dict[str, Any]:
-        return await self._request(
+        """GET /Entries/{entryId}/Fields"""
+        return await self._request_json(
             "GET",
             self._repo_path(f"Entries/{entry_id}/Fields"),
         )
 
-    async def get_entry_content(self, entry_id: int) -> bytes:
-        if self._http is None:
-            raise RuntimeError("LaserficheClient must be used as an async context manager.")
-        url = self._repo_path(f"Entries/{entry_id}/Edoc")
-        request = self._http.build_request("GET", url)
-        response = await self._send(request)
-        if response.status_code >= 400:
-            raise LaserficheError(
-                f"Failed to download entry {entry_id}: HTTP {response.status_code}",
-                status_code=response.status_code,
-            )
-        return response.content
+    async def export_entry(
+        self,
+        entry_id: int,
+        *,
+        part: str = "Edoc",
+    ) -> bytes:
+        """POST /Entries/{entryId}/Export — download document content.
+
+        ``part`` is one of "Edoc" (raw electronic document), "Text"
+        (Laserfiche-extracted text), or "Image" (page images).
+        """
+        return await self._request_bytes(
+            "POST",
+            self._repo_path(f"Entries/{entry_id}/Export"),
+            json={"part": part},
+        )

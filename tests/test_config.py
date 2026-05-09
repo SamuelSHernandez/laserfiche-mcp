@@ -7,17 +7,16 @@ import pytest
 from laserfiche_mcp.config import AuthMode, DeploymentMode, Settings
 
 
-def test_loads_basic_self_hosted(lf_env: dict[str, str]) -> None:
+def test_loads_password_self_hosted(lf_env: dict[str, str]) -> None:
     settings = Settings()  # type: ignore[call-arg]
     assert settings.deployment_mode is DeploymentMode.SELF_HOSTED
-    assert settings.auth_mode is AuthMode.BASIC
+    assert settings.auth_mode is AuthMode.PASSWORD
     assert settings.read_only is True
     assert settings.password is not None
-    # SecretStr hides the value in repr
     assert "secret" not in repr(settings.password)
 
 
-def test_missing_password_for_basic_raises(
+def test_missing_password_for_password_mode_raises(
     lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("LF_PASSWORD")
@@ -48,6 +47,14 @@ def test_oauth_succeeds_with_full_config(
     settings = Settings()  # type: ignore[call-arg]
     assert settings.auth_mode is AuthMode.OAUTH
     assert settings.client_id == "client-abc"
+
+
+def test_api_key_mode_rejected(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_AUTH_MODE", "api_key")
+    with pytest.raises(NotImplementedError, match="api_key"):
+        Settings()  # type: ignore[call-arg]
 
 
 def test_cloud_mode_rejected(

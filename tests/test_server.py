@@ -43,4 +43,5 @@ async def test_all_tools_registered() -> None:
         "get_entry_by_path",
         "get_field_values",
         "get_document_text",
+        "get_document_edoc",
     }

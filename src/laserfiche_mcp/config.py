@@ -21,9 +21,10 @@ class DeploymentMode(str, Enum):
 
 
 class AuthMode(str, Enum):
-    BASIC = "basic"            # username + password (self-hosted)
-    OAUTH = "oauth"            # client_credentials grant (LFDS or cloud)
-    API_KEY = "api_key"        # cloud service principal (reserved for v2)
+    # username + password → /v2/{repo}/Token bearer (self-hosted, default)
+    PASSWORD = "password"
+    OAUTH = "oauth"            # client_credentials grant (LFDS or compatible)
+    API_KEY = "api_key"        # cloud service principal with JWT (reserved for v2)
 
 
 class Settings(BaseSettings):
@@ -52,7 +53,7 @@ class Settings(BaseSettings):
     )
 
     # --- Auth ---
-    auth_mode: AuthMode = Field(default=AuthMode.BASIC)
+    auth_mode: AuthMode = Field(default=AuthMode.PASSWORD)
     username: str | None = None
     password: SecretStr | None = None
 
@@ -113,7 +114,7 @@ class Settings(BaseSettings):
         if not self.repository_id:
             missing.append("LF_REPOSITORY_ID")
 
-        if self.auth_mode is AuthMode.BASIC:
+        if self.auth_mode is AuthMode.PASSWORD:
             if not self.username:
                 missing.append("LF_USERNAME")
             if not self.password:
@@ -127,8 +128,8 @@ class Settings(BaseSettings):
                 missing.append("LF_CLIENT_SECRET")
         elif self.auth_mode is AuthMode.API_KEY:
             raise NotImplementedError(
-                "api_key auth is reserved for cloud (v2). "
-                "Use LF_AUTH_MODE=basic or oauth."
+                "api_key auth (cloud JWT-signed assertion) is reserved for v2. "
+                "Use LF_AUTH_MODE=password or oauth."
             )
 
         if missing:

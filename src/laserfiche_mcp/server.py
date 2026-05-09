@@ -28,10 +28,6 @@ logger = logging.getLogger("laserfiche_mcp")
 
 # --- Lazy bootstrap ----------------------------------------------------------
 
-# Settings used to be loaded at import time, but that broke tests that need
-# to set env vars in fixtures. We now load on first access via ``_get_settings``
-# and instantiate the FastMCP server eagerly with the module-level decorators.
-
 _settings: Settings | None = None
 
 
@@ -75,7 +71,6 @@ mcp = FastMCP(
 # --- Helpers -----------------------------------------------------------------
 
 def _client() -> LaserficheClient:
-    """Pull the shared client out of the lifespan context."""
     ctx = mcp.get_context()
     return ctx.request_context.lifespan_context["client"]
 
@@ -106,14 +101,14 @@ async def search_entries(
     Combine clauses with & (AND) or | (OR), e.g.:
         {LF:Name="*.pdf"} & {[Application]:[Status]="Approved"}
 
-    If the user gives a natural-language description rather than search syntax,
-    translate it into Laserfiche syntax before calling this tool — or use the
-    higher-level search_by_name tool if you only need a name match. If you're
-    uncertain how to translate, ask the user to clarify rather than guessing.
+    If the user gives a natural-language description, translate it into
+    Laserfiche search syntax before calling — or use the higher-level
+    search_by_name tool if you only need a name match. If you're uncertain
+    how to translate, ask the user to clarify rather than guessing.
 
-    Returns a SearchResults with up to `max_results` (default 25, hard cap from
-    LF_MAX_RESULTS_CEILING). Each entry has id, name, type, and full_path —
-    use get_entry or get_field_values to drill in.
+    Returns a SearchResults with up to `max_results` entries (default 25,
+    hard cap from LF_MAX_RESULTS_CEILING). Each entry has id, name, type,
+    and full_path — use get_entry or get_field_values to drill in.
     """
     try:
         raw = await _client().search_entries(
@@ -142,10 +137,6 @@ async def search_by_name(
         name_pattern="*.pdf"                       → all entries ending in .pdf
         name_pattern="Smith*", in_folder_path="\\Imports\\2024"
                                                    → name match scoped to one folder
-
-    Internally constructs `{LF:Name="<pattern>"}` (optionally combined with
-    `{LF:LookIn="<path>"}`) and dispatches to the same search backend as
-    search_entries.
     """
     safe_pattern = name_pattern.replace('"', '\\"')
     query = f'{{LF:Name="{safe_pattern}"}}'
@@ -197,9 +188,6 @@ async def get_entry(entry_id: int) -> EntryDetail:
     Returns name, type, path, template, page count, and other metadata. Does
     NOT include field values — call get_field_values for those. Does NOT
     include document content — call get_document_text for that.
-
-    Raises if the entry doesn't exist or the service account lacks read
-    permission on it.
     """
     try:
         raw = await _client().get_entry(entry_id)
@@ -214,8 +202,6 @@ async def get_entry_by_path(full_path: str) -> EntryDetail:
 
     Path uses backslashes, e.g. `\\Imports\\2024\\Onboarding\\Smith,John`.
     Useful when the user references a location by name rather than ID.
-    Returns the same shape as get_entry; you can chain into get_field_values
-    or list_folder using the returned `id`.
     """
     try:
         raw = await _client().get_entry_by_path(full_path)
@@ -229,10 +215,8 @@ async def get_field_values(entry_id: int) -> list[FieldValue]:
     """Read all template field values assigned to an entry.
 
     Returns one FieldValue per field on the entry's template, including
-    multi-value fields (where `is_multi_value=true` and `values` has multiple
-    entries). Empty/unset fields are typically omitted by the Repository API.
-
-    Pre: call get_entry first if you don't have an `entry_id`.
+    multi-value fields (where `is_multi_value=true`). Empty/unset fields
+    are typically omitted by the Repository API.
     """
     try:
         raw = await _client().get_field_values(entry_id)
@@ -243,22 +227,22 @@ async def get_field_values(entry_id: int) -> list[FieldValue]:
 
 @mcp.tool()
 async def get_document_text(entry_id: int, max_chars: int = 50_000) -> str:
-    """Download an electronic document's content as text.
+    """Download the Laserfiche-extracted text of an electronic document.
 
-    Only works for entries that are electronic documents (PDFs, Office files,
-    text files, etc.). Check `is_electronic_document` on the entry detail
-    first if unsure. Output is truncated to `max_chars` characters to keep
-    context usage bounded; default 50,000 chars.
+    Uses the official Export endpoint with part="Text", which returns the
+    text Laserfiche has already extracted (via OCR or upstream extraction)
+    rather than raw bytes. This is the right call for "summarize this
+    document" or "what's in this entry" — you get clean text, not a binary
+    payload.
 
-    Note: this returns raw bytes decoded as UTF-8 with replacement. For PDFs
-    and Office docs you'll get binary noise — extracting clean text from those
-    formats is out of scope for v1; use the Laserfiche text extraction
-    workflow upstream and read the extracted text instead.
+    Output is truncated to `max_chars` (default 50,000) to keep context
+    bounded. If the entry is a folder or has no extracted text, the server
+    will return an error.
     """
     try:
-        content = await _client().get_entry_content(entry_id)
+        content = await _client().export_entry(entry_id, part="Text")
     except LaserficheError as exc:
-        raise RuntimeError(f"Failed to download entry {entry_id}: {exc}") from exc
+        raise RuntimeError(f"Failed to download text for entry {entry_id}: {exc}") from exc
 
     text = content.decode("utf-8", errors="replace")
     if len(text) > max_chars:
@@ -266,11 +250,34 @@ async def get_document_text(entry_id: int, max_chars: int = 50_000) -> str:
     return text
 
 
+@mcp.tool()
+async def get_document_edoc(entry_id: int) -> dict[str, Any]:
+    """Download the raw electronic document (Edoc) for an entry.
+
+    Returns metadata only — never the raw bytes — because PDFs, Office docs,
+    and images are not useful to dump into the model's context window. The
+    response includes byte size and a hint to use get_document_text for the
+    extracted text instead.
+    """
+    try:
+        content = await _client().export_entry(entry_id, part="Edoc")
+    except LaserficheError as exc:
+        raise RuntimeError(f"Failed to download edoc for entry {entry_id}: {exc}") from exc
+
+    return {
+        "entry_id": entry_id,
+        "byte_size": len(content),
+        "hint": (
+            "Raw bytes were fetched but not returned to the model. "
+            "Use get_document_text(entry_id) to retrieve the extracted text."
+        ),
+    }
+
+
 # --- Entrypoint --------------------------------------------------------------
 
 
 def main() -> None:
-    """Console-script entrypoint registered in pyproject.toml."""
     settings = _get_settings()
     logging.basicConfig(level=settings.log_level.upper())
     if settings.read_only:
