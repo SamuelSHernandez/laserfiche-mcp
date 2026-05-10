@@ -12,12 +12,15 @@ Design notes:
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import ValidationError
 
+from . import __version__
 from .auth import build_auth_strategy
 from .client import LaserficheClient, LaserficheError
 from .config import Settings
@@ -277,8 +280,78 @@ async def get_document_edoc(entry_id: int) -> dict[str, Any]:
 # --- Entrypoint --------------------------------------------------------------
 
 
+_HELP_TEXT = """\
+laserfiche-mcp — Model Context Protocol server for Laserfiche.
+
+Usage:
+  laserfiche-mcp            Start the stdio MCP server (requires env config).
+  laserfiche-mcp --help     Show this message.
+  laserfiche-mcp --version  Print version and exit.
+
+Configuration is read from LF_* environment variables (or a .env file in
+the working directory). Required at a minimum:
+
+  LF_REPO_API_URL    Base URL of your Repository API Server
+  LF_REPOSITORY_ID   Repository name or ID
+  LF_USERNAME        Service account username
+  LF_PASSWORD        Service account password
+
+See https://github.com/SamuelSHernandez/laserfiche-mcp#configure for the
+full list including OAuth, SSL, retry, and logging knobs.
+
+This binary is meant to be launched by an MCP client (Claude Desktop,
+Claude Code, MCP Inspector). Running it directly without env config is
+expected to exit with a configuration error.
+"""
+
+
+def _format_config_error(exc: Exception) -> str:
+    """Convert a Pydantic ValidationError into a user-facing message."""
+    lines = [
+        "laserfiche-mcp: configuration is missing or invalid.",
+        "",
+    ]
+    if isinstance(exc, ValidationError):
+        for err in exc.errors():
+            msg = err.get("msg", "")
+            # Pydantic prefixes value_error.* messages with "Value error, "
+            if msg.startswith("Value error, "):
+                msg = msg[len("Value error, "):]
+            lines.append(f"  - {msg}")
+    else:
+        lines.append(f"  - {exc}")
+    lines.extend([
+        "",
+        "Quick start:",
+        "  1. Copy .env.example to .env and fill in your repository details, OR",
+        "  2. Set LF_REPO_API_URL, LF_REPOSITORY_ID, LF_USERNAME, LF_PASSWORD",
+        "     as environment variables (e.g. via your MCP client's `env` block).",
+        "",
+        "Docs: https://github.com/SamuelSHernandez/laserfiche-mcp#configure",
+    ])
+    return "\n".join(lines)
+
+
 def main() -> None:
-    settings = _get_settings()
+    """Console-script entrypoint registered in pyproject.toml."""
+    argv = sys.argv[1:]
+    if any(a in ("-h", "--help") for a in argv):
+        print(_HELP_TEXT)
+        return
+    if any(a in ("-V", "--version") for a in argv):
+        print(f"laserfiche-mcp {__version__}")
+        return
+
+    try:
+        settings = _get_settings()
+    except (ValidationError, ValueError) as exc:
+        print(_format_config_error(exc), file=sys.stderr)
+        sys.exit(2)
+    except NotImplementedError as exc:
+        # Cloud mode and api_key auth raise this from the validator.
+        print(f"laserfiche-mcp: {exc}", file=sys.stderr)
+        sys.exit(2)
+
     logging.basicConfig(level=settings.log_level.upper())
     if settings.read_only:
         logger.info("Starting laserfiche-mcp in READ-ONLY mode.")
@@ -287,7 +360,12 @@ def main() -> None:
             "Starting laserfiche-mcp with WRITE tools enabled. "
             "Write tools will be added in v1.1 — for now this flag has no effect."
         )
-    mcp.run()  # stdio transport by default
+
+    try:
+        mcp.run()  # stdio transport by default
+    except KeyboardInterrupt:
+        # Don't dump a traceback for ordinary Ctrl-C exits.
+        logger.info("laserfiche-mcp stopped.")
 
 
 if __name__ == "__main__":

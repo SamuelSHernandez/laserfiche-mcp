@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.1] - 2026-05-09
+## [0.2.1] - 2026-05-10
 
 ### Changed
 - `Development Status` classifier bumped from Alpha to Beta to reflect the verified-against-reference state of the package.
 - `pyproject.toml`: added `Typing :: Typed`, `Topic :: Communications`, and `Topic :: Software Development :: Libraries :: Python Modules` classifiers; declared Python 3.13 support (CI tests it); expanded `[project.urls]` to include Repository, Documentation, and Changelog.
+- `main()` now prints a clean, actionable error and exits with code 2 when LF_* env vars are missing — no Python traceback. Ctrl-C exits cleanly without a traceback as well.
 
 ### Added
+- `--help` and `--version` CLI flags so first-time users running `uvx laserfiche-mcp` directly can discover the package without needing env config.
 - `py.typed` marker file (PEP 561) so downstream type checkers recognize the package as typed.
 - `CHANGELOG.md`, `SECURITY.md`, `CONTRIBUTING.md`.
 - Status badges in README (PyPI version, Python versions, CI, license, MCP).
