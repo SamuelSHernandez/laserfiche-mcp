@@ -3,7 +3,7 @@
 Self-hosted Laserfiche Repository API does NOT support HTTP Basic auth.
 The supported flows are:
 
-* **Password grant** — POST username/password to ``/v2/{repository_id}/Token``,
+* **Password grant** — POST username/password to ``/v2/Repositories/{repository_id}/Token``,
   receive a bearer token (``expires_in`` ~= 900s), use it on subsequent calls.
   Implemented as :class:`PasswordGrantStrategy`. This is the default.
 
@@ -41,8 +41,8 @@ class PasswordGrantStrategy(AuthStrategy):
     """Self-hosted Laserfiche password-grant token exchange.
 
     On first call, POSTs ``grant_type=password&username=...&password=...``
-    (form-encoded) to ``{base_url}/v2/{repository_id}/Token`` and caches the
-    bearer token. Refreshes ~30 seconds before ``expires_in``.
+    (form-encoded) to ``{base_url}/v2/Repositories/{repository_id}/Token``
+    and caches the bearer token. Refreshes ~30 seconds before ``expires_in``.
     """
 
     def __init__(
@@ -56,9 +56,12 @@ class PasswordGrantStrategy(AuthStrategy):
     ) -> None:
         if not base_url.endswith("/"):
             base_url += "/"
-        # Per Laserfiche docs, the V2 token endpoint sits at
-        # /v2/{repositoryId}/Token (NOT under /Repositories/).
-        self._token_url = f"{base_url}v2/{repository_id}/Token"
+        # Self-hosted LFRepositoryAPI v2 token endpoint sits at
+        # /v2/Repositories/{repositoryId}/Token, consistent with every other
+        # v2 path in this client. (The /v2/{repo}/Token shape without
+        # /Repositories/ that some Laserfiche Cloud docs show returns 404 on
+        # self-hosted servers.)
+        self._token_url = f"{base_url}v2/Repositories/{repository_id}/Token"
         self._username = username
         self._password = password
         self._verify_ssl = verify_ssl
