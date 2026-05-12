@@ -21,7 +21,7 @@ from laserfiche_mcp.config import Settings
 async def test_password_grant_exchanges_creds_for_bearer(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
-        url="https://lf.example.test/LFRepositoryAPI/v2/demo/Token",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Token",
         json={"access_token": "tok-1", "expires_in": 900, "token_type": "bearer"},
     )
 
@@ -49,7 +49,7 @@ async def test_password_grant_exchanges_creds_for_bearer(httpx_mock: HTTPXMock) 
 async def test_password_grant_caches_token(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
-        url="https://lf.example.test/LFRepositoryAPI/v2/demo/Token",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Token",
         json={"access_token": "tok-1", "expires_in": 900},
     )
 
@@ -75,12 +75,12 @@ async def test_password_grant_caches_token(httpx_mock: HTTPXMock) -> None:
 async def test_password_grant_refreshes_when_expired(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
-        url="https://lf.example.test/LFRepositoryAPI/v2/demo/Token",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Token",
         json={"access_token": "tok-1", "expires_in": 60},
     )
     httpx_mock.add_response(
         method="POST",
-        url="https://lf.example.test/LFRepositoryAPI/v2/demo/Token",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Token",
         json={"access_token": "tok-2", "expires_in": 60},
     )
 
