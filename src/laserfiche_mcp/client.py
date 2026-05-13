@@ -187,6 +187,21 @@ class LaserficheClient:
         *,
         json: dict[str, Any] | None = None,
     ) -> bytes:
+        content, _ = await self._request_bytes_with_meta(method, url, json=json)
+        return content
+
+    async def _request_bytes_with_meta(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None = None,
+    ) -> tuple[bytes, str | None]:
+        """Like ``_request_bytes`` but also surfaces the response Content-Type.
+
+        Needed by edoc modes that branch on document type (PDF vs text vs
+        binary) instead of trusting the file extension on the entry.
+        """
         if self._http is None:
             raise RuntimeError("LaserficheClient must be used as an async context manager.")
 
@@ -201,7 +216,7 @@ class LaserficheClient:
                 f"Laserfiche API error {response.status_code}: {detail}",
                 status_code=response.status_code,
             )
-        return response.content
+        return response.content, response.headers.get("content-type")
 
     # --- Read operations (v1) ---------------------------------------------
 
@@ -285,6 +300,19 @@ class LaserficheClient:
         GET /Entries/{id}/Laserfiche.Repository.Document/edoc. Text and
         Image parts have no v1 equivalent and raise ``LaserficheError``.
         """
+        content, _ = await self.export_entry_with_meta(entry_id, part=part)
+        return content
+
+    async def export_entry_with_meta(
+        self,
+        entry_id: int,
+        *,
+        part: str = "Edoc",
+    ) -> tuple[bytes, str | None]:
+        """Like :meth:`export_entry` but also returns the response Content-Type.
+
+        Same v1/v2 routing rules apply. v1 only supports ``part='Edoc'``.
+        """
         if self._api_version is ApiVersion.V1:
             if part != "Edoc":
                 raise LaserficheError(
@@ -293,14 +321,14 @@ class LaserficheClient:
                     f"bytes) is supported on v1; set LF_API_VERSION=v2 if "
                     f"your server supports it."
                 )
-            return await self._request_bytes(
+            return await self._request_bytes_with_meta(
                 "GET",
                 self._repo_path(
                     f"Entries/{entry_id}/Laserfiche.Repository.Document/edoc"
                 ),
             )
 
-        return await self._request_bytes(
+        return await self._request_bytes_with_meta(
             "POST",
             self._repo_path(f"Entries/{entry_id}/Export"),
             json={"part": part},

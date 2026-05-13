@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -139,3 +139,78 @@ class SearchResults(BaseModel):
             total_count=raw.get("@odata.count"),
             next_link=raw.get("@odata.nextLink"),
         )
+
+
+# --- search_natural ----------------------------------------------------------
+
+
+class CandidateQuery(BaseModel):
+    """A Laserfiche query string suggested by Mode A guidance."""
+
+    query: str
+    rationale: str = Field(
+        description="Plain-English explanation of why this query was suggested.",
+    )
+
+
+class TemplateHint(BaseModel):
+    """A template observed in the sampled folder plus its field names."""
+
+    template_name: str
+    field_names: list[str] = Field(default_factory=list)
+
+
+class SearchAttempt(BaseModel):
+    """One round of a Mode B query attempt — what was sent, what came back."""
+
+    query: str
+    repair: str | None = Field(
+        default=None,
+        description="If this attempt was an automatic repair, what kind "
+        "(e.g. 'escape_quotes', 'wildcard_wrap'). null for the first attempt.",
+    )
+    status_code: int | None = None
+    error_body: Any = None
+
+
+class SearchNaturalResponse(BaseModel):
+    """Discriminated response from search_natural.
+
+    ``mode`` says which shape to read:
+
+    * ``"guidance"`` — Mode A. The LLM did not provide ``lf_query`` yet. Read
+      ``grammar``, ``discovered_templates``, ``candidate_queries`` and the
+      ``follow_up`` hint, then call search_natural again with one of the
+      candidates (or refine it) as ``lf_query``.
+    * ``"results"`` — Mode B succeeded. Read ``entries``. ``repairs_applied``
+      lists any automatic repairs taken. ``pagination_unknown=true`` means
+      ``next_link`` was null but the result count hit the cap — there may be
+      more, the server just didn't say.
+    * ``"error"`` — Mode B failed. Read ``attempts`` (one per repair tried)
+      and ``next_action`` for guidance on how to fix the query.
+    """
+
+    mode: Literal["guidance", "results", "error"]
+    question: str
+
+    # --- guidance fields -----------------------------------------------------
+    folder_path: str | None = None
+    grammar: str | None = None
+    discovered_templates: list[TemplateHint] = Field(default_factory=list)
+    candidate_queries: list[CandidateQuery] = Field(default_factory=list)
+    follow_up: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+    # --- results fields ------------------------------------------------------
+    lf_query: str | None = None
+    repairs_applied: list[str] = Field(default_factory=list)
+    entries: list[EntrySummary] = Field(default_factory=list)
+    total_count: int | None = None
+    next_link: str | None = None
+    pagination_unknown: bool = False
+    effective_max_results: int | None = None
+
+    # --- error fields --------------------------------------------------------
+    attempts: list[SearchAttempt] = Field(default_factory=list)
+    final_error: str | None = None
+    next_action: str | None = None

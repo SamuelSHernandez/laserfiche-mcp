@@ -114,6 +114,20 @@ class Settings(BaseSettings):
         ge=1, le=1000,
         description="Hard cap on page size regardless of caller-requested value.",
     )
+    max_page_size: int = Field(
+        default=100,
+        ge=1, le=1000,
+        description="Hard cap on page size for search_natural specifically. "
+        "Some self-hosted servers reject SimpleSearches $top values above "
+        "their internal limit; this defaults lower than max_results_ceiling.",
+    )
+    edoc_max_bytes: int = Field(
+        default=25_000_000,
+        ge=1,
+        description="Maximum edoc size in bytes that get_document_edoc will "
+        "fetch when mode is 'bytes' or 'text'. Larger entries return a "
+        "structured cap error instead of being downloaded.",
+    )
     log_level: str = Field(
         default="INFO",
         description="Python logging level for the server (DEBUG, INFO, WARNING, ERROR).",
