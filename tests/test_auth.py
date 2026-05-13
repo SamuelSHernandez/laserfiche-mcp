@@ -14,14 +14,14 @@ from laserfiche_mcp.auth import (
     PasswordGrantStrategy,
     build_auth_strategy,
 )
-from laserfiche_mcp.config import Settings
+from laserfiche_mcp.config import ApiVersion, Settings
 
 
 @pytest.mark.asyncio
 async def test_password_grant_exchanges_creds_for_bearer(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
-        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Token",
+        url="https://lf.example.test/LFRepositoryAPI/v1/Repositories/demo/Token",
         json={"access_token": "tok-1", "expires_in": 900, "token_type": "bearer"},
     )
 
@@ -49,7 +49,7 @@ async def test_password_grant_exchanges_creds_for_bearer(httpx_mock: HTTPXMock) 
 async def test_password_grant_caches_token(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
-        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Token",
+        url="https://lf.example.test/LFRepositoryAPI/v1/Repositories/demo/Token",
         json={"access_token": "tok-1", "expires_in": 900},
     )
 
@@ -75,12 +75,12 @@ async def test_password_grant_caches_token(httpx_mock: HTTPXMock) -> None:
 async def test_password_grant_refreshes_when_expired(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
-        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Token",
+        url="https://lf.example.test/LFRepositoryAPI/v1/Repositories/demo/Token",
         json={"access_token": "tok-1", "expires_in": 60},
     )
     httpx_mock.add_response(
         method="POST",
-        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Token",
+        url="https://lf.example.test/LFRepositoryAPI/v1/Repositories/demo/Token",
         json={"access_token": "tok-2", "expires_in": 60},
     )
 
@@ -102,6 +102,28 @@ async def test_password_grant_refreshes_when_expired(httpx_mock: HTTPXMock) -> N
     await strategy.apply(req2)
     assert req2.headers["Authorization"] == "Bearer tok-2"
     assert len(httpx_mock.get_requests()) == 2
+
+
+@pytest.mark.asyncio
+async def test_password_grant_v2_token_url(httpx_mock: HTTPXMock) -> None:
+    """When api_version=v2 is passed, the token endpoint moves to /v2/..."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Token",
+        json={"access_token": "tok-v2", "expires_in": 900},
+    )
+
+    strategy = PasswordGrantStrategy(
+        base_url="https://lf.example.test/LFRepositoryAPI/",
+        repository_id="demo",
+        username="svc",
+        password=SecretStr("secret"),
+        api_version=ApiVersion.V2,
+    )
+
+    request = httpx.Request("GET", "https://lf.example.test/api")
+    await strategy.apply(request)
+    assert request.headers["Authorization"] == "Bearer tok-v2"
 
 
 @pytest.mark.asyncio

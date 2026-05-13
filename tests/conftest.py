@@ -11,6 +11,7 @@ _BASE_ENV: dict[str, str] = {
     "LF_DEPLOYMENT_MODE": "self_hosted",
     "LF_REPO_API_URL": "https://lf.example.test/LFRepositoryAPI",
     "LF_REPOSITORY_ID": "demo",
+    "LF_API_VERSION": "v1",
     "LF_AUTH_MODE": "password",
     "LF_USERNAME": "svc",
     "LF_PASSWORD": "secret",

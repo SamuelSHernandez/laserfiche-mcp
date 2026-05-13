@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-13
+
+### Added
+- LFRepositoryAPI v1 support alongside v2 (`LF_API_VERSION`, default `v1`). Most current on-prem installations expose the v1 routing surface (`/v1/` paths, lowercase `fields`/`children`, OData entity-type segments, no unified `/Export`); v2-only routing was rejecting every call. Auth's password-grant token endpoint, `build_repo_path`, `list_folder`, `get_field_values`, and `export_entry` now all route on the configured version. *(Shipped as the prior commit on this branch.)*
+- `search_natural` tool — two-mode guided search. Mode A (no `lf_query`) samples up to ten entries from `folder_path`, returns the templates and field names actually present, the Laserfiche search-syntax grammar reference, and 2–3 candidate query strings for the host LLM to pick from or refine. Mode B (`lf_query` set) executes the query and, on HTTP 400, performs up to two automatic repairs (escape unescaped `"` inside `="..."` values, then wildcard-wrap bare `Name=` values when `fuzzy=True`) before returning a structured error with every attempt visible. Pagination surfaces `pagination_unknown=true` when the result count hits the cap but the server returned no continuation link.
+- `get_document_edoc(mode=...)` — adds `bytes` (base64 + content-type, capped by `LF_EDOC_MAX_BYTES`, default 25 MB) and `text` (server-side extraction; PDFs via `pypdf`, `text/*` decoded directly, anything else returns a structured "use mode=bytes" error) alongside the original `info` mode. Gives v1 servers a path to document text now that `get_document_text` has no endpoint to call.
+- `LF_MAX_PAGE_SIZE` env var (default 100) — dedicated `search_natural` page-size cap, separate from `LF_MAX_RESULTS_CEILING`. Some self-hosted SimpleSearches implementations reject `$top` above an internal limit, so this defaults lower.
+- `LF_EDOC_MAX_BYTES` env var (default 25 MB) — caps edoc downloads when `mode` is `bytes` or `text`. Override per-call via the `max_bytes` argument.
+- `LaserficheClient.export_entry_with_meta()` — returns `(bytes, content_type)` so callers can branch on document type instead of trusting the entry's extension.
+- `pypdf` runtime dependency for server-side PDF text extraction.
+
+### Changed
+- `get_document_text` docstring now points v1 users to `get_document_edoc(mode="text")`.
+- Startup log message no longer warns that `LF_READ_ONLY` "has no effect yet" — that warning was misleading. The flag remains reserved for future write tools; the startup line just records the configured value.
+
+### Tests
+- New PDF fixtures committed at `tests/fixtures/sample_text.pdf` and `tests/fixtures/sample_encrypted.pdf` (with a regeneration script at `tests/fixtures/_generate.py`). Text-extraction tests now assert specific extracted content rather than just response shape — earlier blank-page PDFs would have let a pypdf regression ship silently. New tests cover the encrypted-PDF, malformed-PDF, mixed-case content-type, and char-limit truncation paths.
+- New opt-in integration target at `tests/test_integration.py`, marked with `pytest.mark.integration` and gated behind `LF_INTEGRATION_TEST=1`. Reads the same `LF_*` config the server uses at runtime; covers `search_natural` Mode A guidance, Mode B structured-outcome contract, and `get_document_edoc(mode="info"|"text")` against a real PDF entry (configurable via `LF_INTEGRATION_FOLDER_PATH` and `LF_INTEGRATION_PDF_ENTRY_ID`).
+- `pytest-cov` added as a dev dep with a baseline of 80% (current measured 85% branch coverage; threshold leaves a small regression buffer).
+
+### Fixed
+- N/A (v1.1.0 is purely additive; existing tools keep their contracts.)
+
 ## [0.2.1] - 2026-05-10
 
 ### Changed
@@ -51,7 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial public release. **Yanked** — see v0.2.0 for the correct auth flow and endpoint paths.
 
-[Unreleased]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v0.2.1...v1.1.0
 [0.2.1]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/releases/tag/v0.1.0
