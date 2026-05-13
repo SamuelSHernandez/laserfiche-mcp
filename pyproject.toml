@@ -1,6 +1,6 @@
 [project]
 name = "laserfiche-mcp"
-version = "1.1.0"
+version = "1.4.0"
 description = "Model Context Protocol server for Laserfiche document management systems"
 readme = "README.md"
 requires-python = ">=3.10"

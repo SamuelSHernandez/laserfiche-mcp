@@ -12,7 +12,7 @@ from pytest_httpx import HTTPXMock
 
 from laserfiche_mcp import server
 from laserfiche_mcp.auth import AuthStrategy
-from laserfiche_mcp.client import LaserficheClient
+from laserfiche_mcp.client import LaserficheClient, LaserficheError
 from laserfiche_mcp.config import Settings
 
 _BASE = "https://lf.example.test/LFRepositoryAPI/v1/Repositories/demo"
@@ -73,6 +73,127 @@ def test_clamp_max_results_passes_through_in_range() -> None:
 # --- legacy tool bodies (happy paths + error wraps) -------------------------
 
 
+# --- _classify_lf_error: per-slug mapping -----------------------------------
+# The classifier is the central error contract for every tool wrapper, so
+# each slug has direct coverage here in addition to the transitive tests
+# via the tools themselves.
+
+
+def _err(status: int | None, detail: object | None = None) -> LaserficheError:
+    return LaserficheError("test error", status_code=status, detail=detail)
+
+
+def test_classify_lf_error_401_is_auth_failed() -> None:
+    r = server._classify_lf_error("get_entry", _err(401))
+    assert r["error"] == "auth_failed"
+    assert r["status_code"] == 401
+
+
+def test_classify_lf_error_403_is_auth_failed() -> None:
+    r = server._classify_lf_error("get_entry", _err(403))
+    assert r["error"] == "auth_failed"
+
+
+def test_classify_lf_error_lf_code_9010_is_auth_failed() -> None:
+    # LF-specific code overrides HTTP status interpretation: 9010 means
+    # invalid credentials even on a 400.
+    r = server._classify_lf_error("get_entry", _err(400, {"errorCode": 9010}))
+    assert r["error"] == "auth_failed"
+    assert r["server_error_code"] == 9010
+
+
+def test_classify_lf_error_lf_code_9528_treated_as_auth_failed() -> None:
+    # 9528 is misleadingly worded ('LFDS unreachable') but most often
+    # means bad creds; the reason text should reflect that.
+    r = server._classify_lf_error("get_entry", _err(400, {"errorCode": 9528}))
+    assert r["error"] == "auth_failed"
+    assert "9528" in r["reason"]
+
+
+def test_classify_lf_error_9066_is_required_field_missing() -> None:
+    r = server._classify_lf_error("assign_template", _err(400, {"errorCode": 9066}))
+    assert r["error"] == "required_field_missing"
+
+
+def test_classify_lf_error_9039_is_required_field_missing() -> None:
+    r = server._classify_lf_error("assign_template", _err(400, {"errorCode": 9039}))
+    assert r["error"] == "required_field_missing"
+
+
+def test_classify_lf_error_404_is_not_found() -> None:
+    r = server._classify_lf_error("get_entry", _err(404))
+    assert r["error"] == "not_found"
+
+
+def test_classify_lf_error_405_is_method_not_allowed() -> None:
+    r = server._classify_lf_error("delete_entry", _err(405))
+    assert r["error"] == "method_not_allowed"
+
+
+def test_classify_lf_error_415_is_unsupported_media_type() -> None:
+    r = server._classify_lf_error("delete_entry", _err(415))
+    assert r["error"] == "unsupported_media_type"
+
+
+def test_classify_lf_error_429_is_rate_limited() -> None:
+    r = server._classify_lf_error("get_entry", _err(429))
+    assert r["error"] == "rate_limited"
+
+
+def test_classify_lf_error_500_is_server_error() -> None:
+    r = server._classify_lf_error("get_entry", _err(500))
+    assert r["error"] == "server_error"
+
+
+def test_classify_lf_error_502_is_server_error() -> None:
+    r = server._classify_lf_error("get_entry", _err(502))
+    assert r["error"] == "server_error"
+
+
+def test_classify_lf_error_unknown_status_falls_back_to_server_error() -> None:
+    # Network error before HTTP status: detail=None, status_code=None.
+    r = server._classify_lf_error("get_entry", _err(None))
+    assert r["error"] == "server_error"
+
+
+def test_classify_lf_error_includes_entry_id_when_supplied() -> None:
+    r = server._classify_lf_error("get_entry", _err(404), entry_id=42)
+    assert r["entry_id"] == 42
+
+
+def test_classify_lf_error_extra_dict_merged_into_response() -> None:
+    r = server._classify_lf_error(
+        "copy_entry", _err(404),
+        extra={"parent_id": 100, "name": "X"},
+    )
+    assert r["parent_id"] == 100
+    assert r["name"] == "X"
+
+
+def test_classify_lf_error_extracts_title_from_problem_details() -> None:
+    r = server._classify_lf_error(
+        "get_entry",
+        _err(400, {"errorCode": 216, "title": "Bad parameter"}),
+    )
+    assert r["server_message"] == "Bad parameter"
+
+
+def test_lf_error_detail_handles_nested_error_wrapper() -> None:
+    # The Edoc DELETE routes return `{error: {code, message}}` instead of
+    # the usual flat ProblemDetails. Detail extractor should merge the
+    # inner dict so callers see a uniform shape.
+    exc = _err(405, {"error": {"code": "UnsupportedApiVersion", "message": "no DELETE"}})
+    detail = server._lf_error_detail(exc)
+    assert detail["code"] == "UnsupportedApiVersion"
+    assert detail["message"] == "no DELETE"
+
+
+def test_lf_error_detail_returns_empty_for_non_dict_detail() -> None:
+    # Plaintext bodies leave detail as a string; helper should yield {}.
+    exc = _err(500, "Internal Server Error")
+    assert server._lf_error_detail(exc) == {}
+
+
 @pytest.mark.asyncio
 async def test_search_entries_happy_path(
     httpx_mock: HTTPXMock,
@@ -102,8 +223,10 @@ async def test_search_entries_wraps_laserfiche_error_as_runtime(
         json={"error": "internal"},
     )
 
-    with pytest.raises(RuntimeError, match="Search failed"):
-        await server.search_entries(query='{LF:Name="x"}')
+    result = await server.search_entries(query='{LF:Name="x"}')
+    assert result["mode"] == "error"
+    assert result["operation"] == "search"
+    assert result["status_code"] == 500
 
 
 @pytest.mark.asyncio
@@ -180,8 +303,10 @@ async def test_search_by_name_wraps_laserfiche_error_as_runtime(
         json={"e": "boom"},
     )
 
-    with pytest.raises(RuntimeError, match="Search failed"):
-        await server.search_by_name(name_pattern="x")
+    result = await server.search_by_name(name_pattern="x")
+    assert result["mode"] == "error"
+    assert result["operation"] == "search"
+    assert result["status_code"] == 500
 
 
 @pytest.mark.asyncio
@@ -243,8 +368,11 @@ async def test_list_folder_wraps_laserfiche_error_as_runtime(
         status_code=404,
     )
 
-    with pytest.raises(RuntimeError, match="Failed to list folder 999"):
-        await server.list_folder(folder_id=999)
+    result = await server.list_folder(folder_id=999)
+    assert result["mode"] == "error"
+    assert result["operation"] == "list_folder"
+    assert result["error"] == "not_found"
+    assert result["folder_id"] == 999
 
 
 @pytest.mark.asyncio
@@ -273,8 +401,11 @@ async def test_get_entry_wraps_laserfiche_error_as_runtime(
         method="GET", url=f"{_BASE}/Entries/999", status_code=404,
     )
 
-    with pytest.raises(RuntimeError, match="Failed to fetch entry 999"):
-        await server.get_entry(entry_id=999)
+    result = await server.get_entry(entry_id=999)
+    assert result["mode"] == "error"
+    assert result["operation"] == "get_entry"
+    assert result["error"] == "not_found"
+    assert result["entry_id"] == 999
 
 
 @pytest.mark.asyncio
@@ -304,8 +435,11 @@ async def test_get_entry_by_path_wraps_laserfiche_error_as_runtime(
         status_code=404,
     )
 
-    with pytest.raises(RuntimeError, match="Failed to resolve path"):
-        await server.get_entry_by_path(full_path="\\missing")
+    result = await server.get_entry_by_path(full_path="\\missing")
+    assert result["mode"] == "error"
+    assert result["operation"] == "get_entry_by_path"
+    assert result["error"] == "not_found"
+    assert result["full_path"] == "\\missing"
 
 
 @pytest.mark.asyncio
@@ -340,8 +474,11 @@ async def test_get_field_values_wraps_laserfiche_error_as_runtime(
         method="GET", url=f"{_BASE}/Entries/999/fields", status_code=403,
     )
 
-    with pytest.raises(RuntimeError, match="Failed to fetch fields for entry 999"):
-        await server.get_field_values(entry_id=999)
+    result = await server.get_field_values(entry_id=999)
+    assert result["mode"] == "error"
+    assert result["operation"] == "get_field_values"
+    assert result["error"] == "auth_failed"
+    assert result["entry_id"] == 999
 
 
 @pytest.mark.asyncio
@@ -401,8 +538,9 @@ async def test_get_document_text_wraps_laserfiche_error_as_runtime(
     patched_client: LaserficheClient,
 ) -> None:
     """On v1 the client raises LaserficheError synthetically — the tool must wrap it."""
-    with pytest.raises(RuntimeError, match="Failed to download text for entry 42"):
-        await server.get_document_text(entry_id=42)
+    result = await server.get_document_text(entry_id=42)
+    assert result["mode"] == "error"
+    assert result["operation"] == "get_document_text"
 
 
 @pytest.mark.asyncio
@@ -416,18 +554,1363 @@ async def test_get_document_edoc_wraps_laserfiche_error_as_runtime(
         status_code=403,
     )
 
-    with pytest.raises(RuntimeError, match="Failed to download edoc for entry 999"):
-        await server.get_document_edoc(entry_id=999, mode="info")
+    result = await server.get_document_edoc(entry_id=999, mode="info")
+    assert result["mode"] == "error"
+    assert result["operation"] == "get_document_edoc"
+    assert result["error"] == "auth_failed"
+    assert result["entry_id"] == 999
 
 
 # --- end legacy tool bodies -------------------------------------------------
 
 
+# --- v1.2 server tools ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_audit_reasons(
+    httpx_mock: HTTPXMock, patched_client: LaserficheClient
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/AuditReasons",
+        json={"deleteEntry": [{"id": 1, "name": "Records purge"}]},
+    )
+    result = await server.get_audit_reasons()
+    assert result["deleteEntry"][0]["name"] == "Records purge"
+
+
+@pytest.mark.asyncio
+async def test_get_task_status(
+    httpx_mock: HTTPXMock, patched_client: LaserficheClient
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Tasks/op-1",
+        json={"status": "Completed", "percentComplete": 100},
+    )
+    result = await server.get_task_status("op-1")
+    assert result["status"] == "Completed"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_task_returns_on_terminal_status(
+    httpx_mock: HTTPXMock, patched_client: LaserficheClient
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Tasks/op-1",
+        json={"status": "Completed"},
+    )
+    result = await server.wait_for_task("op-1", timeout_seconds=5)
+    assert result["timed_out"] is False
+    assert result["status"] == "Completed"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_task_times_out(
+    httpx_mock: HTTPXMock, patched_client: LaserficheClient
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Tasks/op-1",
+        json={"status": "InProgress", "percentComplete": 50},
+        is_reusable=True,
+    )
+    result = await server.wait_for_task(
+        "op-1", timeout_seconds=1, poll_interval_seconds=0.1,
+    )
+    assert result["timed_out"] is True
+
+
+# --- Write tools: read_only gating ------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_tool_refuses_when_read_only(
+    patched_client: LaserficheClient,
+) -> None:
+    """LF_READ_ONLY=true (the test default) makes write helpers refuse to run
+    even if invoked directly. Belt-and-suspenders to the registration gate."""
+    with pytest.raises(RuntimeError) as exc_info:
+        await server.set_fields(42, {"Note": ["x"]})
+    assert "read_only" in str(exc_info.value).lower()
+
+
+# --- Write tools: registration ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_tools_registered_when_writes_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When LF_READ_ONLY=false, _register_write_tools() adds the writes."""
+    monkeypatch.setenv("LF_READ_ONLY", "false")
+    server._reset_settings_for_tests()
+    # Use a fresh FastMCP to avoid polluting the module-level instance.
+    import importlib
+
+    import laserfiche_mcp.server as srv_mod
+    importlib.reload(srv_mod)
+    monkeypatch.setenv("LF_READ_ONLY", "false")
+    srv_mod._reset_settings_for_tests()
+    srv_mod._register_write_tools()
+    tools = await srv_mod.mcp.list_tools()
+    names = {t.name for t in tools}
+    assert "delete_entry" in names
+    assert "rename_entry" in names
+    assert "set_fields" in names
+    assert "merge_fields" in names
+    # Restore module to read-only state for downstream tests.
+    monkeypatch.setenv("LF_READ_ONLY", "true")
+    srv_mod._reset_settings_for_tests()
+    importlib.reload(srv_mod)
+
+
+# --- Write tools: merge_fields preserves untouched fields -------------------
+
+
+@pytest.mark.asyncio
+async def test_merge_fields_preserves_unmentioned(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(
+        server._get_settings(), "read_only", False,
+    )
+    # Entry fetch for the path-scope check (v1.3+)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    # Current fields on the entry
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/fields",
+        json={
+            "value": [
+                {
+                    "fieldName": "Last Name",
+                    "values": [{"value": "Smith", "position": 0}],
+                },
+                {
+                    "fieldName": "Note",
+                    "values": [{"value": "old note", "position": 0}],
+                },
+            ]
+        },
+    )
+    # PUT response
+    httpx_mock.add_response(
+        method="PUT",
+        url=f"{_BASE}/Entries/42/fields",
+        json={"value": []},
+    )
+
+    result = await server.merge_fields(42, {"Note": ["new note"]})
+    assert result["mode"] == "executed"
+    assert result["fields_updated"] == ["Note"]
+    assert "Last Name" in result["fields_preserved"]
+
+    # Confirm the PUT body kept "Last Name" intact (request #2 is the PUT;
+    # request #0 is the entry GET added by the v1.3 path-scope check).
+    put_body = httpx_mock.get_requests()[2].read().decode()
+    assert "Last Name" in put_body
+    assert "Smith" in put_body
+    assert "new note" in put_body
+
+
+# --- delete_entry: preview, then execute ------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_preview_returns_token(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42,
+            "name": "Doomed",
+            "entryType": "Document",
+            "fullPath": "\\Trash\\Doomed",
+        },
+    )
+    preview = await server.delete_entry(42)
+    assert preview["mode"] == "preview"
+    assert preview["entry_id"] == 42
+    assert "confirmation_token" in preview
+    assert "warning" in preview
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_executes_with_valid_token(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doomed", "entryType": "Document"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="DELETE",
+        url=f"{_BASE}/Entries/42",
+        status_code=202,
+        json={"token": "op-xyz", "taskId": "task-1"},
+    )
+
+    preview = await server.delete_entry(42)
+    token = preview["confirmation_token"]
+    result = await server.delete_entry(42, confirmation_token=token)
+
+    assert result["mode"] == "executed"
+    assert result["operation_token"] == "op-xyz"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_rejects_invalid_token(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doomed", "entryType": "Document"},
+    )
+    result = await server.delete_entry(42, confirmation_token="garbage")
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_confirmation_token"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_token_bound_to_entry_id(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A token issued for entry A must not work to delete entry B."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "First", "entryType": "Document"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/99",
+        json={"id": 99, "name": "Second", "entryType": "Document"},
+    )
+
+    preview_42 = await server.delete_entry(42)
+    token = preview_42["confirmation_token"]
+    bad_call = await server.delete_entry(99, confirmation_token=token)
+    assert bad_call["mode"] == "error"
+    assert bad_call["error"] == "invalid_confirmation_token"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_preview_reports_folder_child_count(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    cap = server._get_settings().delete_folder_max_descendants
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Big", "entryType": "Folder"},
+    )
+    # Probe fetches cap+1 children; with 47 returned (< cap+1), the count
+    # is exact.
+    httpx_mock.add_response(
+        method="GET",
+        url=(
+            f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/children"
+            f"?%24top={cap + 1}&%24skip=0"
+        ),
+        json={"value": [{"id": i, "name": f"c{i}"} for i in range(47)]},
+    )
+    preview = await server.delete_entry(100)
+    assert preview["mode"] == "preview"
+    assert preview["immediate_child_count"] == 47
+
+
+# --- delete_pages: page_range required --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_pages_refuses_empty_range(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    result = await server.delete_pages(42, "")
+    assert result["mode"] == "error"
+    assert result["error"] == "page_range_required"
+
+
+# --- rename_entry: preview/confirm ------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rename_entry_preview_token_then_execute(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42,
+            "name": "Old",
+            "entryType": "Document",
+            "fullPath": "\\Folder\\Old",
+            "folderPath": "\\Folder",
+        },
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="PATCH",
+        url=f"{_BASE}/Entries/42?autoRename=false",
+        json={"id": 42, "name": "New"},
+    )
+
+    preview = await server.rename_entry(42, "New")
+    assert preview["mode"] == "preview"
+    assert preview["would_be_full_path"] == "\\Folder\\New"
+
+    result = await server.rename_entry(
+        42, "New", confirmation_token=preview["confirmation_token"],
+    )
+    assert result["mode"] == "executed"
+    assert result["new_name"] == "New"
+
+
+@pytest.mark.asyncio
+async def test_rename_entry_rejects_invalid_token(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Old", "entryType": "Document"},
+    )
+    result = await server.rename_entry(42, "New", confirmation_token="bad")
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_confirmation_token"
+
+
+# --- move_entry: preview/confirm --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_move_entry_preview_then_execute(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    # Source
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42,
+            "name": "Doc",
+            "entryType": "Document",
+            "fullPath": "\\Old\\Doc",
+        },
+        is_reusable=True,
+    )
+    # Target parent (for would_be_full_path preview + execute-side fence check)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/200",
+        json={"id": 200, "name": "New", "entryType": "Folder", "fullPath": "\\New"},
+        is_reusable=True,
+    )
+    # PATCH for the execute step
+    httpx_mock.add_response(
+        method="PATCH",
+        url=f"{_BASE}/Entries/42?autoRename=false",
+        json={"id": 42, "name": "Doc", "parentId": 200},
+    )
+
+    preview = await server.move_entry(42, 200)
+    assert preview["mode"] == "preview"
+    assert preview["would_be_full_path"] == "\\New\\Doc"
+
+    result = await server.move_entry(
+        42, 200, confirmation_token=preview["confirmation_token"],
+    )
+    assert result["mode"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_move_entry_rejects_invalid_token(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/200",
+        json={"id": 200, "name": "Other", "entryType": "Folder"},
+    )
+    result = await server.move_entry(42, 200, confirmation_token="bad")
+    assert result["mode"] == "error"
+
+
+# --- delete_edoc / delete_pages preview/execute -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_edoc_preview_and_execute(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42, "name": "Doc", "entryType": "Document",
+            "pageCount": 5, "extension": "pdf",
+        },
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="DELETE",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        json={"value": True},
+    )
+    preview = await server.delete_edoc(42)
+    assert preview["mode"] == "preview"
+    result = await server.delete_edoc(42, confirmation_token=preview["confirmation_token"])
+    assert result["mode"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_delete_edoc_rejects_invalid_token(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    result = await server.delete_edoc(42, confirmation_token="bad")
+    assert result["mode"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_delete_pages_preview_and_execute(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document", "pageCount": 10},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="DELETE",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/pages?pageRange=1-3",
+        json={"value": True},
+    )
+    preview = await server.delete_pages(42, "1-3")
+    assert preview["mode"] == "preview"
+    result = await server.delete_pages(
+        42, "1-3", confirmation_token=preview["confirmation_token"],
+    )
+    assert result["mode"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_delete_pages_rejects_invalid_token(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    result = await server.delete_pages(42, "1-3", confirmation_token="bad")
+    assert result["mode"] == "error"
+
+
+# --- Non-confirmation write tools (happy paths) -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_fields_happy_path(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    httpx_mock.add_response(
+        method="PUT", url=f"{_BASE}/Entries/42/fields", json={"value": []},
+    )
+    await server.set_fields(42, {"Note": ["new"]})
+
+
+@pytest.mark.asyncio
+async def test_set_tags_happy_path(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    httpx_mock.add_response(
+        method="PUT", url=f"{_BASE}/Entries/42/tags", json={"value": []},
+    )
+    await server.set_tags(42, ["urgent"])
+
+
+@pytest.mark.asyncio
+async def test_merge_tags_add_and_remove(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/tags",
+        json={"value": [{"name": "old"}, {"name": "keep"}]},
+    )
+    httpx_mock.add_response(
+        method="PUT", url=f"{_BASE}/Entries/42/tags", json={"value": []},
+    )
+    result = await server.merge_tags(42, add=["new"], remove=["old"])
+    assert result["mode"] == "executed"
+    assert "new" in result["added"]
+    assert "old" in result["removed"]
+    assert sorted(result["final_tags"]) == ["keep", "new"]
+
+
+@pytest.mark.asyncio
+async def test_set_links_happy_path(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    httpx_mock.add_response(
+        method="PUT", url=f"{_BASE}/Entries/42/links", json={"value": []},
+    )
+    await server.set_links(42, [{"targetId": 7, "linkTypeId": 1}])
+
+
+@pytest.mark.asyncio
+async def test_assign_and_remove_template(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    # Skip the required-field validation in this test — it's exercising the
+    # assign/remove pair, not the validator (which has its own dedicated tests).
+    monkeypatch.setattr(server._get_settings(), "validate_required_fields", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="PUT",
+        url=f"{_BASE}/Entries/42/template",
+        json={"id": 42, "templateName": "Personnel"},
+    )
+    await server.assign_template(42, "Personnel", fields={"Last Name": ["Smith"]})
+
+    httpx_mock.add_response(
+        method="DELETE",
+        url=f"{_BASE}/Entries/42/template",
+        json={"id": 42},
+    )
+    await server.remove_template(42)
+
+
+@pytest.mark.asyncio
+async def test_assign_template_blocks_when_required_field_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """Validator returns mode:error when a repo-wide required field is unset."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42, "name": "Doc", "entryType": "Document",
+            "fullPath": "\\Doc",
+        },
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        json={
+            "value": [
+                {
+                    "name": "Type of Document", "fieldType": "List",
+                    "isRequired": True,
+                    "listValues": ["Digital", "Original"],
+                    "defaultValue": "Digital",
+                },
+                {
+                    "name": "Last Name", "fieldType": "String",
+                    "isRequired": False, "listValues": [],
+                    "defaultValue": None,
+                },
+            ]
+        },
+    )
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42/fields",
+        json={"value": []},  # no fields currently set on the entry
+    )
+
+    result = await server.assign_template(42, "Personnel")
+
+    assert result["mode"] == "error"
+    assert result["error"] == "missing_required_fields"
+    assert result["missing"] == ["Type of Document"]
+    assert result["field_details"][0]["list_values"] == ["Digital", "Original"]
+
+
+@pytest.mark.asyncio
+async def test_assign_template_validation_disabled_by_env(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """With LF_VALIDATE_REQUIRED_FIELDS=false the validator is skipped."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "validate_required_fields", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    # No FieldDefinitions or fields mocks — they must not be called.
+    httpx_mock.add_response(
+        method="PUT",
+        url=f"{_BASE}/Entries/42/template",
+        json={"id": 42, "templateName": "Personnel"},
+    )
+    result = await server.assign_template(42, "Personnel")
+    assert "mode" not in result or result.get("mode") != "error"
+
+
+@pytest.mark.asyncio
+async def test_assign_template_validation_passes_when_required_field_already_set(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """If every required field is already on the entry, validator returns None
+    and the real PUT runs."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42, "name": "Doc", "entryType": "Document",
+            "fullPath": "\\Doc",
+        },
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        json={
+            "value": [
+                {"name": "Type of Document", "fieldType": "List",
+                 "isRequired": True, "listValues": ["Digital"]},
+            ]
+        },
+    )
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42/fields",
+        json={"value": [
+            {"fieldName": "Type of Document", "values": [{"value": "Digital"}]},
+        ]},
+    )
+    httpx_mock.add_response(
+        method="PUT",
+        url=f"{_BASE}/Entries/42/template",
+        json={"id": 42, "templateName": "T"},
+    )
+    result = await server.assign_template(42, "T")
+    assert result.get("mode") != "error"
+
+
+@pytest.mark.asyncio
+async def test_assign_template_validation_accepts_required_field_via_caller_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """If the caller supplies the required field in ``fields=``, validator
+    accepts it even though it's not yet on the entry."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document",
+              "fullPath": "\\Doc"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        json={"value": [
+            {"name": "Type of Document", "fieldType": "List",
+             "isRequired": True, "listValues": ["Digital"]},
+            {"name": "Doc Classification", "fieldType": "List",
+             "isRequired": True, "listValues": [" "]},
+        ]},
+    )
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42/fields",
+        json={"value": []},
+    )
+    httpx_mock.add_response(
+        method="PUT",
+        url=f"{_BASE}/Entries/42/template",
+        json={"id": 42, "templateName": "T"},
+    )
+    result = await server.assign_template(
+        42, "T",
+        fields={"Type of Document": ["Digital"], "Doc Classification": [" "]},
+    )
+    assert result.get("mode") != "error"
+
+
+@pytest.mark.asyncio
+async def test_assign_template_validation_flags_only_unsupplied_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """When the caller supplies one of two missing required fields, only the
+    unsupplied one is reported."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document",
+              "fullPath": "\\Doc"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        json={"value": [
+            {"name": "A", "fieldType": "String", "isRequired": True, "listValues": []},
+            {"name": "B", "fieldType": "String", "isRequired": True, "listValues": []},
+        ]},
+    )
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42/fields",
+        json={"value": []},
+    )
+    result = await server.assign_template(42, "T", fields={"A": ["x"]})
+    assert result["mode"] == "error"
+    assert result["missing"] == ["B"]
+
+
+@pytest.mark.asyncio
+async def test_assign_template_validation_falls_through_on_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """If list_field_definitions fails, validator returns None and the real
+    PUT runs (server-side error path is what surfaces)."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document",
+              "fullPath": "\\Doc"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        status_code=500,
+    )
+    httpx_mock.add_response(
+        method="PUT",
+        url=f"{_BASE}/Entries/42/template",
+        json={"id": 42, "templateName": "T"},
+    )
+    result = await server.assign_template(42, "T")
+    assert result.get("mode") != "error"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_returns_structured_error_when_entry_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """Fetch-failure path of a write tool: the entry doesn't exist, so the
+    structured error must surface — not a RuntimeError."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/999", status_code=404,
+    )
+    result = await server.delete_entry(999)
+    assert result["mode"] == "error"
+    assert result["operation"] == "delete_entry"
+    assert result["error"] == "not_found"
+    assert result["entry_id"] == 999
+
+
+@pytest.mark.asyncio
+async def test_list_repositories_falls_back_on_server_error(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """On endpoint failure, surface the configured repo as a single-item fallback."""
+    httpx_mock.add_response(
+        method="GET",
+        url="https://lf.example.test/LFRepositoryAPI/v1/Repositories",
+        status_code=400,
+        json={"errorCode": 216, "title": "Endpoint disabled on this build"},
+    )
+
+    result = await server.list_repositories()
+
+    assert result["mode"] == "fallback"
+    assert result["operation"] == "list_repositories"
+    assert result["value"][0]["repoId"] == "demo"  # from test settings
+    assert result["value"][0]["is_configured"] is True
+    assert result["server_error"]["status_code"] == 400
+
+
+@pytest.mark.asyncio
+async def test_create_folder_happy_path(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/children?autoRename=false",
+        json={"id": 500, "name": "New", "entryType": "Folder"},
+    )
+    await server.create_folder(100, "New")
+
+
+@pytest.mark.asyncio
+async def test_copy_entry_happy_path(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/CopyAsync?autoRename=true",
+        status_code=201,
+        json={"token": "op-copy-1"},
+    )
+    result = await server.copy_entry(42, 100, "Copy", auto_rename=True)
+    assert result["token"] == "op-copy-1"
+
+
+@pytest.mark.asyncio
+async def test_import_document_file_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    missing = tmp_path / "missing.txt"
+    result = await server.import_document(100, "x.txt", str(missing))
+    assert result["mode"] == "error"
+    assert result["error"] == "file_not_found"
+
+
+@pytest.mark.asyncio
+async def test_import_document_size_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "import_max_bytes", 10)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    big = tmp_path / "big.bin"
+    big.write_bytes(b"x" * 100)
+    result = await server.import_document(100, "big.bin", str(big))
+    assert result["mode"] == "error"
+    assert result["error"] == "size_exceeds_cap"
+
+
+@pytest.mark.asyncio
+async def test_import_document_happy_path_with_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    f = tmp_path / "doc.txt"
+    f.write_bytes(b"hello")
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/Entries/100/doc.txt?autoRename=false",
+        status_code=201,
+        json={"entryCreate": {"entryId": 500}},
+    )
+    result = await server.import_document(
+        100, "doc.txt", str(f),
+        template_name="Doc",
+        fields={"Note": ["hello"]},
+        tags=["new"],
+    )
+    assert result.get("entryCreate", {}).get("entryId") == 500
+
+
+# --- Listing tools (definitions) --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_field_definitions_tool(
+    httpx_mock: HTTPXMock, patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=25&%24skip=0",
+        json={"value": [{"id": 1, "name": "Last Name"}]},
+    )
+    result = await server.list_field_definitions()
+    assert len(result["value"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_tag_definitions_tool(
+    httpx_mock: HTTPXMock, patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TagDefinitions?%24top=25&%24skip=0",
+        json={"value": []},
+    )
+    await server.list_tag_definitions()
+
+
+@pytest.mark.asyncio
+async def test_list_template_definitions_tool(
+    httpx_mock: HTTPXMock, patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=25&%24skip=0",
+        json={"value": []},
+    )
+    await server.list_template_definitions()
+
+
+@pytest.mark.asyncio
+async def test_list_link_definitions_tool(
+    httpx_mock: HTTPXMock, patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/LinkDefinitions?%24top=25&%24skip=0",
+        json={"value": []},
+    )
+    await server.list_link_definitions()
+
+
+@pytest.mark.asyncio
+async def test_list_repositories_tool(
+    httpx_mock: HTTPXMock, patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url="https://lf.example.test/LFRepositoryAPI/v1/Repositories",
+        json={"value": [{"repoId": "demo"}]},
+    )
+    await server.list_repositories()
+
+
+# --- v1.3 guards (path scope, batch cap, tool allowlist, audit reason) ------
+
+
+@pytest.mark.asyncio
+async def test_write_refused_by_path_deny(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "write_paths_deny", "\\Protected")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42, "name": "Doc", "entryType": "Document",
+            "fullPath": "\\Protected\\Doc",
+        },
+    )
+    result = await server.set_fields(42, {"Note": ["x"]})
+    assert result["mode"] == "error"
+    assert result["error"] == "path_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_write_allowed_within_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "write_paths_allow", "\\Imports")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42, "name": "Doc", "entryType": "Document",
+            "fullPath": "\\Imports\\2024\\Doc",
+        },
+    )
+    httpx_mock.add_response(
+        method="PUT", url=f"{_BASE}/Entries/42/fields", json={"value": []},
+    )
+    result = await server.set_fields(42, {"Note": ["x"]})
+    # No "mode": "error" — write proceeded
+    assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_write_refused_outside_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "write_paths_allow", "\\Imports")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42, "name": "Doc", "entryType": "Document",
+            "fullPath": "\\Production\\Doc",
+        },
+    )
+    result = await server.set_fields(42, {"Note": ["x"]})
+    assert result["mode"] == "error"
+    assert result["error"] == "path_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_create_folder_checks_parent_path(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """create_folder fences on parent's path since the new folder doesn't exist yet."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "write_paths_deny", "\\Production")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={
+            "id": 100, "name": "Production", "entryType": "Folder",
+            "fullPath": "\\Production",
+        },
+    )
+    result = await server.create_folder(100, "NewSub")
+    assert result["mode"] == "error"
+    assert result["error"] == "path_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_move_entry_destination_is_fenced(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A move from an allowed source into a denied destination is refused."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "write_paths_deny", "\\Protected")
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42, "name": "Doc", "entryType": "Document",
+            "fullPath": "\\Sandbox\\Doc",
+        },
+    )
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/300",
+        json={
+            "id": 300, "name": "Protected", "entryType": "Folder",
+            "fullPath": "\\Protected",
+        },
+    )
+    result = await server.move_entry(42, 300)
+    assert result["mode"] == "error"
+    assert result["error"] == "path_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_refuses_exceeding_batch_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "delete_folder_max_descendants", 10)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/100",
+        json={
+            "id": 100, "name": "Big", "entryType": "Folder",
+            "fullPath": "\\Big",
+        },
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=(
+            f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/children"
+            "?%24top=11&%24skip=0"
+        ),
+        # cap=10 + 1 = 11 items returned ⇒ exceeds_cap=True.
+        json={"value": [{"id": i, "name": f"c{i}"} for i in range(11)]},
+        is_reusable=True,
+    )
+    preview = await server.delete_entry(100)
+    assert preview["mode"] == "preview"
+    assert preview["exceeds_batch_cap"] is True
+
+    blocked = await server.delete_entry(
+        100, confirmation_token=preview["confirmation_token"],
+    )
+    assert blocked["mode"] == "error"
+    assert blocked["error"] == "exceeds_batch_cap"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_force_large_delete_overrides_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "delete_folder_max_descendants", 10)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/100",
+        json={
+            "id": 100, "name": "Big", "entryType": "Folder",
+            "fullPath": "\\Big",
+        },
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=(
+            f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/children"
+            "?%24top=11&%24skip=0"
+        ),
+        # cap=10 + 1 = 11 items returned ⇒ exceeds_cap=True.
+        json={"value": [{"id": i, "name": f"c{i}"} for i in range(11)]},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="DELETE",
+        url=f"{_BASE}/Entries/100",
+        status_code=202,
+        json={"token": "op-xyz"},
+    )
+    preview = await server.delete_entry(100)
+    result = await server.delete_entry(
+        100,
+        confirmation_token=preview["confirmation_token"],
+        force_large_delete=True,
+    )
+    assert result["mode"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_requires_audit_reason_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "require_audit_reason", True)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document", "fullPath": "\\Doc"},
+        is_reusable=True,
+    )
+    preview = await server.delete_entry(42)
+    refused = await server.delete_entry(
+        42, confirmation_token=preview["confirmation_token"],
+    )
+    assert refused["mode"] == "error"
+    assert refused["error"] == "audit_reason_required"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_proceeds_with_audit_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "require_audit_reason", True)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document", "fullPath": "\\Doc"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="DELETE",
+        url=f"{_BASE}/Entries/42",
+        status_code=202,
+        json={"token": "op-xyz"},
+    )
+    preview = await server.delete_entry(42)
+    result = await server.delete_entry(
+        42,
+        confirmation_token=preview["confirmation_token"],
+        audit_reason_id=5,
+    )
+    assert result["mode"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_tool_allowlist_blocks_at_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """Defense-in-depth: even if a tool is invoked directly, the allowlist
+    refuses operations outside the configured set."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(
+        settings, "write_tools_allowed", "merge_fields,merge_tags",
+    )
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+    )
+    result = await server.delete_entry(42)
+    assert result["mode"] == "error"
+    assert result["error"] == "tool_not_allowed"
+
+
+def test_register_write_tools_respects_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_register_write_tools only registers tools in LF_WRITE_TOOLS_ALLOWED."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(
+        settings, "write_tools_allowed", "merge_fields,create_folder",
+    )
+    registered: list[str] = []
+    monkeypatch.setattr(
+        server.mcp,
+        "tool",
+        lambda: (lambda fn: registered.append(fn.__name__) or fn),
+    )
+    server._register_write_tools()
+    assert set(registered) == {"merge_fields", "create_folder"}
+
+
 @pytest.mark.asyncio
 async def test_all_tools_registered() -> None:
+    """Read tools always register. Write tools only register when
+    LF_READ_ONLY=false at startup (see test_write_tools_registration)."""
     tools = await server.mcp.list_tools()
     names = {t.name for t in tools}
     assert names == {
+        # Legacy v1.1 reads
         "search_entries",
         "search_by_name",
         "search_natural",
@@ -437,6 +1920,15 @@ async def test_all_tools_registered() -> None:
         "get_field_values",
         "get_document_text",
         "get_document_edoc",
+        # v1.2 additions — definitions, audit reasons, async tasks
+        "list_repositories",
+        "list_field_definitions",
+        "list_tag_definitions",
+        "list_template_definitions",
+        "list_link_definitions",
+        "get_audit_reasons",
+        "get_task_status",
+        "wait_for_task",
     }
 
 

@@ -104,6 +104,47 @@ class Settings(BaseSettings):
         default=True,
         description="When true, write tools are not registered. Default true for safety.",
     )
+    write_paths_allow: str | None = Field(
+        default=None,
+        description="Comma-separated repository path prefixes; when set, "
+        "writes are permitted ONLY on entries whose fullPath starts with one "
+        "of these prefixes (case-insensitive). Backslashes are normalized. "
+        "Example: '\\\\Imports\\\\Pending,\\\\Archive\\\\WIP'. Combine with "
+        "LF_WRITE_PATHS_DENY for an allow-then-deny pattern.",
+    )
+    write_paths_deny: str | None = Field(
+        default=None,
+        description="Comma-separated repository path prefixes; writes are "
+        "REFUSED on any entry whose fullPath starts with one of these "
+        "prefixes. Deny wins over allow.",
+    )
+    delete_folder_max_descendants: int = Field(
+        default=50,
+        ge=0,
+        description="Maximum number of immediate children a folder may have "
+        "before delete_entry refuses to execute without force_large_delete=true. "
+        "Set to 0 to require force_large_delete on every folder delete.",
+    )
+    write_tools_allowed: str | None = Field(
+        default=None,
+        description="Comma-separated write-tool names; when set, only these "
+        "write tools register (assuming LF_READ_ONLY=false). Useful for "
+        "scope-limited deployments — e.g. 'merge_fields,merge_tags,"
+        "assign_template' for a metadata-only setup.",
+    )
+    require_audit_reason: bool = Field(
+        default=False,
+        description="When true, delete_entry refuses to execute without an "
+        "audit_reason_id. Use get_audit_reasons to enumerate valid IDs.",
+    )
+    validate_required_fields: bool = Field(
+        default=True,
+        description="When true, assign_template (and related entry-creation "
+        "tools assigning a template) validates required-field constraints "
+        "client-side and returns a structured error listing missing fields "
+        "before the API call. Disable on builds where the extra reads are "
+        "wasted (e.g. repositories with no required fields).",
+    )
     max_results_default: int = Field(
         default=25,
         ge=1, le=500,
@@ -127,6 +168,14 @@ class Settings(BaseSettings):
         description="Maximum edoc size in bytes that get_document_edoc will "
         "fetch when mode is 'bytes' or 'text'. Larger entries return a "
         "structured cap error instead of being downloaded.",
+    )
+    import_max_bytes: int = Field(
+        default=25_000_000,
+        ge=1,
+        description="Maximum file size in bytes accepted by import_document. "
+        "The API itself enforces a 100 MB cap; this client-side cap defaults "
+        "lower to keep upload latency predictable. Override per-call by "
+        "raising this env var.",
     )
     log_level: str = Field(
         default="INFO",

@@ -250,6 +250,18 @@ If you build something with this, I'd genuinely like to see it.
 [Open an issue](https://github.com/SamuelSHernandez/laserfiche-mcp/issues),
 or write to me directly.
 
+### A note on writes
+
+This tutorial leaves `LF_READ_ONLY=true`, which is also the package
+default. When you're ready to let Claude create, modify, or delete
+entries, flip `LF_READ_ONLY` to `false` and read the **Safety model**
+section in the [README](../README.md#safety-model) before you do.
+Path-prefix fences (`LF_WRITE_PATHS_ALLOW`), batch caps on folder
+deletes, and two-step confirmation tokens on destructive operations are
+all available and recommended. The [`docs/error-contract.md`](error-contract.md)
+reference documents the structured error responses every tool returns
+on failure, so an LLM can branch on the slug instead of parsing prose.
+
 ## Further reading
 
 1. [The Model Context Protocol specification](https://modelcontextprotocol.io)
@@ -257,8 +269,12 @@ or write to me directly.
 2. [Laserfiche Repository API Server documentation](https://doc.laserfiche.com/)
    — every endpoint the server calls under the hood is documented here.
 3. [`.env.example`](../.env.example) — the complete list of configuration
-   knobs, including OAuth, SSL verification, retry behavior, and pagination
-   ceilings.
-4. [`CHANGELOG.md`](../CHANGELOG.md) — what changed between versions and
+   knobs, including OAuth, SSL verification, retry behavior, pagination
+   ceilings, and the write-mode safety guards.
+4. [`docs/error-contract.md`](error-contract.md) — the stable
+   `mode: "error"` response shape every tool returns on failure, plus
+   the full slug taxonomy.
+5. [`CHANGELOG.md`](../CHANGELOG.md) — what changed between versions and
    why. v0.1.0 was yanked from PyPI for an incorrect auth flow; v0.2.x is
-   the first version verified against a real Laserfiche server.
+   the first version verified against a real Laserfiche server. v1.4.0
+   is the first to validate the write surface against a live server.
