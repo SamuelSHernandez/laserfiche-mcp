@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from laserfiche_mcp import permissions
-
 
 # --- path_allowed -----------------------------------------------------------
 

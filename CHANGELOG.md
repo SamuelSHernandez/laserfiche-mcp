@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-05-13
+
+### Fixed
+- Lint cleanups CI surfaced after the v1.4.1 commit (six findings: nested
+  `if` collapse, unused intermediate variable, `==` chain → `in (...)`,
+  over-long docstring line, unused test import, import sort order). No
+  functional change. v1.4.1 was not published to PyPI; v1.4.2 ships in
+  its place.
+
 ## [1.4.1] - 2026-05-13
 
 ### Fixed

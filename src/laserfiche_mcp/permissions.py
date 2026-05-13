@@ -74,12 +74,11 @@ def path_allowed(
             )
 
     allow = _parse_csv(allow_csv)
-    if allow:
-        if not any(_matches_prefix(path, a) for a in allow):
-            return False, (
-                f"Path {path!r} is outside the allowed write prefixes "
-                f"(LF_WRITE_PATHS_ALLOW={allow}). Writes refused."
-            )
+    if allow and not any(_matches_prefix(path, a) for a in allow):
+        return False, (
+            f"Path {path!r} is outside the allowed write prefixes "
+            f"(LF_WRITE_PATHS_ALLOW={allow}). Writes refused."
+        )
 
     return True, None
 

@@ -1247,8 +1247,7 @@ def _lf_error_detail(exc: LaserficheError) -> dict[str, Any]:
         # ProblemDetails fields sometimes live at top level, sometimes
         # nested under 'error' (the older Edoc routes use the nested form).
         inner = d.get("error") if isinstance(d.get("error"), dict) else None
-        merged = {**(inner or {}), **{k: v for k, v in d.items() if k != "error"}}
-        return merged
+        return {**(inner or {}), **{k: v for k, v in d.items() if k != "error"}}
     return {}
 
 
@@ -1275,7 +1274,7 @@ def _classify_lf_error(
     title = detail.get("title") or detail.get("message")
     status = exc.status_code
 
-    if error_code == _LF_ERROR_CODE_AUTH_INVALID or error_code == _LF_ERROR_CODE_LFDS_UNREACHABLE:
+    if error_code in (_LF_ERROR_CODE_AUTH_INVALID, _LF_ERROR_CODE_LFDS_UNREACHABLE):
         slug = "auth_failed"
         reason = (
             "Laserfiche rejected the credentials. Verify LF_USERNAME and "
@@ -1457,7 +1456,10 @@ def _fields_to_put_body(field_values: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _user_fields_to_values(updates: dict[str, list[Any]]) -> dict[str, Any]:
-    """Convert ``{"Name": ["Smith"]}`` → ``{"Name": {"values": [{"value": "Smith", "position": 1}]}}``.
+    """Convert caller field updates into the API's ``FieldToUpdate`` shape.
+
+    Example: ``{"Name": ["Smith"]}`` becomes
+    ``{"Name": {"values": [{"value": "Smith", "position": 1}]}}``.
 
     Per the Repository API swagger, ``ValueToUpdate.position`` is
     1-indexed for multi-value fields and ignored for single-value
