@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from laserfiche_mcp.config import AuthMode, DeploymentMode, Settings
+from laserfiche_mcp.config import ApiVersion, AuthMode, DeploymentMode, Settings
 
 
 def test_loads_password_self_hosted(lf_env: dict[str, str]) -> None:
@@ -14,6 +14,31 @@ def test_loads_password_self_hosted(lf_env: dict[str, str]) -> None:
     assert settings.read_only is True
     assert settings.password is not None
     assert "secret" not in repr(settings.password)
+
+
+def test_api_version_defaults_to_v1(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When LF_API_VERSION is unset, the default must be v1."""
+    monkeypatch.delenv("LF_API_VERSION", raising=False)
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.api_version is ApiVersion.V1
+
+
+def test_api_version_v2_parsed(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_API_VERSION", "v2")
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.api_version is ApiVersion.V2
+
+
+def test_api_version_invalid_rejected(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_API_VERSION", "v3")
+    with pytest.raises(ValueError):
+        Settings()  # type: ignore[call-arg]
 
 
 def test_missing_password_for_password_mode_raises(

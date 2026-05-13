@@ -21,10 +21,22 @@ class DeploymentMode(str, Enum):
 
 
 class AuthMode(str, Enum):
-    # username + password → /v2/{repo}/Token bearer (self-hosted, default)
+    # username + password → /{api_version}/Repositories/{repo}/Token bearer (self-hosted, default)
     PASSWORD = "password"
     OAUTH = "oauth"            # client_credentials grant (LFDS or compatible)
     API_KEY = "api_key"        # cloud service principal with JWT (reserved for v2)
+
+
+class ApiVersion(str, Enum):
+    # Older self-hosted LFRepositoryAPI builds (e.g. installations pinned to the
+    # v1 API surface). Uses /v1/ paths, lowercase `fields`/`children` segments,
+    # and OData entity-type segments (Laserfiche.Repository.Folder, .Document)
+    # in URLs. No unified /Export endpoint — only raw edoc bytes.
+    V1 = "v1"
+    # Newer self-hosted LFRepositoryAPI builds. Uses /v2/ paths, PascalCase
+    # `Fields`/`Children` segments, and a unified /Export endpoint that can
+    # return Edoc, Text (extracted), or Image parts.
+    V2 = "v2"
 
 
 class Settings(BaseSettings):
@@ -50,6 +62,14 @@ class Settings(BaseSettings):
     repository_id: str | None = Field(
         default=None,
         description="Repository name or ID.",
+    )
+    api_version: ApiVersion = Field(
+        default=ApiVersion.V1,
+        description="LFRepositoryAPI version exposed by your server: 'v1' for "
+        "older self-hosted builds, 'v2' for newer ones. Probe by GETting "
+        "`{LF_REPO_API_URL}/v1/Repositories` vs `/v2/Repositories` — whichever "
+        "returns 200 is your version. Defaults to v1 because that is what most "
+        "current on-prem installations expose.",
     )
 
     # --- Auth ---

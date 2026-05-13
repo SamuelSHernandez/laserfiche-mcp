@@ -1,22 +1,33 @@
-"""Thin async client for the Laserfiche Repository API V2.
+"""Thin async client for the Laserfiche Repository API (v1 and v2).
 
-Endpoint paths follow the official self-hosted Repository API V2 conventions
-as documented at developer.laserfiche.com and confirmed against the official
-``Laserfiche/lf-repository-api-client-java`` client. Cloud will get a
-parallel client in v2.
+Endpoint paths follow the official self-hosted Repository API conventions
+as documented at developer.laserfiche.com and confirmed against the on-server
+OpenAPI spec (``/swagger/v1/swagger.json``) plus the official
+``Laserfiche/lf-repository-api-client-java`` reference client.
 
-Path summary (relative to ``/v2/Repositories/{repositoryId}/``):
+Path summary, relative to ``/{api_version}/Repositories/{repositoryId}/``.
 
-  GET  Entries/{id}                        — get entry by ID
-  GET  Entries/ByPath?fullPath=...         — resolve a backslash path
-  GET  Entries/{id}/Folder/Children        — list folder contents
-  GET  Entries/{id}/Fields                 — read template fields
-  POST Entries/{id}/Export                 — download Edoc / Text / Image
-  POST /v2/Repositories/{repo}/SimpleSearches
-                                           — synchronous search
+v1 (older self-hosted builds — current default):
+  GET  Entries/{id}                                          — get entry
+  GET  Entries/ByPath?fullPath=...                           — resolve path
+  GET  Entries/{id}/Laserfiche.Repository.Folder/children    — list folder
+  GET  Entries/{id}/fields                                   — field values
+  POST SimpleSearches                                        — simple search
+  GET  Entries/{id}/Laserfiche.Repository.Document/edoc      — raw edoc bytes
+  (no endpoint)                                              — extracted text
 
-Note: search uses POST with a JSON body ``{"searchCommand": "<query>"}``,
-NOT a GET with a query string. The previous v0.x guess was wrong.
+v2 (newer self-hosted builds):
+  GET  Entries/{id}                                          — get entry
+  GET  Entries/ByPath?fullPath=...                           — resolve path
+  GET  Entries/{id}/Folder/Children                          — list folder
+  GET  Entries/{id}/Fields                                   — field values
+  POST SimpleSearches                                        — simple search
+  POST Entries/{id}/Export {"part": "Edoc"}                  — raw edoc bytes
+  POST Entries/{id}/Export {"part": "Text"}                  — extracted text
+
+Search on both versions uses POST with a JSON body ``{"searchCommand": "<q>"}``,
+NOT a GET with a query string. Version is selected by ``Settings.api_version``
+(``LF_API_VERSION``), default ``v1``.
 """
 
 from __future__ import annotations
@@ -30,7 +41,7 @@ from urllib.parse import urljoin
 import httpx
 
 from .auth import AuthStrategy
-from .config import Settings
+from .config import ApiVersion, Settings
 
 logger = logging.getLogger("laserfiche_mcp.client")
 
@@ -45,25 +56,33 @@ class LaserficheError(Exception):
         self.status_code = status_code
 
 
-def build_repo_path(base_url: str, repository_id: str, suffix: str) -> str:
-    """Construct a /v2/Repositories/{repo}/{suffix} URL.
+def build_repo_path(
+    base_url: str,
+    repository_id: str,
+    suffix: str,
+    api_version: ApiVersion = ApiVersion.V1,
+) -> str:
+    """Construct a /{api_version}/Repositories/{repo}/{suffix} URL.
 
     Pulled out of ``LaserficheClient`` so it's directly unit-testable.
     """
     if not base_url.endswith("/"):
         base_url += "/"
     suffix = suffix.lstrip("/")
-    return urljoin(base_url, f"v2/Repositories/{repository_id}/{suffix}")
+    return urljoin(
+        base_url, f"{api_version.value}/Repositories/{repository_id}/{suffix}"
+    )
 
 
 class LaserficheClient:
-    """Async client for the self-hosted Repository API V2."""
+    """Async client for the self-hosted Repository API (v1 or v2)."""
 
     def __init__(self, settings: Settings, auth: AuthStrategy) -> None:
         self._settings = settings
         self._auth = auth
         self._base_url = str(settings.repo_api_url) if settings.repo_api_url else ""
         self._repository_id = settings.repository_id or ""
+        self._api_version = settings.api_version
         self._http: httpx.AsyncClient | None = None
 
         if not settings.verify_ssl:
@@ -89,7 +108,9 @@ class LaserficheClient:
     # --- Internals ---------------------------------------------------------
 
     def _repo_path(self, suffix: str) -> str:
-        return build_repo_path(self._base_url, self._repository_id, suffix)
+        return build_repo_path(
+            self._base_url, self._repository_id, suffix, self._api_version
+        )
 
     async def _send(self, request: httpx.Request) -> httpx.Response:
         """Apply auth, send, and retry on transient failures."""
@@ -203,10 +224,18 @@ class LaserficheClient:
         max_results: int = 25,
         skip: int = 0,
     ) -> dict[str, Any]:
-        """GET /Entries/{folderId}/Folder/Children?$top=&$skip="""
+        """List immediate children of a folder.
+
+        v1: GET /Entries/{id}/Laserfiche.Repository.Folder/children
+        v2: GET /Entries/{id}/Folder/Children
+        """
+        if self._api_version is ApiVersion.V1:
+            suffix = f"Entries/{folder_id}/Laserfiche.Repository.Folder/children"
+        else:
+            suffix = f"Entries/{folder_id}/Folder/Children"
         return await self._request_json(
             "GET",
-            self._repo_path(f"Entries/{folder_id}/Folder/Children"),
+            self._repo_path(suffix),
             params={"$top": max_results, "$skip": skip},
         )
 
@@ -230,10 +259,15 @@ class LaserficheClient:
         )
 
     async def get_field_values(self, entry_id: int) -> dict[str, Any]:
-        """GET /Entries/{entryId}/Fields"""
+        """Read template field values on an entry.
+
+        v1: GET /Entries/{id}/fields   (lowercase)
+        v2: GET /Entries/{id}/Fields   (PascalCase)
+        """
+        segment = "fields" if self._api_version is ApiVersion.V1 else "Fields"
         return await self._request_json(
             "GET",
-            self._repo_path(f"Entries/{entry_id}/Fields"),
+            self._repo_path(f"Entries/{entry_id}/{segment}"),
         )
 
     async def export_entry(
@@ -242,11 +276,30 @@ class LaserficheClient:
         *,
         part: str = "Edoc",
     ) -> bytes:
-        """POST /Entries/{entryId}/Export — download document content.
+        """Download document content.
 
-        ``part`` is one of "Edoc" (raw electronic document), "Text"
-        (Laserfiche-extracted text), or "Image" (page images).
+        v2 uses a unified POST /Entries/{id}/Export with body
+        ``{"part": "Edoc"|"Text"|"Image"}``.
+
+        v1 has no unified Export endpoint. Only Edoc is supported, via
+        GET /Entries/{id}/Laserfiche.Repository.Document/edoc. Text and
+        Image parts have no v1 equivalent and raise ``LaserficheError``.
         """
+        if self._api_version is ApiVersion.V1:
+            if part != "Edoc":
+                raise LaserficheError(
+                    f"Laserfiche API v1 has no endpoint for downloading "
+                    f"part={part!r}. Only 'Edoc' (raw electronic document "
+                    f"bytes) is supported on v1; set LF_API_VERSION=v2 if "
+                    f"your server supports it."
+                )
+            return await self._request_bytes(
+                "GET",
+                self._repo_path(
+                    f"Entries/{entry_id}/Laserfiche.Repository.Document/edoc"
+                ),
+            )
+
         return await self._request_bytes(
             "POST",
             self._repo_path(f"Entries/{entry_id}/Export"),

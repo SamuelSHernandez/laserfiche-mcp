@@ -25,7 +25,7 @@ from abc import ABC, abstractmethod
 import httpx
 from pydantic import SecretStr
 
-from .config import AuthMode, Settings
+from .config import ApiVersion, AuthMode, Settings
 
 logger = logging.getLogger("laserfiche_mcp.auth")
 
@@ -41,7 +41,7 @@ class PasswordGrantStrategy(AuthStrategy):
     """Self-hosted Laserfiche password-grant token exchange.
 
     On first call, POSTs ``grant_type=password&username=...&password=...``
-    (form-encoded) to ``{base_url}/v2/Repositories/{repository_id}/Token``
+    (form-encoded) to ``{base_url}/{api_version}/Repositories/{repository_id}/Token``
     and caches the bearer token. Refreshes ~30 seconds before ``expires_in``.
     """
 
@@ -51,17 +51,20 @@ class PasswordGrantStrategy(AuthStrategy):
         repository_id: str,
         username: str,
         password: SecretStr,
+        api_version: ApiVersion = ApiVersion.V1,
         verify_ssl: bool = True,
         timeout_seconds: float = 30.0,
     ) -> None:
         if not base_url.endswith("/"):
             base_url += "/"
-        # Self-hosted LFRepositoryAPI v2 token endpoint sits at
-        # /v2/Repositories/{repositoryId}/Token, consistent with every other
-        # v2 path in this client. (The /v2/{repo}/Token shape without
-        # /Repositories/ that some Laserfiche Cloud docs show returns 404 on
-        # self-hosted servers.)
-        self._token_url = f"{base_url}v2/Repositories/{repository_id}/Token"
+        # Both v1 and v2 expose the token endpoint at
+        # /{version}/Repositories/{repositoryId}/Token with the same
+        # form-encoded grant_type=password body. (The /{version}/{repo}/Token
+        # shape without /Repositories/ that some Cloud docs show returns 404
+        # on self-hosted servers regardless of version.)
+        self._token_url = (
+            f"{base_url}{api_version.value}/Repositories/{repository_id}/Token"
+        )
         self._username = username
         self._password = password
         self._verify_ssl = verify_ssl
@@ -167,6 +170,7 @@ def build_auth_strategy(settings: Settings) -> AuthStrategy:
             repository_id=settings.repository_id,
             username=settings.username,
             password=settings.password,
+            api_version=settings.api_version,
             verify_ssl=settings.verify_ssl,
             timeout_seconds=settings.request_timeout_seconds,
         )
