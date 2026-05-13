@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-05-13
+
+### Fixed
+- `--version` flag and the `laserfiche_mcp.__version__` constant were
+  out of sync with the package metadata in v1.4.0 — they reported
+  ``1.3.0`` while ``pyproject.toml`` (and the PyPI release) correctly
+  declared ``1.4.0``. The package functionality was unaffected; only
+  the version-reporting paths lied. Both now report ``1.4.1``.
+
 ## [1.4.0] - 2026-05-13
 
 This release is the first to validate the write surface against a real
