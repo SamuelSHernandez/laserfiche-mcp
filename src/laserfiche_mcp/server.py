@@ -961,10 +961,23 @@ async def list_repositories() -> dict[str, Any]:
     return raw
 
 
+def _summarize_definition_list(raw: dict[str, Any]) -> dict[str, Any]:
+    """Return ``{count, names}`` for a definitions listing.
+
+    Used by the four ``list_*_definitions`` tools when ``summary_only=True``.
+    Reduces a 30–50 KB payload to a tiny one for "what's available?"
+    workflows.
+    """
+    items = raw.get("value") or []
+    names = [item.get("name") or item.get("displayName") or "" for item in items]
+    return {"count": len(names), "names": [n for n in names if n]}
+
+
 @mcp.tool()
 async def list_field_definitions(
     max_results: int | None = None,
     skip: int = 0,
+    summary_only: bool = False,
 ) -> dict[str, Any]:
     """List every field definition in the repository.
 
@@ -996,6 +1009,8 @@ async def list_field_definitions(
         )
     except LaserficheError as exc:
         return _classify_lf_error("list_field_definitions", exc)
+    if summary_only:
+        return _summarize_definition_list(raw)
     return raw
 
 
@@ -1003,6 +1018,7 @@ async def list_field_definitions(
 async def list_tag_definitions(
     max_results: int | None = None,
     skip: int = 0,
+    summary_only: bool = False,
 ) -> dict[str, Any]:
     """List every tag definition in the repository.
 
@@ -1028,6 +1044,8 @@ async def list_tag_definitions(
         )
     except LaserficheError as exc:
         return _classify_lf_error("list_tag_definitions", exc)
+    if summary_only:
+        return _summarize_definition_list(raw)
     return raw
 
 
@@ -1036,6 +1054,7 @@ async def list_template_definitions(
     template_name: str | None = None,
     max_results: int | None = None,
     skip: int = 0,
+    summary_only: bool = False,
 ) -> dict[str, Any]:
     """List template definitions in the repository.
 
@@ -1065,13 +1084,101 @@ async def list_template_definitions(
         )
     except LaserficheError as exc:
         return _classify_lf_error("list_template_definitions", exc)
+    if summary_only:
+        return _summarize_definition_list(raw)
     return raw
+
+
+@mcp.tool()
+async def get_template_fields(
+    template_name: str,
+    required_only: bool = False,
+) -> dict[str, Any]:
+    """Return the fields belonging to a single template, with full field metadata.
+
+    Closes the most common pre-assign workflow gap: instead of fetching
+    ``list_template_definitions`` then ``list_field_definitions`` and
+    cross-referencing client-side, this returns the template's field
+    list directly with each field's type, constraints, and required
+    flag inlined. Use this BEFORE ``assign_template`` to construct the
+    ``fields`` argument.
+
+    Args:
+        template_name: Exact template name (case-sensitive on most
+            builds). Use ``list_template_definitions`` to discover
+            available names.
+        required_only: When ``True``, return only fields where
+            ``is_required`` is true. Useful for "what's the minimum I
+            have to supply?" workflows.
+
+    Returns: ``{"template_name": <str>, "template_id": <int>,
+    "field_count": <int>, "fields": [...]}`` where each field has
+    ``name``, ``field_type``, ``is_required``, ``is_multi_value``,
+    ``list_values``, ``default_value``, ``length``, ``constraint``.
+
+    On failure: returns ``{"mode": "error", "error": <slug>, ...}``.
+    Slugs: ``invalid_template_name`` when the template name doesn't
+    exist in the repository (with the list of valid names in the
+    response); ``server_error`` for upstream issues.
+    """
+    client = _client()
+    try:
+        template_defs = await client.cached_template_definitions()
+    except LaserficheError as exc:
+        return _classify_lf_error(
+            "get_template_fields", exc, extra={"template_name": template_name},
+        )
+    tpl = template_defs.get(template_name)
+    if tpl is None:
+        return {
+            "mode": "error",
+            "operation": "get_template_fields",
+            "error": "invalid_template_name",
+            "template_name": template_name,
+            "reason": (
+                f"Template {template_name!r} is not defined in this "
+                "repository. Match is case-sensitive."
+            ),
+            "valid_template_names": sorted(template_defs.keys()),
+        }
+    template_field_names = tpl.get("templateFieldNames") or tpl.get("fieldNames") or []
+    try:
+        field_defs = await client.cached_field_definitions()
+    except LaserficheError as exc:
+        return _classify_lf_error(
+            "get_template_fields", exc, extra={"template_name": template_name},
+        )
+    fields_out: list[dict[str, Any]] = []
+    for name in template_field_names:
+        fd = field_defs.get(name)
+        if fd is None:
+            continue
+        if required_only and not fd.get("isRequired"):
+            continue
+        fields_out.append({
+            "name": name,
+            "field_id": fd.get("id"),
+            "field_type": fd.get("fieldType"),
+            "is_required": bool(fd.get("isRequired")),
+            "is_multi_value": bool(fd.get("isMultiValue")),
+            "list_values": fd.get("listValues") or [],
+            "default_value": fd.get("defaultValue"),
+            "length": fd.get("length"),
+            "constraint": fd.get("constraint"),
+        })
+    return {
+        "template_name": template_name,
+        "template_id": tpl.get("id"),
+        "field_count": len(fields_out),
+        "fields": fields_out,
+    }
 
 
 @mcp.tool()
 async def list_link_definitions(
     max_results: int | None = None,
     skip: int = 0,
+    summary_only: bool = False,
 ) -> dict[str, Any]:
     """List the entry-link type definitions available on this repository.
 
@@ -1098,6 +1205,8 @@ async def list_link_definitions(
         )
     except LaserficheError as exc:
         return _classify_lf_error("list_link_definitions", exc)
+    if summary_only:
+        return _summarize_definition_list(raw)
     return raw
 
 
