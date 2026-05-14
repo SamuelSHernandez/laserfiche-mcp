@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-14
+
+This is a major release that reshapes the public surface based on a
+three-pass architectural audit (`AUDIT.md`, `AUDIT_ERRORS.md`,
+`AUDIT_DESIGN.md`) and the corresponding plans (`PLAN.md`,
+`PLAN_ERRORS.md`, `PLAN_DESIGN.md`) — all checked in for reference.
+The audits applied four design principles: don't port the API,
+security lives in the host, design for finite context, design for
+hallucinated inputs.
+
+### Added — Pass 1 security defense-in-depth
+Closes gaps identified in `AUDIT.md` section 1c (Principle 2):
+
+- **Path traversal rejected.** `permissions.path_allowed` now rejects
+  any path containing a `..` segment regardless of allow/deny config.
+- **Entry-name validation.** New `permissions.name_allowed()` rejects
+  names with `\`, `/`, NULL bytes, control characters, or length
+  outside 1-128. Wired into `create_folder`, `import_document`,
+  `copy_entry`, `rename_entry`, `move_entry` with structured
+  `invalid_name` errors.
+- **Page-range syntax validation.** New `permissions.validate_page_range()`
+  catches malformed-but-non-empty `page_range` inputs before the API
+  call (`invalid_page_range`).
+- **Cached schema-definition lookups** on `LaserficheClient`:
+  `cached_field_definitions`, `cached_tag_definitions`,
+  `cached_template_definitions`, `cached_link_definitions`. TTL via
+  new `LF_SCHEMA_CACHE_TTL_SECONDS` env var (default 300s).
+- **Client-side pre-flight** for unknown field / tag / template /
+  link-type names on every write that takes them. Returns structured
+  `invalid_field_name`, `invalid_tag_name`, `invalid_template_name`,
+  `invalid_link_type` errors listing valid values, instead of the
+  server's opaque 400. Gated on `LF_VALIDATE_NAMES` (default true).
+
+### Added — Pass 1 atomic tool
+- **`get_template_fields(template_name, required_only=False)`** —
+  the missing "what fields does this template need" lookup that
+  used to require chaining three calls (`list_template_definitions`
+  → `list_field_definitions` → manual filter). Returns the template's
+  field list with each field's type, constraints, and required flag
+  inlined. `required_only=True` filters to mandatory fields.
+  Surfaces `invalid_template_name` errors with the valid names list.
+
+### Added — Pass 1 token-budget affordances
+- **`summary_only: bool = False`** on `list_field_definitions`,
+  `list_tag_definitions`, `list_template_definitions`,
+  `list_link_definitions`. When true, the tool returns
+  `{count, names: list[str]}` instead of the full definition payload.
+  Cuts a 30-50 KB listing down to a tiny shape for "what's
+  available?" workflows. Backwards-compatible default preserves the
+  existing payload.
+
+### Changed — Pass 3 tool naming
+Per `PLAN_DESIGN.md` section 2a: every tool is now registered under
+its v2 name in `laserfiche_{resource}_{verb}` form (e.g.,
+`laserfiche_entry_get`, `laserfiche_field_set`, `laserfiche_folder_create`).
+The old verb-first names (`get_entry`, `set_fields`, `create_folder`,
+etc.) remain registered as deprecation aliases for v2.x; they will be
+removed in v3.0.
+
+The `_V2_RENAME_MAP` constant in `src/laserfiche_mcp/server.py` is
+the authoritative mapping. Both names point at the same function
+implementation; behavior is identical.
+
+### Changed — Pass 2 structured error contract
+Every tool's `mode: "error"` response now carries three new
+top-level fields:
+
+- **`kind`**: one of 5 canonical `ToolErrorKind` values
+  (`not_found`, `permission_denied`, `rate_limited`, `invalid_input`,
+  `upstream_unavailable`). LLMs branch on this for category-level
+  decisions (retry vs ask user vs abort).
+- **`request_id`**: a UUID4 unique to this tool invocation. Operators
+  pivot from this into MCP-side logs.
+- **`upstream_trace_id`**: the Laserfiche server's W3C trace ID from
+  the ProblemDetails response when present. Pivots into the LF
+  server's own logs for cross-system correlation.
+
+The existing `error` field is preserved and now reads as the
+"subkind" — a more specific slug than `kind`. The full subkind → kind
+mapping is in `_SUBKIND_TO_KIND` and exposed via the public helper
+`kind_for_subkind(subkind)`. v1.5 callers that branched on `error`
+continue to work; new code can branch on `kind` for category-level
+handling.
+
+### Deferred to v2.x follow-ups
+Recorded in `TODO.md` for incremental ship after v2.0:
+
+- **Write-tool collapses** (set/merge field/tag pairs into
+  `update_fields(mode)`, etc.) — current tools still work; the
+  collapses were prepared in `PLAN.md` but the existing surface
+  remains coherent.
+- **Preview/execute splits** of the 5 destructive tools into 10
+  single-purpose tools — the current single-tool design with
+  confirmation-token discrimination still works.
+- **Description polish** — per `PLAN_DESIGN.md` section 2b, move
+  parameter descriptions into `Field(description=...)`, add
+  `examples=[...]`, replace `dict[str, list[Any]]` field-update
+  shapes with pydantic models. Current docstrings remain detailed
+  but don't yet flow into the MCP JSON schema's parameter docs.
+- **Structured JSON logging** with `LF_LOG_FORMAT=json` and a
+  per-tool-call decorator emitting `{ts, tool, args_redacted,
+  duration_ms, outcome, request_id, upstream_trace_id, ...}`.
+- **Single `redact()` helper** wired into the two retry-warning log
+  lines and the new logging decorator.
+
+### Notes for upgraders
+- **JSON wire shape**: success-path responses are unchanged for every
+  tool. Error responses gain `kind`, `request_id`, `upstream_trace_id`
+  alongside the existing fields. Callers parsing the existing fields
+  continue to work; the new fields are optional context.
+- **Tool names**: v2.0 keeps both old and new names registered. Update
+  to the `laserfiche_*` names at your convenience; deprecation
+  warnings are not emitted yet but old names will be removed in v3.0.
+- **Test count**: 310 unit tests, coverage 85.43%.
+
 ## [1.5.0] - 2026-05-13
 
 ### Fixed

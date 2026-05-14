@@ -9,6 +9,68 @@ CHANGELOG once they ship.
 
 ---
 
+## v2.0 follow-ups (deferred from the three-pass refactor)
+
+Pass 1 / Pass 2 / Pass 3 produced six artifacts at the repo root
+(`AUDIT.md`, `AUDIT_ERRORS.md`, `AUDIT_DESIGN.md`, `PLAN.md`,
+`PLAN_ERRORS.md`, `PLAN_DESIGN.md`). v2.0 shipped the highest-impact
+half; the items below are the explicit deferrals.
+
+### Write-tool collapses (PLAN.md step 3)
+- `laserfiche_field_update(updates, mode)` combining `set_fields` +
+  `merge_fields` with `Literal["merge","replace"]` enum.
+- `laserfiche_tag_update(add, remove)` combining `set_tags` + `merge_tags`.
+- `laserfiche_link_update(links, mode)` (only `set_links` exists today;
+  add the merge variant).
+- `laserfiche_template_assign(template_name=None)` collapsing
+  `assign_template` + `remove_template` (None clears).
+- `laserfiche_task_wait(timeout_seconds=0)` collapsing
+  `wait_for_task` + `get_task_status` (timeout=0 returns immediately).
+
+### Preview/execute splits (PLAN.md step 4)
+Split each of the 5 destructive multiplex tools into two
+single-purpose tools:
+- `laserfiche_entry_rename_preview` / `..._execute`
+- `laserfiche_entry_move_preview` / `..._execute`
+- `laserfiche_entry_delete_preview` / `..._execute`
+- `laserfiche_document_edoc_delete_preview` / `..._execute`
+- `laserfiche_document_pages_delete_preview` / `..._execute`
+
+### Description polish (PLAN_DESIGN.md step 6)
+- Move parameter descriptions from docstrings into
+  `Field(description=...)` so they reach the JSON schema the LLM sees.
+- Add `examples=[...]` on non-obvious params (queries, paths, field-
+  update structures).
+- Replace `dict[str, list[Any]]` (fields) and `list[dict[str, Any]]`
+  (links) with pydantic models (`FieldUpdate`, `EntryLink`).
+- Pydantic-wrap the five raw-OData passthroughs (definition lists +
+  `get_task_status`) into typed responses with snake_case fields.
+- Add `response_format: Literal["concise","detailed"]` to heavy
+  reads.
+- Add `include_fields: list[str] | None` projection on entry-returning
+  reads.
+- Add `total_estimate: int | None` companion to `next_link` cursor
+  responses.
+
+### Structured logging + redaction (PLAN_ERRORS.md step 7)
+- Per-tool-call decorator emitting one JSON event:
+  `{ts, tool, args_redacted, duration_ms, outcome, request_id,
+   upstream_trace_id, error_kind?, error_subkind?}`.
+- `LF_LOG_FORMAT: Literal["text","json"]="text"` env var.
+- Single `redact()` helper for credentials / hostnames / repo IDs
+  wired into:
+  - The decorator above
+  - The retry-warning logs at `client.py:159-170`
+  - The auth-flow logs at `auth.py:81, 139`
+- `request_id` propagated via ContextVar so nested code can read it
+  without threading it through every signature.
+
+### Old-name removal (v3.0)
+Every v1.x tool name (`get_entry`, `set_fields`, etc.) remains
+registered as a deprecation alias through v2.x. Remove in v3.0.
+
+---
+
 ## Bugs (from v1.4.2 live testing) — RESOLVED in v1.5.0
 
 - ~~Bug 7 — `list_repositories` rejects list-shape responses.~~ Fixed:
