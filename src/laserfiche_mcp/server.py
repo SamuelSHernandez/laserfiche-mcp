@@ -3251,6 +3251,10 @@ def _register_write_tools() -> None:
     Also honors LF_WRITE_TOOLS_ALLOWED — if set, only tools named in that
     comma-separated env var are registered. Lets operators ship a
     metadata-only or create-only deployment.
+
+    v2.0 also registers each write tool under its renamed v2 name
+    (``laserfiche_{resource}_{verb}``) per ``PLAN_DESIGN.md`` section 2a.
+    Old names remain as deprecation shims until v2.1.
     """
     settings = _get_settings()
     if settings.read_only:
@@ -3260,6 +3264,71 @@ def _register_write_tools() -> None:
         if allowed is not None and fn.__name__ not in allowed:
             continue
         mcp.tool()(fn)
+        # v2 alias
+        new_name = _V2_RENAME_MAP.get(fn.__name__)
+        if new_name is not None:
+            mcp.tool(name=new_name)(fn)
+
+
+# v2.0 rename map: old tool name → laserfiche_{resource}_{verb}. Per
+# PLAN_DESIGN.md section 2a. Old names remain registered as deprecation
+# shims; new names are the recommended path. Both call the same function.
+_V2_RENAME_MAP: dict[str, str] = {
+    # Reads
+    "search_entries": "laserfiche_entry_search",
+    "search_by_name": "laserfiche_entry_search_by_name",
+    "search_natural": "laserfiche_entry_search_natural",
+    "list_folder": "laserfiche_folder_list",
+    "get_entry": "laserfiche_entry_get",
+    "get_entry_by_path": "laserfiche_entry_get_by_path",
+    "get_field_values": "laserfiche_field_values_get",
+    "get_document_text": "laserfiche_document_get_text",
+    "get_document_edoc": "laserfiche_document_get_edoc",
+    "list_repositories": "laserfiche_repository_list",
+    "list_field_definitions": "laserfiche_field_definition_list",
+    "list_tag_definitions": "laserfiche_tag_definition_list",
+    "list_template_definitions": "laserfiche_template_definition_list",
+    "list_link_definitions": "laserfiche_link_definition_list",
+    "get_template_fields": "laserfiche_template_field_list",
+    "get_audit_reasons": "laserfiche_audit_reason_list",
+    "get_task_status": "laserfiche_task_get_status",
+    "wait_for_task": "laserfiche_task_wait",
+    # Writes
+    "set_fields": "laserfiche_field_set",
+    "merge_fields": "laserfiche_field_merge",
+    "set_tags": "laserfiche_tag_set",
+    "merge_tags": "laserfiche_tag_merge",
+    "set_links": "laserfiche_link_set",
+    "assign_template": "laserfiche_template_assign",
+    "remove_template": "laserfiche_template_remove",
+    "create_folder": "laserfiche_folder_create",
+    "copy_entry": "laserfiche_entry_copy",
+    "import_document": "laserfiche_document_import",
+    "rename_entry": "laserfiche_entry_rename",
+    "move_entry": "laserfiche_entry_move",
+    "delete_entry": "laserfiche_entry_delete",
+    "delete_edoc": "laserfiche_document_edoc_delete",
+    "delete_pages": "laserfiche_document_pages_delete",
+}
+
+
+def _register_v2_read_aliases() -> None:
+    """Register read tools under their v2 names (``laserfiche_{resource}_{verb}``).
+
+    Called once at module import time so the v2 names appear in the MCP
+    catalog alongside the old names. Old names emit no deprecation
+    warning yet — they're alive for one minor version (v2.0).
+    """
+    for fn_name, new_name in _V2_RENAME_MAP.items():
+        if fn_name in {tool.__name__ for tool in _WRITE_TOOLS}:
+            continue  # writes get their alias in _register_write_tools
+        fn = globals().get(fn_name)
+        if fn is None:
+            continue
+        mcp.tool(name=new_name)(fn)
+
+
+_register_v2_read_aliases()
 
 
 # --- Entrypoint --------------------------------------------------------------

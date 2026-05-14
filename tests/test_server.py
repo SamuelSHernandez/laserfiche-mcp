@@ -1902,7 +1902,7 @@ def test_register_write_tools_respects_allowlist(
     monkeypatch.setattr(
         server.mcp,
         "tool",
-        lambda: (lambda fn: registered.append(fn.__name__) or fn),
+        lambda **kwargs: (lambda fn: registered.append(fn.__name__) or fn),
     )
     server._register_write_tools()
     assert set(registered) == {"merge_fields", "create_folder"}
@@ -1914,8 +1914,8 @@ async def test_all_tools_registered() -> None:
     LF_READ_ONLY=false at startup (see test_write_tools_registration)."""
     tools = await server.mcp.list_tools()
     names = {t.name for t in tools}
-    assert names == {
-        # Legacy v1.1 reads
+    # v1.x names — kept as deprecation shims through v2.0.
+    legacy = {
         "search_entries",
         "search_by_name",
         "search_natural",
@@ -1925,7 +1925,6 @@ async def test_all_tools_registered() -> None:
         "get_field_values",
         "get_document_text",
         "get_document_edoc",
-        # v1.2 additions — definitions, audit reasons, async tasks
         "list_repositories",
         "list_field_definitions",
         "list_tag_definitions",
@@ -1934,9 +1933,21 @@ async def test_all_tools_registered() -> None:
         "get_audit_reasons",
         "get_task_status",
         "wait_for_task",
-        # v2.0 additions
         "get_template_fields",
     }
+    # v2.0 names — laserfiche_{resource}_{verb}. From _V2_RENAME_MAP.
+    v2 = set(server._V2_RENAME_MAP.values())
+    # Reads-only registration in this test (writes off in test config).
+    expected = legacy | {
+        name for old, name in server._V2_RENAME_MAP.items()
+        if old in legacy
+    }
+    assert names == expected
+    # Sanity: every old name has a v2 alias.
+    for old in legacy:
+        assert old in server._V2_RENAME_MAP, f"missing v2 alias for {old}"
+    # Sanity: v2 names all start with the laserfiche_ prefix.
+    assert all(n.startswith("laserfiche_") for n in v2)
 
 
 # --- CLI argument parser -----------------------------------------------------
