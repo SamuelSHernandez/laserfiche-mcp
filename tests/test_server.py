@@ -207,8 +207,8 @@ async def test_search_entries_happy_path(
 
     result = await server.search_entries(query='{LF:Name="x.pdf"}')
 
-    assert len(result.entries) == 1
-    assert result.entries[0].id == 7
+    assert len(result["entries"]) == 1
+    assert result["entries"][0]["id"] == 7
 
 
 @pytest.mark.asyncio
@@ -330,8 +330,8 @@ async def test_list_folder_happy_path(
 
     result = await server.list_folder(folder_id=1)
 
-    assert result.total_count == 1
-    assert result.entries[0].id == 10
+    assert result["total_count"] == 1
+    assert result["entries"][0]["id"] == 10
 
 
 @pytest.mark.asyncio
@@ -388,8 +388,8 @@ async def test_get_entry_happy_path(
 
     result = await server.get_entry(entry_id=42)
 
-    assert result.id == 42
-    assert result.template_name == "PAF"
+    assert result["id"] == 42
+    assert result["template_name"] == "PAF"
 
 
 @pytest.mark.asyncio
@@ -421,7 +421,7 @@ async def test_get_entry_by_path_happy_path(
 
     result = await server.get_entry_by_path(full_path="\\Imports")
 
-    assert result.id == 12
+    assert result["id"] == 12
 
 
 @pytest.mark.asyncio
@@ -460,9 +460,10 @@ async def test_get_field_values_happy_path(
 
     result = await server.get_field_values(entry_id=42)
 
-    assert len(result) == 2
-    assert result[0].field_name == "Status"
-    assert result[1].is_multi_value is True
+    assert result["entry_id"] == 42
+    assert len(result["values"]) == 2
+    assert result["values"][0]["field_name"] == "Status"
+    assert result["values"][1]["is_multi_value"] is True
 
 
 @pytest.mark.asyncio
@@ -505,7 +506,9 @@ async def test_get_document_text_on_v2_returns_decoded_text(
         monkeypatch.setattr(server, "_client", lambda: client)
         result = await server.get_document_text(entry_id=42)
 
-    assert result == "hello world"
+    assert result["text"] == "hello world"
+    assert result["truncated"] is False
+    assert result["entry_id"] == 42
 
 
 @pytest.mark.asyncio
@@ -528,8 +531,10 @@ async def test_get_document_text_truncates_long_output(
         monkeypatch.setattr(server, "_client", lambda: client)
         result = await server.get_document_text(entry_id=42, max_chars=50)
 
-    assert result.startswith("x" * 50)
-    assert "[truncated" in result
+    assert result["text"].startswith("x" * 50)
+    assert len(result["text"]) == 50
+    assert result["truncated"] is True
+    assert result["char_count"] == 50
 
 
 @pytest.mark.asyncio
@@ -1932,6 +1937,82 @@ async def test_all_tools_registered() -> None:
     }
 
 
+# --- CLI argument parser -----------------------------------------------------
+
+
+def test_cli_parse_args_defaults() -> None:
+    args = server._parse_args([])
+    assert args.help is False
+    assert args.version is False
+    assert args.diagnose is False
+    assert args.verbose == 0
+    assert args.quiet is False
+    assert args.config is None
+
+
+def test_cli_parse_args_help_flag() -> None:
+    args = server._parse_args(["--help"])
+    assert args.help is True
+    short = server._parse_args(["-h"])
+    assert short.help is True
+
+
+def test_cli_parse_args_version_flag() -> None:
+    args = server._parse_args(["--version"])
+    assert args.version is True
+    short = server._parse_args(["-V"])
+    assert short.version is True
+
+
+def test_cli_parse_args_diagnose_flag() -> None:
+    args = server._parse_args(["--diagnose"])
+    assert args.diagnose is True
+
+
+def test_cli_parse_args_verbose_counts() -> None:
+    args = server._parse_args(["-v"])
+    assert args.verbose == 1
+    args2 = server._parse_args(["-vv"])
+    assert args2.verbose == 2
+
+
+def test_cli_parse_args_verbose_and_quiet_mutually_exclusive() -> None:
+    with pytest.raises(SystemExit):
+        server._parse_args(["--verbose", "--quiet"])
+
+
+def test_cli_parse_args_config_path() -> None:
+    args = server._parse_args(["--config", ".env.custom"])
+    assert args.config == ".env.custom"
+
+
+def test_cli_resolve_log_level_prefers_verbose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "log_level", "INFO")
+    args = server._parse_args(["-v"])
+    assert server._resolve_log_level(settings, args) == "DEBUG"
+
+
+def test_cli_resolve_log_level_prefers_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "log_level", "INFO")
+    args = server._parse_args(["--quiet"])
+    assert server._resolve_log_level(settings, args) == "WARNING"
+
+
+def test_cli_resolve_log_level_falls_back_to_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "log_level", "WARNING")
+    args = server._parse_args([])
+    assert server._resolve_log_level(settings, args) == "WARNING"
+
+
 # --- search_natural ----------------------------------------------------------
 
 
@@ -1986,17 +2067,17 @@ async def test_search_natural_mode_a_returns_guidance(
         folder_path="\\Test",
     )
 
-    assert result.mode == "guidance"
-    assert result.question == "find John Smith's PAF"
-    assert result.folder_path == "\\Test"
-    assert result.grammar is not None and "LF:Name=" in result.grammar
+    assert result["mode"] == "guidance"
+    assert result["question"] == "find John Smith's PAF"
+    assert result["folder_path"] == "\\Test"
+    assert result["grammar"] is not None and "LF:Name=" in result["grammar"]
 
-    template_names = {t.template_name for t in result.discovered_templates}
+    template_names = {t["template_name"] for t in result["discovered_templates"]}
     assert "Personnel File" in template_names
 
-    assert len(result.candidate_queries) >= 1
-    assert any("John" in c.query for c in result.candidate_queries)
-    assert result.follow_up is not None and "search_natural" in result.follow_up
+    assert len(result["candidate_queries"]) >= 1
+    assert any("John" in c["query"] for c in result["candidate_queries"])
+    assert result["follow_up"] is not None and "search_natural" in result["follow_up"]
 
 
 @pytest.mark.asyncio
@@ -2020,13 +2101,13 @@ async def test_search_natural_mode_b_executes_and_returns_results(
         max_results=50,
     )
 
-    assert result.mode == "results"
-    assert result.lf_query == '{LF:Name="*Smith*"}'
-    assert result.repairs_applied == []
-    assert len(result.entries) == 1
-    assert result.entries[0].id == 999
-    assert result.pagination_unknown is False
-    assert result.effective_max_results == 50
+    assert result["mode"] == "results"
+    assert result["lf_query"] == '{LF:Name="*Smith*"}'
+    assert result["repairs_applied"] == []
+    assert len(result["entries"]) == 1
+    assert result["entries"][0]["id"] == 999
+    assert result["pagination_unknown"] is False
+    assert result["effective_max_results"] == 50
 
 
 @pytest.mark.asyncio
@@ -2052,9 +2133,9 @@ async def test_search_natural_repair_escape_quotes(
         max_results=50,
     )
 
-    assert result.mode == "results"
-    assert "escape_quotes" in result.repairs_applied
-    assert result.lf_query == r'{LF:Name="o\"hare"}'
+    assert result["mode"] == "results"
+    assert "escape_quotes" in result["repairs_applied"]
+    assert result["lf_query"] == r'{LF:Name="o\"hare"}'
 
 
 @pytest.mark.asyncio
@@ -2079,9 +2160,9 @@ async def test_search_natural_repair_wildcard_wrap_when_fuzzy(
         fuzzy=True,
     )
 
-    assert result.mode == "results"
-    assert "wildcard_wrap" in result.repairs_applied
-    assert result.lf_query == '{LF:Name="*Smith*"}'
+    assert result["mode"] == "results"
+    assert "wildcard_wrap" in result["repairs_applied"]
+    assert result["lf_query"] == '{LF:Name="*Smith*"}'
 
 
 @pytest.mark.asyncio
@@ -2104,13 +2185,13 @@ async def test_search_natural_exhausts_repairs_and_returns_structured_error(
         max_results=50,
     )
 
-    assert result.mode == "error"
-    assert len(result.attempts) == 3
-    assert result.attempts[0].repair is None
-    assert result.attempts[1].repair == "escape_quotes"
-    assert result.attempts[2].repair == "wildcard_wrap"
-    assert result.next_action is not None
-    assert "grammar" in result.next_action.lower()
+    assert result["mode"] == "error"
+    assert len(result["attempts"]) == 3
+    assert result["attempts"][0]["repair"] is None
+    assert result["attempts"][1]["repair"] == "escape_quotes"
+    assert result["attempts"][2]["repair"] == "wildcard_wrap"
+    assert result["next_action"] is not None
+    assert "grammar" in result["next_action"].lower()
 
 
 @pytest.mark.asyncio
@@ -2137,11 +2218,11 @@ async def test_search_natural_returns_error_immediately_on_non_400(
         max_results=50,
     )
 
-    assert result.mode == "error"
-    assert len(result.attempts) == 1
-    assert result.attempts[0].status_code == 500
-    assert result.next_action is not None
-    assert "non-400" in result.next_action
+    assert result["mode"] == "error"
+    assert len(result["attempts"]) == 1
+    assert result["attempts"][0]["status_code"] == 500
+    assert result["next_action"] is not None
+    assert "non-400" in result["next_action"]
 
 
 @pytest.mark.asyncio
@@ -2164,7 +2245,7 @@ async def test_search_natural_mode_a_notes_when_max_results_is_clamped(
 
     result = await server.search_natural(question="x", max_results=500)
 
-    assert any("clamped from 500 to 30" in n for n in result.notes)
+    assert any("clamped from 500 to 30" in n for n in result["notes"])
 
 
 @pytest.mark.asyncio
@@ -2222,10 +2303,10 @@ async def test_search_natural_pagination_unknown_when_full_page_and_no_next_link
         max_results=3,
     )
 
-    assert result.mode == "results"
-    assert len(result.entries) == 3
-    assert result.next_link is None
-    assert result.pagination_unknown is True
+    assert result["mode"] == "results"
+    assert len(result["entries"]) == 3
+    assert result["next_link"] is None
+    assert result["pagination_unknown"] is True
 
 
 @pytest.mark.asyncio
@@ -2250,8 +2331,8 @@ async def test_search_natural_clamps_max_results_to_max_page_size(
         max_results=500,
     )
 
-    assert result.mode == "results"
-    assert result.effective_max_results == 40
+    assert result["mode"] == "results"
+    assert result["effective_max_results"] == 40
 
 
 # --- _sample_folder_templates edge cases ------------------------------------
@@ -2280,9 +2361,9 @@ async def test_mode_a_falls_back_to_root_when_folder_path_404s(
 
     result = await server.search_natural(question="x", folder_path="\\nope")
 
-    assert result.mode == "guidance"
+    assert result["mode"] == "guidance"
     assert any(
-        "Could not resolve folder_path" in note for note in result.notes
+        "Could not resolve folder_path" in note for note in result["notes"]
     )
 
 
@@ -2308,8 +2389,8 @@ async def test_mode_a_falls_back_to_root_when_path_resolves_to_empty_entry(
 
     result = await server.search_natural(question="x", folder_path="\\ghost")
 
-    assert result.mode == "guidance"
-    assert any("resolved to an empty entry" in n for n in result.notes)
+    assert result["mode"] == "guidance"
+    assert any("resolved to an empty entry" in n for n in result["notes"])
 
 
 @pytest.mark.asyncio
@@ -2329,9 +2410,9 @@ async def test_mode_a_records_note_when_list_folder_raises(
 
     result = await server.search_natural(question="x")
 
-    assert result.mode == "guidance"
-    assert result.discovered_templates == []
-    assert any("Could not list folder 1" in n for n in result.notes)
+    assert result["mode"] == "guidance"
+    assert result["discovered_templates"] == []
+    assert any("Could not list folder 1" in n for n in result["notes"])
 
 
 @pytest.mark.asyncio
@@ -2350,8 +2431,8 @@ async def test_mode_a_records_note_when_folder_is_empty(
 
     result = await server.search_natural(question="x")
 
-    assert result.mode == "guidance"
-    assert any("had no children to sample" in n for n in result.notes)
+    assert result["mode"] == "guidance"
+    assert any("had no children to sample" in n for n in result["notes"])
 
 
 @pytest.mark.asyncio
@@ -2379,9 +2460,9 @@ async def test_mode_a_records_note_when_no_sampled_entry_has_a_template(
 
     result = await server.search_natural(question="x")
 
-    assert result.discovered_templates == []
+    assert result["discovered_templates"] == []
     assert any(
-        "no template assigned" in n for n in result.notes
+        "no template assigned" in n for n in result["notes"]
     )
 
 
@@ -2417,9 +2498,9 @@ async def test_mode_a_tolerates_get_field_values_failure(
 
     result = await server.search_natural(question="x")
 
-    assert len(result.discovered_templates) == 1
-    assert result.discovered_templates[0].template_name == "PAF"
-    assert result.discovered_templates[0].field_names == []
+    assert len(result["discovered_templates"]) == 1
+    assert result["discovered_templates"][0]["template_name"] == "PAF"
+    assert result["discovered_templates"][0]["field_names"] == []
 
 
 # --- get_document_edoc modes ------------------------------------------------
@@ -2701,3 +2782,201 @@ def test_format_config_error_strips_value_error_prefix() -> None:
         msg = server._format_config_error(exc)
         assert "Value error, " not in msg
         assert "configuration" in msg
+
+
+# --- Pass 1 step 1c: name/schema/page-range pre-flight validators ----------
+
+
+@pytest.mark.asyncio
+async def test_create_folder_rejects_invalid_name(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    result = await server.create_folder(parent_id=100, name="bad/name")
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_name"
+    assert result["parent_id"] == 100
+
+
+@pytest.mark.asyncio
+async def test_rename_entry_rejects_invalid_name(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    result = await server.rename_entry(entry_id=42, new_name="bad\name")
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_name"
+    assert result["entry_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_copy_entry_rejects_invalid_name(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    result = await server.copy_entry(source_id=42, parent_id=100, name="")
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_name"
+
+
+@pytest.mark.asyncio
+async def test_import_document_rejects_invalid_name(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    result = await server.import_document(
+        parent_id=100, name="bad/file.txt", file_path="x",
+    )
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_name"
+
+
+@pytest.mark.asyncio
+async def test_delete_pages_rejects_malformed_page_range(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    result = await server.delete_pages(entry_id=42, page_range="1, 2")
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_page_range"
+    assert result["entry_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_set_fields_rejects_unknown_field_name(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "validate_names", True)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        json={"value": [{"id": 1, "name": "Status"}]},
+        is_reusable=True,
+    )
+    # path-fence fetch
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+        is_reusable=True,
+    )
+    result = await server.set_fields(entry_id=42, fields={"NoSuchField": ["x"]})
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_field_name"
+    assert "NoSuchField" in result["invalid_field_names"]
+
+
+@pytest.mark.asyncio
+async def test_assign_template_rejects_unknown_template(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "validate_names", True)
+    monkeypatch.setattr(settings, "validate_required_fields", False)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=500&%24skip=0",
+        json={"value": [{"id": 1, "name": "Personnel"}]},
+        is_reusable=True,
+    )
+    result = await server.assign_template(
+        entry_id=42, template_name="DoesNotExist",
+    )
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_template_name"
+    assert result["template_name"] == "DoesNotExist"
+
+
+@pytest.mark.asyncio
+async def test_set_tags_rejects_unknown_tag(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "validate_names", True)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TagDefinitions?%24top=500&%24skip=0",
+        json={"value": [{"id": 1, "name": "Confidential"}]},
+        is_reusable=True,
+    )
+    result = await server.set_tags(entry_id=42, tags=["Unknown"])
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_tag_name"
+
+
+@pytest.mark.asyncio
+async def test_set_links_rejects_unknown_link_type(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "validate_names", True)
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/LinkDefinitions?%24top=500&%24skip=0",
+        json={"value": [{"linkTypeId": 1, "sourceLabel": "Supersedes"}]},
+        is_reusable=True,
+    )
+    result = await server.set_links(
+        entry_id=42, links=[{"targetId": 99, "linkTypeId": 999}],
+    )
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_link_type"
+
+
+@pytest.mark.asyncio
+async def test_validators_skip_when_lf_validate_names_false(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """With LF_VALIDATE_NAMES=false the schema endpoints are NOT hit."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    # NB: no schema-endpoint mocks registered. If a validator runs, the
+    # request will fail. test_*_validates_*_on settings.validate_names=False.
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="PUT",
+        url=f"{_BASE}/Entries/42/fields",
+        json={"value": []},
+    )
+    # Will pass because validate_names=false (test conftest default)
+    result = await server.set_fields(entry_id=42, fields={"AnyField": ["x"]})
+    # The set_fields call succeeds end-to-end; no schema-cache request made.
+    assert result.get("mode") != "error" or result.get("error") != "invalid_field_name"

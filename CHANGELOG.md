@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-05-13
+
+### Fixed
+- **Bug 7 — `list_repositories` response normalization.** Some LF builds
+  return a bare JSON array (`[{repoId: "ASTR", ...}, ...]`) for the
+  `/Repositories` endpoint instead of an OData envelope. The client now
+  normalizes to `{"value": [...]}` on both shapes so callers always
+  receive the same key. Test coverage in `test_client.py` exercises both
+  response variants plus the empty-body case.
+- **Bug 8 — Typed-return tools broke the structured error contract at
+  runtime.** Eight tools (`get_entry`, `get_entry_by_path`,
+  `get_field_values`, `list_folder`, `search_entries`, `search_by_name`,
+  `search_natural`, `get_document_text`) were annotated with pydantic
+  model returns; FastMCP's runtime validation rejected the `mode: "error"`
+  dict on the failure path and surfaced a pydantic ValidationError to
+  the client instead of the structured slug. Tool wrappers now return
+  `dict[str, Any]` uniformly — `.model_dump()` on success, structured
+  error dict on failure. Pydantic models stay for internal parsing and
+  validation. The success-path JSON shape is unchanged. The unit tests
+  passed in v1.4.x because they called functions directly, bypassing the
+  FastMCP layer; v1.5 also adds real-server integration coverage that
+  goes through the runtime path.
+
+### Changed
+- `get_document_text` returns `{"entry_id", "text", "char_count",
+  "truncated"}` on success instead of a bare string. Easier for callers
+  to detect truncation programmatically. The previous "[truncated, N
+  chars omitted]" inline marker is gone; check `result["truncated"]`.
+- `get_field_values` returns `{"entry_id", "values": [...]}` on success
+  instead of a bare list. Matches the envelope shape used by other
+  read tools.
+
+### Added — CLI options
+- `--diagnose` — probes the configured server and prints a
+  deployment-fitness report (authentication, every read endpoint,
+  SimpleSearches behavior, write-mode safety guards). Useful for new
+  adopters figuring out what their LF build actually supports without
+  having to start the MCP. Exits 0 on auth success, 1 on auth failure.
+- `--verbose` / `-v` and `--quiet` / `-q` — override `LF_LOG_LEVEL` to
+  DEBUG or WARNING for ad-hoc debugging.
+- `--config PATH` — load environment from a specific `.env` file
+  instead of the default `$CWD/.env` discovery.
+- CLI arg parsing migrated to `argparse` (was hand-rolled). `--help` and
+  `--version` behavior unchanged. New CLI parser tests cover defaults,
+  mutually exclusive verbose/quiet, and log-level resolution.
+
+### Added — Integration tests
+- `tests/test_integration.py` expanded with real-server smoke tests
+  (still gated behind `LF_INTEGRATION_TEST=1`):
+  - Structured-error contract through FastMCP for typed-return tools
+    (closes the test gap that hid Bug 8): `get_entry`,
+    `get_entry_by_path`, `list_folder`, `get_field_values` on a
+    nonexistent ID return a clean `{mode: "error", error: <slug>}` dict.
+  - `list_repositories` envelope-shape verification (closes Bug 7).
+  - Path-fence enforcement: `move_entry` to a denied destination returns
+    `path_not_allowed` before the API call.
+  - `assign_template` required-field validator: opt-in via
+    `LF_INTEGRATION_SANDBOX_PARENT_ID` + optional
+    `LF_INTEGRATION_TEMPLATE_NAME`.
+  - `delete_entry` preview's child-count accuracy regression
+    (page-bound `$count` worked around in v1.4 — verifies the cap+1
+    probe matches `list_folder`'s actual entry count).
+
+### Notes for upgraders
+- The success-path **JSON shape** is identical for every tool except
+  `get_document_text` and `get_field_values` (see Changed above).
+- Python callers importing tool functions directly will see
+  `dict[str, Any]` instead of pydantic models. Pydantic models
+  (`EntryDetail`, `FieldValue`, `SearchResults`, `SearchNaturalResponse`)
+  remain in `laserfiche_mcp.models` for direct use.
+
 ## [1.4.2] - 2026-05-13
 
 ### Fixed

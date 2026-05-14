@@ -17,6 +17,10 @@ _BASE_ENV: dict[str, str] = {
     "LF_PASSWORD": "secret",
     "LF_READ_ONLY": "true",
     "LF_RETRY_ATTEMPTS": "0",
+    # Name pre-flight validators (Pass 1 security) opt-in for tests so
+    # happy-path tests don't need to mock schema endpoints. Tests that
+    # specifically exercise the validators monkeypatch this to True.
+    "LF_VALIDATE_NAMES": "false",
 }
 
 

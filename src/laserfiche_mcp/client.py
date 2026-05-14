@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import time
 import warnings
 from typing import Any
 from urllib.parse import urljoin
@@ -111,6 +112,15 @@ class LaserficheClient:
         self._repository_id = settings.repository_id or ""
         self._api_version = settings.api_version
         self._http: httpx.AsyncClient | None = None
+
+        # Schema-definition caches for client-side pre-flight validation
+        # (Pass 1 security). Each cache stores (value, expiry_monotonic).
+        # TTL is taken from settings.schema_cache_ttl_seconds at lookup
+        # time so the env var can be tuned without recreating the client.
+        self._field_def_cache: tuple[dict[str, Any], float] | None = None
+        self._tag_def_cache: tuple[dict[str, Any], float] | None = None
+        self._template_def_cache: tuple[dict[str, Any], float] | None = None
+        self._link_def_cache: tuple[dict[str, Any], float] | None = None
 
         if not settings.verify_ssl:
             warnings.warn(
@@ -379,10 +389,38 @@ class LaserficheClient:
 
         Unlike other routes this has no per-repository prefix — it lists
         every repository the authenticated user can see.
+
+        Response shape varies across LFRepositoryAPI builds:
+
+        - Some builds return an OData envelope: ``{"value": [{...}, ...]}``
+        - Others return a bare JSON array: ``[{...}, ...]``
+
+        We normalize to the envelope shape so callers always see
+        ``result["value"]`` as the list of repos, regardless of build.
         """
         base = self._base_url if self._base_url.endswith("/") else self._base_url + "/"
         url = urljoin(base, f"{self._api_version.value}/Repositories")
-        return await self._request_json("GET", url)
+        if self._http is None:
+            raise RuntimeError("LaserficheClient must be used as an async context manager.")
+
+        request = self._http.build_request("GET", url)
+        response = await self._send(request)
+        if response.status_code >= 400:
+            try:
+                detail = response.json()
+            except ValueError:
+                detail = response.text
+            raise LaserficheError(
+                f"Laserfiche API error {response.status_code}: {detail}",
+                status_code=response.status_code,
+                detail=detail,
+            )
+        if not response.content:
+            return {"value": []}
+        body = response.json()
+        if isinstance(body, list):
+            return {"value": body}
+        return body
 
     async def list_field_definitions(
         self, *, max_results: int = 100, skip: int = 0,
@@ -441,6 +479,102 @@ class LaserficheClient:
         return await self._request_json(
             "GET", self._repo_path(f"Tasks/{operation_token}"),
         )
+
+    # --- Cached schema-definition lookups (for client-side pre-flight) ----
+    #
+    # Field / tag / template / link definitions are looked up frequently
+    # during write-tool validation (e.g., "is this field name real? is
+    # this tag defined?"). The underlying API endpoints are stable but
+    # not free; caching keeps validation cheap.
+    #
+    # TTL is read from settings.schema_cache_ttl_seconds at every call
+    # so operators can tune the cache window without recreating the
+    # client.
+
+    def _cache_alive(
+        self, entry: tuple[dict[str, Any], float] | None,
+    ) -> dict[str, Any] | None:
+        """Return the cached value if not expired, else None."""
+        if entry is None:
+            return None
+        value, expiry = entry
+        if time.monotonic() >= expiry:
+            return None
+        return value
+
+    async def cached_field_definitions(self) -> dict[str, dict[str, Any]]:
+        """Cached map of field-name → field-definition dict.
+
+        Underlying GET /FieldDefinitions is paged at $top=500 to fetch
+        every field in one round trip on typical repositories. Cache
+        expires after ``Settings.schema_cache_ttl_seconds``.
+        """
+        cached = self._cache_alive(self._field_def_cache)
+        if cached is not None:
+            return cached
+        raw = await self.list_field_definitions(max_results=500, skip=0)
+        result = {
+            (fd.get("name") or ""): fd
+            for fd in (raw.get("value") or [])
+            if fd.get("name")
+        }
+        ttl = self._settings.schema_cache_ttl_seconds
+        self._field_def_cache = (result, time.monotonic() + ttl)
+        return result
+
+    async def cached_tag_definitions(self) -> dict[str, dict[str, Any]]:
+        """Cached map of tag-name → tag-definition dict."""
+        cached = self._cache_alive(self._tag_def_cache)
+        if cached is not None:
+            return cached
+        raw = await self.list_tag_definitions(max_results=500, skip=0)
+        result = {
+            (td.get("name") or ""): td
+            for td in (raw.get("value") or [])
+            if td.get("name")
+        }
+        ttl = self._settings.schema_cache_ttl_seconds
+        self._tag_def_cache = (result, time.monotonic() + ttl)
+        return result
+
+    async def cached_template_definitions(self) -> dict[str, dict[str, Any]]:
+        """Cached map of template-name → template-definition dict."""
+        cached = self._cache_alive(self._template_def_cache)
+        if cached is not None:
+            return cached
+        raw = await self.list_template_definitions(max_results=500, skip=0)
+        result = {
+            (td.get("name") or ""): td
+            for td in (raw.get("value") or [])
+            if td.get("name")
+        }
+        ttl = self._settings.schema_cache_ttl_seconds
+        self._template_def_cache = (result, time.monotonic() + ttl)
+        return result
+
+    async def cached_link_definitions(self) -> dict[int, dict[str, Any]]:
+        """Cached map of linkTypeId → link-definition dict."""
+        cached = self._cache_alive(self._link_def_cache)
+        if cached is not None:
+            return cached
+        raw = await self.list_link_definitions(max_results=500, skip=0)
+        result: dict[int, dict[str, Any]] = {}
+        for ld in raw.get("value") or []:
+            ltid = ld.get("linkTypeId")
+            if isinstance(ltid, int):
+                result[ltid] = ld
+        ttl = self._settings.schema_cache_ttl_seconds
+        self._link_def_cache = (result, time.monotonic() + ttl)
+        return result
+
+    def invalidate_schema_caches(self) -> None:
+        """Drop all cached schema definitions. Useful from tests and
+        for manual cache invalidation when the operator knows the
+        schema has changed."""
+        self._field_def_cache = None
+        self._tag_def_cache = None
+        self._template_def_cache = None
+        self._link_def_cache = None
 
     # --- Tags and links reads (needed by merge helpers) -------------------
 

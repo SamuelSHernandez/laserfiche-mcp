@@ -11,10 +11,12 @@ Design notes:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import base64
 import io
 import logging
+import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -118,7 +120,7 @@ def _clamp_search_page_size(requested: int | None) -> int:
 async def search_entries(
     query: str,
     max_results: int | None = None,
-) -> SearchResults:
+) -> dict[str, Any]:
     """Run a raw Laserfiche search query and return matching entries.
 
     Use when you already know how to express the search in Laserfiche query
@@ -156,9 +158,9 @@ async def search_entries(
             query, max_results=_clamp_max_results(max_results),
         )
     except LaserficheError as exc:
-        return _classify_lf_error("search", exc)  # type: ignore[return-value]
+        return _classify_lf_error("search", exc)
 
-    return SearchResults.from_api(raw)
+    return SearchResults.from_api(raw).model_dump()
 
 
 @mcp.tool()
@@ -166,7 +168,7 @@ async def search_by_name(
     name_pattern: str,
     in_folder_path: str | None = None,
     max_results: int | None = None,
-) -> SearchResults:
+) -> dict[str, Any]:
     """Find entries by file/folder name pattern, optionally scoped to a folder path.
 
     Use when the user is searching by name and the full Laserfiche query
@@ -201,9 +203,9 @@ async def search_by_name(
             query, max_results=_clamp_max_results(max_results),
         )
     except LaserficheError as exc:
-        return _classify_lf_error("search", exc)  # type: ignore[return-value]
+        return _classify_lf_error("search", exc)
 
-    return SearchResults.from_api(raw)
+    return SearchResults.from_api(raw).model_dump()
 
 
 async def _sample_folder_templates(
@@ -303,6 +305,16 @@ def _follow_up_hint(folder_path: str | None, max_results: int) -> str:
     )
 
 
+def _dump_search_natural(**kwargs: Any) -> dict[str, Any]:
+    """Build a SearchNaturalResponse and dump it to a dict.
+
+    The tool wrapper returns a plain dict so FastMCP's runtime validation
+    accepts both success and error shapes uniformly. The model is kept for
+    its construction-time validation and self-documentation.
+    """
+    return SearchNaturalResponse(**kwargs).model_dump()
+
+
 @mcp.tool()
 async def search_natural(
     question: str,
@@ -310,7 +322,7 @@ async def search_natural(
     folder_path: str | None = None,
     max_results: int = 50,
     fuzzy: bool = True,
-) -> SearchNaturalResponse:
+) -> dict[str, Any]:
     """Two-mode search: guidance first, then execution with automatic repair.
 
     Most Laserfiche servers reject malformed query syntax with a generic HTTP
@@ -374,7 +386,7 @@ async def search_natural(
                 f"{effective_max} by LF_MAX_PAGE_SIZE."
             )
         candidates = build_candidate_queries(question, folder_path, templates)
-        return SearchNaturalResponse(
+        return _dump_search_natural(
             mode="guidance",
             question=question,
             folder_path=folder_path,
@@ -409,7 +421,7 @@ async def search_natural(
             )
             if exc.status_code != 400:
                 # Non-400 errors are not in the repair contract — surface immediately.
-                return SearchNaturalResponse(
+                return _dump_search_natural(
                     mode="error",
                     question=question,
                     lf_query=lf_query,
@@ -441,7 +453,7 @@ async def search_natural(
                     continue
 
             # No more repairs available.
-            return SearchNaturalResponse(
+            return _dump_search_natural(
                 mode="error",
                 question=question,
                 lf_query=lf_query,
@@ -463,7 +475,7 @@ async def search_natural(
             results.next_link is None
             and len(results.entries) >= effective_max
         )
-        return SearchNaturalResponse(
+        return _dump_search_natural(
             mode="results",
             question=question,
             lf_query=current_query,
@@ -476,7 +488,7 @@ async def search_natural(
         )
 
     # Loop exhausted without returning — should not happen, but be safe.
-    return SearchNaturalResponse(
+    return _dump_search_natural(
         mode="error",
         question=question,
         lf_query=lf_query,
@@ -491,7 +503,7 @@ async def list_folder(
     folder_id: int,
     max_results: int | None = None,
     skip: int = 0,
-) -> SearchResults:
+) -> dict[str, Any]:
     """List the immediate children (documents and subfolders) of a folder by ID.
 
     Use this for browse-style navigation when the user references a known
@@ -524,13 +536,13 @@ async def list_folder(
             skip=max(0, skip),
         )
     except LaserficheError as exc:
-        return _classify_lf_error("list_folder", exc, extra={"folder_id": folder_id})  # type: ignore[return-value]
+        return _classify_lf_error("list_folder", exc, extra={"folder_id": folder_id})
 
-    return SearchResults.from_api(raw)
+    return SearchResults.from_api(raw).model_dump()
 
 
 @mcp.tool()
-async def get_entry(entry_id: int) -> EntryDetail:
+async def get_entry(entry_id: int) -> dict[str, Any]:
     """Fetch metadata for a single entry by ID.
 
     Use this once you have an entry ID (from search, ``list_folder``, or
@@ -556,12 +568,12 @@ async def get_entry(entry_id: int) -> EntryDetail:
     try:
         raw = await _client().get_entry(entry_id)
     except LaserficheError as exc:
-        return _classify_lf_error("get_entry", exc, entry_id=entry_id)  # type: ignore[return-value]
-    return EntryDetail.from_api(raw)
+        return _classify_lf_error("get_entry", exc, entry_id=entry_id)
+    return EntryDetail.from_api(raw).model_dump()
 
 
 @mcp.tool()
-async def get_entry_by_path(full_path: str) -> EntryDetail:
+async def get_entry_by_path(full_path: str) -> dict[str, Any]:
     """Resolve a backslash-delimited Laserfiche path to its entry.
 
     Use this when the user refers to a location by its name path rather
@@ -589,12 +601,12 @@ async def get_entry_by_path(full_path: str) -> EntryDetail:
     try:
         raw = await _client().get_entry_by_path(full_path)
     except LaserficheError as exc:
-        return _classify_lf_error("get_entry_by_path", exc, extra={"full_path": full_path})  # type: ignore[return-value]
-    return EntryDetail.from_api(raw)
+        return _classify_lf_error("get_entry_by_path", exc, extra={"full_path": full_path})
+    return EntryDetail.from_api(raw).model_dump()
 
 
 @mcp.tool()
-async def get_field_values(entry_id: int) -> list[FieldValue]:
+async def get_field_values(entry_id: int) -> dict[str, Any]:
     """Read the template field values currently on an entry.
 
     Use after you have an entry ID and need the metadata fields the user
@@ -605,12 +617,13 @@ async def get_field_values(entry_id: int) -> list[FieldValue]:
     Args:
         entry_id: Integer entry ID.
 
-    Returns: ``list[FieldValue]`` — one entry per field assigned to the
-    template, with ``field_name``, ``values`` (always a list, even for
-    single-value fields), ``field_type``, ``is_multi_value``, and
-    ``is_required``. Empty / unset fields are typically omitted by the
-    Repository API rather than returned with empty values, so an empty
-    list usually means the entry has no template assigned.
+    Returns: ``{"values": [...]}`` — a list of field-value descriptors
+    under the ``values`` key. Each item has ``field_name``, ``values``
+    (always a list, even for single-value fields), ``field_type``,
+    ``is_multi_value``, and ``is_required``. Empty / unset fields are
+    typically omitted by the Repository API rather than returned with
+    empty values, so an empty list usually means the entry has no
+    template assigned.
 
     On failure: returns ``{"mode": "error", "error": <slug>,
     "entry_id": <int>, ...}``. Common slugs: ``not_found``, ``auth_failed``.
@@ -618,12 +631,15 @@ async def get_field_values(entry_id: int) -> list[FieldValue]:
     try:
         raw = await _client().get_field_values(entry_id)
     except LaserficheError as exc:
-        return _classify_lf_error("get_field_values", exc, entry_id=entry_id)  # type: ignore[return-value]
-    return FieldValue.list_from_api(raw)
+        return _classify_lf_error("get_field_values", exc, entry_id=entry_id)
+    return {
+        "entry_id": entry_id,
+        "values": [fv.model_dump() for fv in FieldValue.list_from_api(raw)],
+    }
 
 
 @mcp.tool()
-async def get_document_text(entry_id: int, max_chars: int = 50_000) -> str:
+async def get_document_text(entry_id: int, max_chars: int = 50_000) -> dict[str, Any]:
     """Download a document's server-extracted text (v2-only).
 
     Use for "summarize this document", "what does this say", or any other
@@ -633,19 +649,19 @@ async def get_document_text(entry_id: int, max_chars: int = 50_000) -> str:
     you get clean text without having to parse a PDF yourself.
 
     **v1 servers do not expose this endpoint.** If your deployment is on
-    v1 (the default), this tool raises immediately at the client layer
-    and returns ``{"mode": "error", "operation": "get_document_text", ...}``.
-    Use ``get_document_edoc(entry_id, mode="text")`` instead — it fetches
-    the raw edoc and extracts text client-side (pypdf for PDFs, direct
-    decode for ``text/*`` MIME types).
+    v1 (the default), this tool returns a structured error at the client
+    layer. Use ``get_document_edoc(entry_id, mode="text")`` instead — it
+    fetches the raw edoc and extracts text client-side (pypdf for PDFs,
+    direct decode for ``text/*`` MIME types).
 
     Args:
         entry_id: Integer entry ID of an electronic document (not a folder).
-        max_chars: Truncate the returned string after this many characters
-            (default 50,000). Truncation appends a ``[truncated, N chars
-            omitted]`` marker so the LLM can tell.
+        max_chars: Truncate the returned text after this many characters
+            (default 50,000). The response's ``truncated`` field signals
+            whether truncation occurred.
 
-    Returns: The extracted text as a string on success, possibly truncated.
+    Returns: ``{"entry_id": <int>, "text": <str>, "char_count": <int>,
+    "truncated": <bool>}`` on success.
 
     On failure: returns ``{"mode": "error", "error": <slug>,
     "entry_id": <int>, ...}``. Common slugs: ``not_found`` (entry is a
@@ -655,12 +671,18 @@ async def get_document_text(entry_id: int, max_chars: int = 50_000) -> str:
     try:
         content = await _client().export_entry(entry_id, part="Text")
     except LaserficheError as exc:
-        return _classify_lf_error("get_document_text", exc, entry_id=entry_id)  # type: ignore[return-value]
+        return _classify_lf_error("get_document_text", exc, entry_id=entry_id)
 
     text = content.decode("utf-8", errors="replace")
-    if len(text) > max_chars:
-        return text[:max_chars] + f"\n\n[truncated, {len(text) - max_chars} chars omitted]"
-    return text
+    truncated = len(text) > max_chars
+    if truncated:
+        text = text[:max_chars]
+    return {
+        "entry_id": entry_id,
+        "text": text,
+        "char_count": len(text),
+        "truncated": truncated,
+    }
 
 
 def _extract_pdf_text(content: bytes, char_limit: int) -> dict[str, Any]:
@@ -1513,6 +1535,9 @@ async def set_fields(
     _, err = await _check_write_for_entry("set_fields", entry_id)
     if err:
         return err
+    name_err = await _validate_field_names("set_fields", entry_id, list(fields.keys()))
+    if name_err is not None:
+        return name_err
     body = _user_fields_to_values(fields)
     try:
         raw = await _client().put_fields(entry_id, body)
@@ -1560,6 +1585,9 @@ async def merge_fields(
     _, err = await _check_write_for_entry("merge_fields", entry_id)
     if err:
         return err
+    name_err = await _validate_field_names("merge_fields", entry_id, list(updates.keys()))
+    if name_err is not None:
+        return name_err
     client = _client()
     try:
         current = await client.get_field_values(entry_id)
@@ -1617,6 +1645,9 @@ async def set_tags(
     _, err = await _check_write_for_entry("set_tags", entry_id)
     if err:
         return err
+    tag_err = await _validate_tag_names("set_tags", entry_id, tags)
+    if tag_err is not None:
+        return tag_err
     try:
         raw = await _client().put_tags(entry_id, tags)
     except LaserficheError as exc:
@@ -1661,6 +1692,11 @@ async def merge_tags(
     _, err = await _check_write_for_entry("merge_tags", entry_id)
     if err:
         return err
+    tag_err = await _validate_tag_names(
+        "merge_tags", entry_id, list((add or []) + (remove or [])),
+    )
+    if tag_err is not None:
+        return tag_err
     client = _client()
     try:
         current = await client.get_tags(entry_id)
@@ -1723,11 +1759,214 @@ async def set_links(
     _, err = await _check_write_for_entry("set_links", entry_id)
     if err:
         return err
+    link_type_ids = [
+        link.get("linkTypeId") for link in links
+        if isinstance(link.get("linkTypeId"), int)
+    ]
+    link_err = await _validate_link_types("set_links", entry_id, link_type_ids)
+    if link_err is not None:
+        return link_err
     try:
         raw = await _client().put_links(entry_id, links)
     except LaserficheError as exc:
         return _classify_lf_error("set_links", exc, entry_id=entry_id)
     return raw
+
+
+def _validate_name(
+    operation: str, name: str, *, extra: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return a mode:error response if ``name`` fails entry-name validation.
+
+    Pure-function check via ``permissions.name_allowed``. Used by every
+    write tool that creates or renames an entry (``create_folder``,
+    ``import_document``, ``copy_entry``, ``rename_entry``,
+    ``move_entry`` when ``new_name`` is set).
+    """
+    ok, reason = permissions.name_allowed(name)
+    if ok:
+        return None
+    out: dict[str, Any] = {
+        "mode": "error",
+        "operation": operation,
+        "error": "invalid_name",
+        "reason": reason,
+        "name": name,
+    }
+    if extra:
+        out.update(extra)
+    return out
+
+
+def _validate_page_range_input(
+    operation: str, entry_id: int, range_str: str,
+) -> dict[str, Any] | None:
+    """Return a mode:error response if ``range_str`` fails the syntax check.
+
+    Distinct from the existing empty-range guard in ``delete_pages``:
+    this catches malformed-but-non-empty inputs like ``"1, 2"``,
+    ``"abc"``, ``"5-3"``, ``"0,1"``.
+    """
+    ok, reason = permissions.validate_page_range(range_str)
+    if ok:
+        return None
+    return {
+        "mode": "error",
+        "operation": operation,
+        "entry_id": entry_id,
+        "error": "invalid_page_range",
+        "reason": reason,
+        "page_range": range_str,
+    }
+
+
+async def _validate_field_names(
+    operation: str,
+    entry_id: int,
+    field_names: list[str],
+) -> dict[str, Any] | None:
+    """Return a mode:error response if any ``field_names`` is not a defined field.
+
+    Uses the cached field-definition lookup on the client. Returns None
+    when every name resolves; returns a structured error listing the
+    unknown names plus a sample of valid names when at least one fails.
+    Falls back to None (let the real PUT run and surface the upstream
+    error) on lookup failure so we don't block writes on a transient
+    cache miss. Skipped when ``LF_VALIDATE_NAMES=false``.
+    """
+    if not _get_settings().validate_names:
+        return None
+    client = _client()
+    try:
+        defs = await client.cached_field_definitions()
+    except Exception:  # noqa: BLE001 — validator is defense-in-depth; fall through
+        return None
+    unknown = [name for name in field_names if name not in defs]
+    if not unknown:
+        return None
+    valid_sample = sorted(defs.keys())[:20]
+    return {
+        "mode": "error",
+        "operation": operation,
+        "entry_id": entry_id,
+        "error": "invalid_field_name",
+        "reason": (
+            f"Field name(s) {unknown!r} are not defined in this repository. "
+            "Call list_field_definitions to see available fields."
+        ),
+        "invalid_field_names": unknown,
+        "valid_field_names_sample": valid_sample,
+    }
+
+
+async def _validate_template_name(
+    operation: str,
+    template_name: str,
+    *,
+    entry_id: int | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return a mode:error response if ``template_name`` is not a defined template.
+
+    Case-sensitive (matches the server's matching behavior on most v1
+    builds). Falls back to None on lookup failure.
+    """
+    if not template_name:
+        return None  # empty/None template_name is a clear-template signal
+    if not _get_settings().validate_names:
+        return None
+    client = _client()
+    try:
+        defs = await client.cached_template_definitions()
+    except Exception:  # noqa: BLE001 — validator is defense-in-depth; fall through
+        return None
+    if template_name in defs:
+        return None
+    out: dict[str, Any] = {
+        "mode": "error",
+        "operation": operation,
+        "error": "invalid_template_name",
+        "reason": (
+            f"Template {template_name!r} is not defined in this repository. "
+            "Call list_template_definitions to see available templates. "
+            "Match is case-sensitive."
+        ),
+        "template_name": template_name,
+        "valid_template_names": sorted(defs.keys()),
+    }
+    if entry_id is not None:
+        out["entry_id"] = entry_id
+    if extra:
+        out.update(extra)
+    return out
+
+
+async def _validate_tag_names(
+    operation: str, entry_id: int, tag_names: list[str],
+) -> dict[str, Any] | None:
+    """Return a mode:error response if any tag in ``tag_names`` is not defined.
+
+    Skips when the list is empty. Falls back to None on lookup failure.
+    Skipped entirely when ``LF_VALIDATE_NAMES=false``.
+    """
+    if not tag_names:
+        return None
+    if not _get_settings().validate_names:
+        return None
+    client = _client()
+    try:
+        defs = await client.cached_tag_definitions()
+    except Exception:  # noqa: BLE001 — validator is defense-in-depth; fall through
+        return None
+    unknown = [name for name in tag_names if name not in defs]
+    if not unknown:
+        return None
+    return {
+        "mode": "error",
+        "operation": operation,
+        "entry_id": entry_id,
+        "error": "invalid_tag_name",
+        "reason": (
+            f"Tag name(s) {unknown!r} are not defined in this repository. "
+            "Call list_tag_definitions to see available tags."
+        ),
+        "invalid_tag_names": unknown,
+        "valid_tag_names": sorted(defs.keys()),
+    }
+
+
+async def _validate_link_types(
+    operation: str, entry_id: int, link_type_ids: list[int],
+) -> dict[str, Any] | None:
+    """Return a mode:error response if any linkTypeId is not a defined link type.
+
+    Falls back to None on lookup failure. Skipped when
+    ``LF_VALIDATE_NAMES=false``.
+    """
+    if not link_type_ids:
+        return None
+    if not _get_settings().validate_names:
+        return None
+    client = _client()
+    try:
+        defs = await client.cached_link_definitions()
+    except Exception:  # noqa: BLE001 — validator is defense-in-depth; fall through
+        return None
+    unknown = [lid for lid in link_type_ids if lid not in defs]
+    if not unknown:
+        return None
+    return {
+        "mode": "error",
+        "operation": operation,
+        "entry_id": entry_id,
+        "error": "invalid_link_type",
+        "reason": (
+            f"linkTypeId(s) {unknown!r} are not defined in this repository. "
+            "Call list_link_definitions to see available link types."
+        ),
+        "invalid_link_type_ids": unknown,
+        "valid_link_type_ids": sorted(defs.keys()),
+    }
 
 
 async def _validate_required_fields(
@@ -1844,6 +2083,17 @@ async def assign_template(
     _, err = await _check_write_for_entry("assign_template", entry_id)
     if err:
         return err
+    template_err = await _validate_template_name(
+        "assign_template", template_name, entry_id=entry_id,
+    )
+    if template_err is not None:
+        return template_err
+    if fields:
+        field_err = await _validate_field_names(
+            "assign_template", entry_id, list(fields.keys()),
+        )
+        if field_err is not None:
+            return field_err
     validation_error = await _validate_required_fields(
         "assign_template", entry_id, fields,
     )
@@ -1935,9 +2185,26 @@ async def create_folder(
     ``auth_failed``.
     """
     _require_writes_enabled()
+    name_err = _validate_name(
+        "create_folder", name, extra={"parent_id": parent_id},
+    )
+    if name_err is not None:
+        return name_err
     _, err = await _check_write_for_parent("create_folder", parent_id)
     if err:
         return err
+    if template_name:
+        template_err = await _validate_template_name(
+            "create_folder", template_name, extra={"parent_id": parent_id, "name": name},
+        )
+        if template_err is not None:
+            return template_err
+    if fields:
+        field_err = await _validate_field_names(
+            "create_folder", parent_id, list(fields.keys()),
+        )
+        if field_err is not None:
+            return field_err
     body_fields = _user_fields_to_values(fields) if fields else None
     try:
         raw = await _client().create_child_entry(
@@ -1995,6 +2262,12 @@ async def copy_entry(
     ``auth_failed``.
     """
     _require_writes_enabled()
+    name_err = _validate_name(
+        "copy_entry", name,
+        extra={"source_id": source_id, "parent_id": parent_id},
+    )
+    if name_err is not None:
+        return name_err
     _, err = await _check_write_for_parent("copy_entry", parent_id)
     if err:
         return err
@@ -2066,9 +2339,31 @@ async def import_document(
     supply), ``auth_failed``.
     """
     _require_writes_enabled()
+    name_err = _validate_name(
+        "import_document", name, extra={"parent_id": parent_id},
+    )
+    if name_err is not None:
+        return name_err
     _, err = await _check_write_for_parent("import_document", parent_id)
     if err:
         return err
+    if template_name:
+        template_err = await _validate_template_name(
+            "import_document", template_name,
+            extra={"parent_id": parent_id, "name": name},
+        )
+        if template_err is not None:
+            return template_err
+    if fields:
+        field_err = await _validate_field_names(
+            "import_document", parent_id, list(fields.keys()),
+        )
+        if field_err is not None:
+            return field_err
+    if tags:
+        tag_err = await _validate_tag_names("import_document", parent_id, tags)
+        if tag_err is not None:
+            return tag_err
     import os
     settings = _get_settings()
 
@@ -2195,6 +2490,11 @@ async def rename_entry(
     ``not_found``, ``auth_failed``.
     """
     _require_writes_enabled()
+    name_err = _validate_name(
+        "rename_entry", new_name, extra={"entry_id": entry_id},
+    )
+    if name_err is not None:
+        return name_err
     entry, fetch_err = await _fetch_entry_for_op("rename_entry", entry_id)
     if fetch_err is not None:
         return fetch_err
@@ -2305,6 +2605,13 @@ async def move_entry(
     ``not_found`` (entry or destination doesn't exist), ``auth_failed``.
     """
     _require_writes_enabled()
+    if new_name is not None:
+        name_err = _validate_name(
+            "move_entry", new_name,
+            extra={"entry_id": entry_id, "new_parent_id": new_parent_id},
+        )
+        if name_err is not None:
+            return name_err
     entry, fetch_err = await _fetch_entry_for_op("move_entry", entry_id)
     if fetch_err is not None:
         return fetch_err
@@ -2755,6 +3062,9 @@ async def delete_pages(
                 "explicit range like '1-9999' if you intended to delete all."
             ),
         }
+    range_err = _validate_page_range_input("delete_pages", entry_id, page_range)
+    if range_err is not None:
+        return range_err
 
     entry, fetch_err = await _fetch_entry_for_op("delete_pages", entry_id)
     if fetch_err is not None:
@@ -2850,9 +3160,19 @@ _HELP_TEXT = """\
 laserfiche-mcp — Model Context Protocol server for Laserfiche.
 
 Usage:
-  laserfiche-mcp            Start the stdio MCP server (requires env config).
-  laserfiche-mcp --help     Show this message.
-  laserfiche-mcp --version  Print version and exit.
+  laserfiche-mcp                Start the stdio MCP server.
+  laserfiche-mcp --diagnose     Probe the configured server and print a
+                                deployment-fitness report (no MCP started).
+  laserfiche-mcp --help         Show this message.
+  laserfiche-mcp --version      Print version and exit.
+
+Options:
+  -v, --verbose                 Increase log verbosity (DEBUG). Repeats are
+                                accepted but have no further effect.
+  -q, --quiet                   Decrease log verbosity (WARNING). Mutually
+                                exclusive with --verbose.
+  --config PATH                 Load environment from a specific .env file
+                                instead of the default $CWD/.env discovery.
 
 Configuration is read from LF_* environment variables (or a .env file in
 the working directory). Required at a minimum:
@@ -2863,7 +3183,8 @@ the working directory). Required at a minimum:
   LF_PASSWORD        Service account password
 
 See https://github.com/SamuelSHernandez/laserfiche-mcp#configure for the
-full list including OAuth, SSL, retry, and logging knobs.
+full list including OAuth, SSL, retry, write-mode safety guards, and
+logging knobs.
 
 This binary is meant to be launched by an MCP client (Claude Desktop,
 Claude Code, MCP Inspector). Running it directly without env config is
@@ -2898,15 +3219,130 @@ def _format_config_error(exc: Exception) -> str:
     return "\n".join(lines)
 
 
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse CLI args. Separated from main() so it's testable in isolation."""
+    parser = argparse.ArgumentParser(
+        prog="laserfiche-mcp",
+        description="Model Context Protocol server for Laserfiche.",
+        add_help=False,  # We render our own --help so the layout matches docs.
+    )
+    parser.add_argument("-h", "--help", action="store_true")
+    parser.add_argument("-V", "--version", action="store_true")
+    parser.add_argument("--diagnose", action="store_true")
+    parser.add_argument("--config", metavar="PATH", default=None)
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument("-v", "--verbose", action="count", default=0)
+    verbosity.add_argument("-q", "--quiet", action="store_true")
+    return parser.parse_args(argv)
+
+
+def _resolve_log_level(settings: Settings, args: argparse.Namespace) -> str:
+    """Settings.log_level is the default; --verbose/--quiet override."""
+    if args.verbose:
+        return "DEBUG"
+    if args.quiet:
+        return "WARNING"
+    return settings.log_level.upper()
+
+
+async def _run_diagnose(settings: Settings) -> int:
+    """Probe the configured server for endpoint availability.
+
+    Prints a deployment-fitness report to stdout and exits with status 0 if
+    auth works (regardless of endpoint variability) or 1 if auth itself
+    fails. Designed for new adopters figuring out what their LF build
+    actually supports.
+    """
+    auth = build_auth_strategy(settings)
+
+    def line(label: str, status: str, detail: str = "") -> None:
+        print(f"  {label:<32} {status}" + (f"  {detail}" if detail else ""))
+
+    print(f"\nlaserfiche-mcp {__version__} — server diagnostic")
+    print(f"  Target: {settings.repo_api_url}{settings.repository_id} "
+          f"(API {settings.api_version.value})")
+    print(f"  Auth:   mode={settings.auth_mode.value}, "
+          f"user={settings.username or '(none)'}")
+    print()
+    print("Endpoint probes:")
+
+    async with LaserficheClient(settings, auth) as client:
+        # Auth probe — implicit via any call. Use list_field_definitions
+        # since it's small and universally present on healthy builds.
+        try:
+            await client.list_field_definitions(max_results=1)
+            line("Authentication", "OK")
+        except LaserficheError as exc:
+            line("Authentication", "FAIL", f"HTTP {exc.status_code}: {exc}")
+            print("\nAuthentication failed. Check LF_USERNAME / LF_PASSWORD "
+                  "and the service account's permissions.")
+            return 1
+
+        # Optional endpoints — failures are informative, not fatal.
+        async def probe(label: str, coro: object) -> None:
+            try:
+                await coro  # type: ignore[misc]
+                line(label, "OK")
+            except LaserficheError as exc:
+                code = exc.status_code or "?"
+                line(label, f"unavailable (HTTP {code})")
+
+        await probe("List repositories", client.list_repositories())
+        await probe("Field definitions", client.list_field_definitions(max_results=1))
+        await probe("Template definitions",
+                    client.list_template_definitions(max_results=1))
+        await probe("Tag definitions", client.list_tag_definitions(max_results=1))
+        await probe("Link definitions", client.list_link_definitions(max_results=1))
+        await probe("Audit reasons", client.get_audit_reasons())
+        await probe("Root folder children",
+                    client.list_folder(1, max_results=1))
+        await probe('SimpleSearches ({LF:Name="*"})',
+                    client.search_entries('{LF:Name="*"}', max_results=1))
+
+    print()
+    print("Write mode:")
+    line("LF_READ_ONLY", str(settings.read_only).lower())
+    if not settings.read_only:
+        line("Write paths allow", settings.write_paths_allow or "(none — writes unfenced)")
+        line("Write paths deny", settings.write_paths_deny or "(none)")
+        line("Write tools allowed",
+             settings.write_tools_allowed or "(all 15 write tools)")
+        line("Delete batch cap", str(settings.delete_folder_max_descendants))
+        line("Audit reason required", str(settings.require_audit_reason).lower())
+        line("Validate required fields",
+             str(settings.validate_required_fields).lower())
+
+    print()
+    print("Done. If anything above failed, see "
+          "https://github.com/SamuelSHernandez/laserfiche-mcp#errors "
+          "for the relevant error slug.")
+    return 0
+
+
 def main() -> None:
     """Console-script entrypoint registered in pyproject.toml."""
-    argv = sys.argv[1:]
-    if any(a in ("-h", "--help") for a in argv):
+    args = _parse_args(sys.argv[1:])
+
+    if args.help:
         print(_HELP_TEXT)
         return
-    if any(a in ("-V", "--version") for a in argv):
+    if args.version:
         print(f"laserfiche-mcp {__version__}")
         return
+
+    if args.config is not None:
+        # Populate the process environment from the named .env file so
+        # pydantic-settings picks it up when Settings() is instantiated.
+        # `override=False` lets existing env vars win over .env values —
+        # matching the standard pydantic-settings precedence.
+        if not os.path.isfile(args.config):
+            print(
+                f"laserfiche-mcp: --config file not found: {args.config}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        from dotenv import load_dotenv  # type: ignore[import-not-found]
+        load_dotenv(args.config, override=False)
 
     try:
         settings = _get_settings()
@@ -2918,7 +3354,13 @@ def main() -> None:
         print(f"laserfiche-mcp: {exc}", file=sys.stderr)
         sys.exit(2)
 
-    logging.basicConfig(level=settings.log_level.upper())
+    log_level = _resolve_log_level(settings, args)
+    logging.basicConfig(level=log_level)
+
+    if args.diagnose:
+        exit_code = asyncio.run(_run_diagnose(settings))
+        sys.exit(exit_code)
+
     _register_write_tools()
     logger.info(
         "Starting laserfiche-mcp (read_only=%s, %d write tools registered).",

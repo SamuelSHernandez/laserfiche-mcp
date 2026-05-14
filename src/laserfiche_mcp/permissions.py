@@ -1,4 +1,5 @@
-"""Configuration-driven write guards: path scope fences and tool allowlists.
+"""Configuration-driven write guards: path scope fences, name validation,
+and tool allowlists.
 
 These are pure functions kept separate from the server module so they can
 be unit-tested without spinning up a FastMCP instance.
@@ -10,15 +11,41 @@ Path matching rules:
     * Prefix-based — ``"\\\\Imports"`` matches ``"\\\\Imports\\\\2024\\\\foo"``
       but not ``"\\\\ImportsArchive"`` (the next character after the prefix
       must be a backslash or end-of-string).
+    * ``..`` segments are rejected unconditionally (defense-in-depth
+      against path-traversal). Server-side ACL is the real fence, but
+      we don't pretend a path containing ``..`` is meaningful.
     * Deny wins over allow. If a path matches any deny prefix, it's
       refused regardless of allow matches.
+
+Name validation rules (entry names — folders, documents, etc.):
+    * No backslashes or forward slashes (would be misread as path segments).
+    * No NULL bytes or control characters (Laserfiche stores names as
+      UTF-16 strings; control chars are rejected server-side anyway).
+    * Length 1–128 after stripping leading/trailing whitespace.
+
+Page range syntax (for delete_pages):
+    * Comma-separated list of single page numbers or hyphenated ranges:
+      ``"1"``, ``"1,2,3"``, ``"1-3"``, ``"1-3,5,7-9"``.
+    * No spaces, no negative numbers, no zero.
 """
 
 from __future__ import annotations
 
+import re
+
+_PAGE_RANGE_RE = re.compile(r"^[1-9]\d*(-[1-9]\d*)?(,[1-9]\d*(-[1-9]\d*)?)*$")
+
+_NAME_MAX_LENGTH = 128
+
 
 def _normalize(p: str) -> str:
     return p.replace("/", "\\").lower().rstrip("\\")
+
+
+def _has_traversal_segment(path: str) -> bool:
+    """True if any segment of ``path`` is exactly ``..`` after normalization."""
+    normalized = path.replace("/", "\\")
+    return any(seg == ".." for seg in normalized.split("\\"))
 
 
 def _parse_csv(raw: str | None) -> list[str]:
@@ -65,6 +92,13 @@ def path_allowed(
     if path is None:
         return True, None
 
+    if _has_traversal_segment(path):
+        return False, (
+            f"Path {path!r} contains a '..' traversal segment. Paths with "
+            "'..' are rejected unconditionally; use the entry's fully "
+            "qualified path instead."
+        )
+
     deny = _parse_csv(deny_csv)
     for d in deny:
         if _matches_prefix(path, d):
@@ -100,6 +134,88 @@ def tool_allowed(
             f"Tool {tool_name!r} is not in the configured allowlist "
             f"(LF_WRITE_TOOLS_ALLOWED={allowed})."
         )
+    return True, None
+
+
+def name_allowed(name: str) -> tuple[bool, str | None]:
+    """Validate an entry name for use in create/rename/move/import operations.
+
+    Returns ``(ok, reason)``. ``reason`` is None on success.
+
+    Rules:
+        * Stripped length must be 1–128.
+        * No backslash, forward slash, or NULL byte.
+        * No ASCII control characters (anything below U+0020).
+    """
+    if not isinstance(name, str):
+        return False, "Entry name must be a string."
+
+    stripped = name.strip()
+    if not stripped:
+        return False, "Entry name cannot be empty or whitespace-only."
+    if len(stripped) > _NAME_MAX_LENGTH:
+        return False, (
+            f"Entry name length {len(stripped)} exceeds the maximum "
+            f"of {_NAME_MAX_LENGTH} characters."
+        )
+
+    for forbidden in ("\\", "/", "\x00"):
+        if forbidden in stripped:
+            display = repr(forbidden)
+            return False, (
+                f"Entry name contains {display}, which is not allowed. "
+                "Names cannot contain backslashes, forward slashes, or "
+                "NULL bytes."
+            )
+
+    for ch in stripped:
+        if ord(ch) < 0x20:
+            return False, (
+                f"Entry name contains a control character (U+{ord(ch):04X}). "
+                "Control characters are rejected."
+            )
+
+    return True, None
+
+
+def validate_page_range(range_str: str) -> tuple[bool, str | None]:
+    """Validate a page-range expression for delete_pages.
+
+    Returns ``(ok, reason)``. ``reason`` is None on success.
+
+    Accepted syntax: ``"1"``, ``"1,2,3"``, ``"1-3"``, ``"1-3,5,7-9"``.
+    No spaces, no leading zeros, no negative numbers, no zero, no
+    trailing comma. Empty input is also rejected (caller usually
+    catches this earlier with a dedicated error slug).
+    """
+    if not isinstance(range_str, str):
+        return False, "page_range must be a string."
+
+    if not range_str or not range_str.strip():
+        return False, "page_range cannot be empty or whitespace-only."
+
+    stripped = range_str.strip()
+    if " " in stripped:
+        return False, "page_range cannot contain spaces."
+
+    if not _PAGE_RANGE_RE.match(stripped):
+        return False, (
+            f"page_range {range_str!r} is not valid. Use single pages "
+            "or hyphenated ranges separated by commas, e.g. "
+            "'1', '1,2,3', '1-3', '1-3,5,7-9'. No spaces, leading "
+            "zeros, or zero/negative numbers."
+        )
+
+    # Reject ranges where start > end (regex allows the syntax but it's nonsensical).
+    for part in stripped.split(","):
+        if "-" in part:
+            start_str, end_str = part.split("-", 1)
+            if int(start_str) > int(end_str):
+                return False, (
+                    f"page_range part {part!r} has start > end. Ranges "
+                    "must be ascending."
+                )
+
     return True, None
 
 

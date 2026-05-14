@@ -145,6 +145,24 @@ class Settings(BaseSettings):
         "before the API call. Disable on builds where the extra reads are "
         "wasted (e.g. repositories with no required fields).",
     )
+    schema_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=0,
+        description="Cache window for schema-definition lookups "
+        "(field/tag/template/link definitions) used by client-side "
+        "pre-flight validation. 0 disables caching (lookups hit the "
+        "server on every call). On schemas that change frequently, "
+        "lower this; on stable schemas, raise it.",
+    )
+    validate_names: bool = Field(
+        default=True,
+        description="When true, write tools pre-flight tag / template / "
+        "field / link-type names against the repository's cached schema "
+        "definitions before the API call, returning structured "
+        "invalid_*_name errors instead of letting the server reject "
+        "with an opaque 400. Disable on repos with high schema churn "
+        "or to skip the extra reads.",
+    )
     max_results_default: int = Field(
         default=25,
         ge=1, le=500,
