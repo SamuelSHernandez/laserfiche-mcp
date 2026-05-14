@@ -3137,3 +3137,56 @@ async def test_list_link_definitions_summary_only(
     result = await server.list_link_definitions(summary_only=True)
     assert result["count"] == 2
     # The link definition has sourceLabel, not name — empty names list is acceptable.
+
+
+# --- v2.0 error model: kind + subkind + request_id + upstream_trace_id -------
+
+
+def test_classify_lf_error_includes_canonical_kind() -> None:
+    r = server._classify_lf_error("get_entry", _err(404))
+    assert r["kind"] == "not_found"
+    assert r["error"] == "not_found"  # subkind
+
+
+def test_classify_lf_error_includes_request_id() -> None:
+    import uuid as _uuid
+    r = server._classify_lf_error("get_entry", _err(404))
+    # Validate it's a parseable UUID4 string
+    parsed = _uuid.UUID(r["request_id"])
+    assert parsed.version == 4
+
+
+def test_classify_lf_error_surfaces_upstream_trace_id() -> None:
+    exc = _err(400, {
+        "errorCode": 216, "title": "Bad request",
+        "traceId": "00-92647f26a3ce0eefba0bb9b5b8b7997c-86f93f712586c4d7-00",
+    })
+    r = server._classify_lf_error("get_entry", exc)
+    assert r["upstream_trace_id"] == "00-92647f26a3ce0eefba0bb9b5b8b7997c-86f93f712586c4d7-00"
+
+
+def test_classify_lf_error_trace_id_null_when_absent() -> None:
+    r = server._classify_lf_error("get_entry", _err(404))
+    assert r["upstream_trace_id"] is None
+
+
+def test_kind_for_subkind_maps_all_invalid_input_slugs() -> None:
+    """Spot-check the subkind→kind mapping."""
+    invalid_input_subkinds = [
+        "required_field_missing", "missing_required_fields",
+        "invalid_confirmation_token", "exceeds_batch_cap",
+        "audit_reason_required", "invalid_page_range",
+        "invalid_name", "invalid_field_name", "invalid_template_name",
+        "invalid_tag_name", "invalid_link_type",
+    ]
+    for sub in invalid_input_subkinds:
+        assert server.kind_for_subkind(sub) == "invalid_input", sub
+
+
+def test_kind_for_subkind_permission_denied_slugs() -> None:
+    for sub in ("auth_failed", "path_not_allowed", "tool_not_allowed"):
+        assert server.kind_for_subkind(sub) == "permission_denied", sub
+
+
+def test_kind_for_subkind_unknown_falls_back_to_upstream_unavailable() -> None:
+    assert server.kind_for_subkind("not_a_real_subkind") == "upstream_unavailable"

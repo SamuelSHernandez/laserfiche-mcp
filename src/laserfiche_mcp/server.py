@@ -1382,6 +1382,50 @@ def _lf_error_detail(exc: LaserficheError) -> dict[str, Any]:
     return {}
 
 
+# v2.0: subkind → kind mapping. The five canonical ToolErrorKind values
+# per PLAN_ERRORS.md section 2a. Subkinds preserve the actionable signal
+# of the 14+ slug taxonomy; kind lets agents branch on category.
+_SUBKIND_TO_KIND: dict[str, str] = {
+    # permission_denied
+    "auth_failed": "permission_denied",
+    "path_not_allowed": "permission_denied",
+    "path_traversal_blocked": "permission_denied",
+    "tool_not_allowed": "permission_denied",
+    # not_found
+    "not_found": "not_found",
+    # rate_limited
+    "rate_limited": "rate_limited",
+    # invalid_input
+    "required_field_missing": "invalid_input",
+    "missing_required_fields": "invalid_input",
+    "invalid_confirmation_token": "invalid_input",
+    "exceeds_batch_cap": "invalid_input",
+    "audit_reason_required": "invalid_input",
+    "page_range_required": "invalid_input",
+    "invalid_page_range": "invalid_input",
+    "invalid_name": "invalid_input",
+    "invalid_field_name": "invalid_input",
+    "invalid_field_value": "invalid_input",
+    "invalid_template_name": "invalid_input",
+    "invalid_tag_name": "invalid_input",
+    "invalid_link_type": "invalid_input",
+    "unsupported_media_type": "invalid_input",
+    "file_not_found": "invalid_input",
+    "size_exceeds_cap": "invalid_input",
+    "expected_folder_got_document": "invalid_input",
+    "bad_query_syntax": "invalid_input",
+    # upstream_unavailable
+    "server_error": "upstream_unavailable",
+    "method_not_allowed": "upstream_unavailable",
+    "endpoint_disabled": "upstream_unavailable",
+}
+
+
+def kind_for_subkind(subkind: str) -> str:
+    """Return the canonical ToolErrorKind for a subkind. v2.0 public helper."""
+    return _SUBKIND_TO_KIND.get(subkind, "upstream_unavailable")
+
+
 def _classify_lf_error(
     operation: str,
     exc: LaserficheError,
@@ -1391,18 +1435,28 @@ def _classify_lf_error(
 ) -> dict[str, Any]:
     """Convert a LaserficheError into a structured `mode: error` response.
 
-    Outputs a stable shape:
-        {mode, operation, error: <slug>, status_code,
-         server_error_code, server_message, reason, [entry_id]}
+    v2.0 output shape (additive over v1.5):
+        {mode, operation, kind: <canonical 5>, error: <subkind>,
+         status_code, server_error_code, server_message, reason,
+         request_id, upstream_trace_id, [entry_id], ...extra}
 
-    The slug is short and machine-readable so LLM callers can branch on
-    it (`auth_failed`, `required_field_missing`, `not_found`, ...). The
-    reason is a human-readable hint that includes the LF code/message
-    when present.
+    ``kind`` is one of the 5 canonical kinds (``not_found``,
+    ``permission_denied``, ``rate_limited``, ``invalid_input``,
+    ``upstream_unavailable``). ``error`` is the more-specific subkind.
+    LLMs can branch on either granularity. v1.5 callers that branched
+    on ``error`` continue to work.
+
+    ``upstream_trace_id`` is the Laserfiche server's W3C trace ID from
+    the ProblemDetails response — operators use it to find the
+    matching upstream log line. ``request_id`` is a UUID4 unique to
+    this tool call, pivoting into the MCP's own logs.
     """
+    import uuid as _uuid
+
     detail = _lf_error_detail(exc)
     error_code = detail.get("errorCode")
     title = detail.get("title") or detail.get("message")
+    trace_id = detail.get("traceId")
     status = exc.status_code
 
     if error_code in (_LF_ERROR_CODE_AUTH_INVALID, _LF_ERROR_CODE_LFDS_UNREACHABLE):
@@ -1455,11 +1509,14 @@ def _classify_lf_error(
     out: dict[str, Any] = {
         "mode": "error",
         "operation": operation,
+        "kind": kind_for_subkind(slug),
         "error": slug,
         "status_code": status,
         "server_error_code": error_code,
         "server_message": title,
         "reason": reason,
+        "request_id": str(_uuid.uuid4()),
+        "upstream_trace_id": trace_id,
     }
     if entry_id is not None:
         out["entry_id"] = entry_id
