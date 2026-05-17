@@ -75,7 +75,7 @@ def repair_escape_quotes(query: str) -> str | None:
         if not in_value:
             out.append(c)
             # Entering a value span: ="
-            if c == '=' and i + 1 < n and query[i + 1] == '"':
+            if c == "=" and i + 1 < n and query[i + 1] == '"':
                 out.append('"')
                 i += 2
                 in_value = True
@@ -84,7 +84,7 @@ def repair_escape_quotes(query: str) -> str | None:
             continue
 
         # in_value
-        if c == '\\' and i + 1 < n:
+        if c == "\\" and i + 1 < n:
             # Already-escaped char — pass through untouched.
             out.append(c)
             out.append(query[i + 1])
@@ -94,9 +94,9 @@ def repair_escape_quotes(query: str) -> str | None:
         if c == '"':
             # Could be the closing quote or an internal quote.
             j = i + 1
-            while j < n and query[j] == ' ':
+            while j < n and query[j] == " ":
                 j += 1
-            if j == n or query[j] in '}&|':
+            if j == n or query[j] in "}&|":
                 out.append('"')
                 in_value = False
                 i += 1
@@ -110,7 +110,7 @@ def repair_escape_quotes(query: str) -> str | None:
         out.append(c)
         i += 1
 
-    return ''.join(out) if changed else None
+    return "".join(out) if changed else None
 
 
 def repair_wildcard_name(query: str) -> str | None:
@@ -125,7 +125,7 @@ def repair_wildcard_name(query: str) -> str | None:
     def _wrap(match: re.Match[str]) -> str:
         nonlocal changed
         value = match.group(1)
-        if '*' in value or '?' in value or not value:
+        if "*" in value or "?" in value or not value:
             return match.group(0)
         changed = True
         return f'{{LF:Name="*{value}*"}}'
@@ -138,8 +138,26 @@ _KEYWORD_RE = re.compile(r"\b([A-Z][\w'-]{1,}|[A-Z]{2,})\b")
 # Common English connector words that look like proper nouns but aren't useful
 # as Name= keywords.
 _KEYWORD_STOP = {
-    "The", "A", "An", "And", "Or", "Of", "For", "To", "From", "By", "With",
-    "Find", "Show", "Get", "Where", "What", "When", "Which", "Who", "Whose",
+    "The",
+    "A",
+    "An",
+    "And",
+    "Or",
+    "Of",
+    "For",
+    "To",
+    "From",
+    "By",
+    "With",
+    "Find",
+    "Show",
+    "Get",
+    "Where",
+    "What",
+    "When",
+    "Which",
+    "Who",
+    "Whose",
 }
 
 
@@ -178,11 +196,7 @@ def build_candidate_queries(
     """
     candidates: list[CandidateQuery] = []
     keywords = extract_keywords(question)
-    path_clause = (
-        f' & {{LF:LookIn="{folder_path}"}}'
-        if folder_path
-        else ''
-    )
+    path_clause = f' & {{LF:LookIn="{folder_path}"}}' if folder_path else ""
 
     # Candidate 1: fuzzy name match on the first keyword.
     if keywords:
@@ -192,7 +206,7 @@ def build_candidate_queries(
                 query=f'{{LF:Name="*{first}*"}}{path_clause}',
                 rationale=(
                     f'Wildcard name match on "{first}" '
-                    + ('scoped to folder.' if folder_path else 'across the repository.')
+                    + ("scoped to folder." if folder_path else "across the repository.")
                 ),
             )
         )
@@ -202,13 +216,10 @@ def build_candidate_queries(
         first, second = keywords[0], keywords[1]
         candidates.append(
             CandidateQuery(
-                query=(
-                    f'{{LF:Name="*{first}*"}} & {{LF:Name="*{second}*"}}'
-                    f'{path_clause}'
-                ),
+                query=(f'{{LF:Name="*{first}*"}} & {{LF:Name="*{second}*"}}{path_clause}'),
                 rationale=(
                     f'Both "{first}" and "{second}" must appear in the name. '
-                    'Tighter than a single-keyword match.'
+                    "Tighter than a single-keyword match."
                 ),
             )
         )
@@ -218,24 +229,24 @@ def build_candidate_queries(
         template = templates[0]
         # Prefer a field that sounds name-ish; otherwise first field.
         name_like_fields = [
-            f for f in template.field_names
+            f
+            for f in template.field_names
             if any(tok in f.lower() for tok in ("name", "person", "last", "first"))
         ]
-        field = name_like_fields[0] if name_like_fields else (
-            template.field_names[0] if template.field_names else None
+        field = (
+            name_like_fields[0]
+            if name_like_fields
+            else (template.field_names[0] if template.field_names else None)
         )
         if field:
             first = keywords[0]
             candidates.append(
                 CandidateQuery(
-                    query=(
-                        f'{{[{template.template_name}]:[{field}]="*{first}*"}}'
-                        f'{path_clause}'
-                    ),
+                    query=(f'{{[{template.template_name}]:[{field}]="*{first}*"}}{path_clause}'),
                     rationale=(
                         f'Match against the "{field}" field on the '
                         f'"{template.template_name}" template — sampled '
-                        f'from {folder_path or "the repository root"}.'
+                        f"from {folder_path or 'the repository root'}."
                     ),
                 )
             )
@@ -246,9 +257,9 @@ def build_candidate_queries(
             CandidateQuery(
                 query=f'{{LF:Name="*"}}{path_clause}',
                 rationale=(
-                    'No keywords were extractable from the question; this '
-                    'matches everything '
-                    + (f'under {folder_path}.' if folder_path else 'in the repository.')
+                    "No keywords were extractable from the question; this "
+                    "matches everything "
+                    + (f"under {folder_path}." if folder_path else "in the repository.")
                 ),
             )
         )
