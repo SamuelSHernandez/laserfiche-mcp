@@ -6,8 +6,10 @@ Only the latest minor release receives security fixes.
 
 | Version  | Supported          |
 | -------- | ------------------ |
-| 0.2.x    | :white_check_mark: |
-| < 0.2    | :x: (yanked from PyPI) |
+| 2.0.x    | :white_check_mark: |
+| 1.5.x    | :x: (superseded by 2.0; upgrade for the v2 error envelope and the cached name pre-flight) |
+| < 1.5    | :x:                |
+| 0.1.x    | :x: (yanked from PyPI) |
 
 ## Reporting a vulnerability
 

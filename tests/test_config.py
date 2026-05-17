@@ -25,9 +25,7 @@ def test_api_version_defaults_to_v1(
     assert settings.api_version is ApiVersion.V1
 
 
-def test_api_version_v2_parsed(
-    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_api_version_v2_parsed(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LF_API_VERSION", "v2")
     settings = Settings()  # type: ignore[call-arg]
     assert settings.api_version is ApiVersion.V2
@@ -74,25 +72,19 @@ def test_oauth_succeeds_with_full_config(
     assert settings.client_id == "client-abc"
 
 
-def test_api_key_mode_rejected(
-    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_api_key_mode_rejected(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LF_AUTH_MODE", "api_key")
     with pytest.raises(NotImplementedError, match="api_key"):
         Settings()  # type: ignore[call-arg]
 
 
-def test_cloud_mode_rejected(
-    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cloud_mode_rejected(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LF_DEPLOYMENT_MODE", "cloud")
     with pytest.raises(NotImplementedError, match="Cloud"):
         Settings()  # type: ignore[call-arg]
 
 
-def test_invalid_log_level(
-    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_invalid_log_level(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LF_LOG_LEVEL", "VERBOSE")
     with pytest.raises(ValueError, match="LF_LOG_LEVEL"):
         Settings()  # type: ignore[call-arg]
@@ -107,9 +99,7 @@ def test_max_results_default_must_not_exceed_ceiling(
         Settings()  # type: ignore[call-arg]
 
 
-def test_invalid_url_raises(
-    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_invalid_url_raises(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LF_REPO_API_URL", "not-a-url")
     with pytest.raises(ValueError):
         Settings()  # type: ignore[call-arg]

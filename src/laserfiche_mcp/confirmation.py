@@ -48,9 +48,7 @@ def _entry_name_hash(entry_name: str) -> str:
 
 
 def _sign(payload: str) -> str:
-    return hmac.new(
-        _SERVER_SECRET, payload.encode("ascii"), hashlib.sha256
-    ).hexdigest()[:32]
+    return hmac.new(_SERVER_SECRET, payload.encode("ascii"), hashlib.sha256).hexdigest()[:32]
 
 
 def create_token(
@@ -111,13 +109,9 @@ def verify_token(
         )
 
     if tok_op != operation:
-        return False, (
-            f"Token was issued for operation {tok_op!r}, not {operation!r}."
-        )
+        return False, (f"Token was issued for operation {tok_op!r}, not {operation!r}.")
     if tok_id != entry_id:
-        return False, (
-            f"Token was issued for entry {tok_id}, not {entry_id}."
-        )
+        return False, (f"Token was issued for entry {tok_id}, not {entry_id}.")
     if tok_name_hash != _entry_name_hash(entry_name):
         return False, (
             "Entry name no longer matches the token's binding — the entry "

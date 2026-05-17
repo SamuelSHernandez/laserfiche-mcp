@@ -135,10 +135,7 @@ async def test_integration_edoc_info_against_known_pdf(
 ) -> None:
     entry_id = _pdf_entry_id()
     if entry_id is None:
-        pytest.skip(
-            "Set LF_INTEGRATION_PDF_ENTRY_ID to a known PDF entry to run "
-            "this test."
-        )
+        pytest.skip("Set LF_INTEGRATION_PDF_ENTRY_ID to a known PDF entry to run this test.")
 
     result = await server.get_document_edoc(entry_id=entry_id, mode="info")
 
@@ -160,10 +157,7 @@ async def test_integration_edoc_text_against_known_pdf(
     """
     entry_id = _pdf_entry_id()
     if entry_id is None:
-        pytest.skip(
-            "Set LF_INTEGRATION_PDF_ENTRY_ID to a known PDF entry to run "
-            "this test."
-        )
+        pytest.skip("Set LF_INTEGRATION_PDF_ENTRY_ID to a known PDF entry to run this test.")
 
     result = await server.get_document_edoc(entry_id=entry_id, mode="text")
 
@@ -344,14 +338,14 @@ async def test_integration_assign_template_validator_blocks_when_required_field_
     # Probe required-field set; if there are none, the validator can't trigger.
     defs = await server.list_field_definitions(max_results=500)
     required = [
-        f for f in defs.get("value", [])
-        if f.get("isRequired") and (f.get("name") or "").strip()
+        f for f in defs.get("value", []) if f.get("isRequired") and (f.get("name") or "").strip()
     ]
     if not required:
         pytest.skip("No repo-required fields configured; validator can't trigger.")
 
     result = await server.assign_template(
-        entry_id=sandbox_id, template_name=template_name,
+        entry_id=sandbox_id,
+        template_name=template_name,
     )
     assert isinstance(result, dict)
     # Either the validator catches it (preferred), or the server does and we

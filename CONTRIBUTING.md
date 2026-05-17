@@ -26,14 +26,23 @@ pull request.
 
 ## Where help is most welcome
 
-- **Endpoint corrections** for older Repository API Server versions (v0.2
-  targets V2; older V1 paths sometimes differ).
+- **Endpoint corrections** for Repository API Server builds the v1 / v2
+  wire format hasn't been validated against. The current wire format is
+  exercised against a live v1 server; v2-build divergences are still
+  possible.
 - **Laserfiche Cloud client** — needs the JWT-signed `client_credentials`
-  assertion flow that `signin.laserfiche.com` requires.
-- **Write tools** (`update_field_values`, `move_entry`, rename) gated
-  behind `LF_READ_ONLY=false`.
-- **Async-search support** for result sets larger than the SimpleSearches
-  endpoint can return synchronously.
+  assertion flow that `signin.laserfiche.com` requires, plus the
+  `api.laserfiche.com` v2-only endpoint surface.
+- **v2.x follow-ups** deferred from the v2.0 audit (see
+  [`docs/internal/TODO.md`](docs/internal/TODO.md)): write-tool collapses
+  (`field_update(mode)`, `tag_update(add, remove)`, ...), preview/execute
+  splits of the 5 destructive tools, structured JSON logging
+  (`LF_LOG_FORMAT=json`) with a `redact()` helper, and parameter-
+  description polish so docs flow into the JSON schema the LLM sees.
+- **Server-side audit logging** for write-mode deployments (sidecar
+  file + rotation).
+- **Async-search support** for result sets larger than the
+  SimpleSearches endpoint can return synchronously.
 
 ## PR expectations
 
@@ -43,7 +52,10 @@ pull request.
   adding endpoints: each model has a `from_api(raw)` classmethod that
   tolerates camelCase + PascalCase keys via the `_pick` helper.
 - Tool descriptions read like prompts — see existing tools in
-  [`server.py`](src/laserfiche_mcp/server.py) for the tone.
+  [`src/laserfiche_mcp/tools/`](src/laserfiche_mcp/tools/) (e.g.
+  [`reads.py`](src/laserfiche_mcp/tools/reads.py),
+  [`documents.py`](src/laserfiche_mcp/tools/documents.py)) for the tone.
+  Each tool docstring should have Args, Returns, and On failure sections.
 - Update [`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]`.
 
 ## Commit messages

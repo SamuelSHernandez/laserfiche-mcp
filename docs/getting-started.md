@@ -31,9 +31,12 @@ Four things, and not much else.
 - **Python 3.10 or newer.** The server is published on PyPI. If you already
   have [`uv`](https://github.com/astral-sh/uv) installed, that's all you need
   — `uvx` will fetch and run the server without a global install.
-- **A reachable Laserfiche Repository API Server endpoint.** Self-hosted only
-  in v1 — URLs shaped like `https://lf.example.com/LFRepositoryAPI`.
-  Laserfiche Cloud is on the v2 roadmap, not yet supported.
+- **A reachable Laserfiche Repository API Server endpoint.** Self-hosted
+  only — URLs shaped like `https://lf.example.com/LFRepositoryAPI`. Both
+  the v1 and v2 routing surfaces are supported (set `LF_API_VERSION`
+  accordingly; defaults to `v1`, which is what most current on-prem
+  installations expose). Laserfiche Cloud is still on the roadmap, not
+  yet supported.
 - **A service account with read access to the repository.** Username +
   password is the default auth path; OAuth via Laserfiche Directory Server
   (LFDS) is supported if your environment is set up for it.
@@ -74,14 +77,16 @@ LF_PASSWORD=replace-me
 ```
 
 `LF_REPO_API_URL` is the base URL of your Repository API Server with no
-trailing path — the server appends `/v2/{repository}/...` on each call.
+trailing path — the server appends `/{api_version}/{repository}/...` on
+each call, picking `v1` or `v2` based on `LF_API_VERSION`.
 `LF_REPOSITORY_ID` is the repository name or ID, matching what you'd type
 into the Web Access client login dropdown.
 
-The auth flow itself: the server exchanges your username and password for a
-bearer token at `/v2/{repository_id}/Token` on the first call, then reuses
-the token for subsequent requests in the same session. No client-side state
-to manage.
+The auth flow itself: the server exchanges your username and password for
+a bearer token at `/{api_version}/Repositories/{repository_id}/Token` on
+the first call, then reuses the token for subsequent requests in the same
+session. The same flow works on both v1 and v2. No client-side state to
+manage.
 
 If your environment uses LFDS OAuth instead of the password grant, set
 `LF_AUTH_MODE=oauth` and provide `LF_OAUTH_TOKEN_URL`, `LF_CLIENT_ID`, and
@@ -128,9 +133,13 @@ Save the file and quit Claude Desktop fully (Cmd-Q, not just closing the
 window). When you reopen it, the server is registered.
 
 You can confirm it loaded by opening the tools panel in the message
-composer. If `laserfiche` appears in the list with the eight read tools
-beneath it, you're connected. If it doesn't — or shows up red — Claude
-Desktop writes its MCP logs to
+composer. If `laserfiche` appears in the list with the read tools
+beneath it, you're connected — each tool shows up twice, once under its
+original verb-first name (`get_entry`) and once under the v2
+`laserfiche_{resource}_{verb}` form (`laserfiche_entry_get`). Both
+resolve to the same function; the old names will be removed in v3.0.
+If `laserfiche` doesn't appear — or shows up red — Claude Desktop
+writes its MCP logs to
 `~/Library/Logs/Claude/mcp-server-laserfiche.log` on macOS, and that's the
 first place to look.
 
@@ -182,24 +191,32 @@ with the same care you'd give any other read-only access.
 > what gets exposed, what defaults look reasonable, what stays hidden —
 > is most of the work.*
 
-The current tool surface is deliberately small and entirely read-only:
+The read surface this tutorial leans on is small and entirely
+non-mutating — a sample of the most commonly used reads:
 
 | Tool | Purpose |
 |------|---------|
 | `search_entries` | Run a Laserfiche search query and return matching entries |
 | `search_by_name` | Convenience wrapper that constructs a `{LF:Name=...}` query safely |
+| `search_natural` | Two-mode guided search (returns templates + grammar on first call, then executes) |
 | `list_folder` | List the immediate children of a folder by ID |
 | `get_entry` | Fetch metadata for a single entry by ID |
 | `get_entry_by_path` | Resolve a full repository path (e.g. `\Imports\2024\...`) to an entry |
 | `get_field_values` | Read all template field values on an entry |
-| `get_document_edoc` | Return electronic-document metadata (size, hint) without the bytes |
-| `get_document_text` | Download Laserfiche-extracted text from an electronic document |
+| `get_template_fields` | Atomic "what fields does this template need" lookup |
+| `get_document_edoc` | Return edoc metadata, raw bytes, or extracted text — `mode=info|bytes|text` |
+| `get_document_text` | v2-only Laserfiche-extracted text (v1: use `get_document_edoc(mode="text")`) |
 
-There is no general-purpose `write` or `delete` in v1. That's
-intentional — records are governed for a reason, and the right way to let
-a model mutate them is through deliberate, scoped tools that already have
-approvals wired in. Write operations are on the v1.1 roadmap behind
-`LF_READ_ONLY=false`.
+See the [README's Tools section](../README.md#tools) for the full read
+catalog (definition listings, audit reasons, async task polling, etc.)
+plus every tool's `laserfiche_{resource}_{verb}` v2 name.
+
+A separate **write surface** — create, copy, import, rename, move,
+metadata writes, and the destructive ops with two-step confirmation
+tokens — shipped in v1.2 and is fully wired through v2.0. It registers
+only when `LF_READ_ONLY=false`. Read the **Safety model** section in the
+[README](../README.md#safety-model) before you flip it on; path-prefix
+fences and a per-tool allowlist are how you keep blast radius small.
 
 ## Search syntax in 60 seconds
 
@@ -257,10 +274,12 @@ default. When you're ready to let Claude create, modify, or delete
 entries, flip `LF_READ_ONLY` to `false` and read the **Safety model**
 section in the [README](../README.md#safety-model) before you do.
 Path-prefix fences (`LF_WRITE_PATHS_ALLOW`), batch caps on folder
-deletes, and two-step confirmation tokens on destructive operations are
-all available and recommended. The [`docs/error-contract.md`](error-contract.md)
-reference documents the structured error responses every tool returns
-on failure, so an LLM can branch on the slug instead of parsing prose.
+deletes, two-step confirmation tokens on destructive operations, the
+client-side name pre-flight (`LF_VALIDATE_NAMES`), and the per-tool
+allowlist (`LF_WRITE_TOOLS_ALLOWED`) are all available and recommended.
+The [`docs/error-contract.md`](error-contract.md) reference documents
+the structured error responses every tool returns on failure, so an
+LLM can branch on `kind` and `error` instead of parsing prose.
 
 ## Further reading
 
@@ -275,6 +294,9 @@ on failure, so an LLM can branch on the slug instead of parsing prose.
    `mode: "error"` response shape every tool returns on failure, plus
    the full slug taxonomy.
 5. [`CHANGELOG.md`](../CHANGELOG.md) — what changed between versions and
-   why. v0.1.0 was yanked from PyPI for an incorrect auth flow; v0.2.x is
-   the first version verified against a real Laserfiche server. v1.4.0
-   is the first to validate the write surface against a live server.
+   why. v0.1.0 was yanked from PyPI for an incorrect auth flow; v0.2.x
+   is the first version verified against a real Laserfiche server;
+   v1.4.0 is the first to validate the write surface against a live
+   server; v2.0.0 is the result of a three-pass architectural audit
+   that introduced the `laserfiche_*` tool names, the five-kind error
+   taxonomy, and defense-in-depth pre-flight validators.

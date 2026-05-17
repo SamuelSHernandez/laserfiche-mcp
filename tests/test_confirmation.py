@@ -68,12 +68,17 @@ def test_verify_rejects_tampered_token() -> None:
 
 def test_verify_rejects_expired_token(monkeypatch: pytest.MonkeyPatch) -> None:
     token = confirmation.create_token(
-        "delete_entry", 42, "Foo", ttl_seconds=1,
+        "delete_entry",
+        42,
+        "Foo",
+        ttl_seconds=1,
     )
     # Fast-forward past the expiry.
     real_time = time.time
     monkeypatch.setattr(
-        confirmation.time, "time", lambda: real_time() + 10,
+        confirmation.time,
+        "time",
+        lambda: real_time() + 10,
     )
     ok, reason = confirmation.verify_token(token, "delete_entry", 42, "Foo")
     assert ok is False
@@ -96,6 +101,7 @@ def test_tokens_differ_per_operation() -> None:
 def test_token_rejected_when_structurally_short() -> None:
     # Valid base64 but the decoded payload doesn't have the right parts.
     import base64
+
     bad = base64.urlsafe_b64encode(b"only:three:parts").decode().rstrip("=")
     ok, reason = confirmation.verify_token(bad, "delete_entry", 1, "x")
     assert ok is False
@@ -105,9 +111,8 @@ def test_token_rejected_when_structurally_short() -> None:
 
 def test_token_rejected_with_non_integer_fields() -> None:
     import base64
-    bad = base64.urlsafe_b64encode(
-        b"delete_entry:notanint:abc:123:sig"
-    ).decode().rstrip("=")
+
+    bad = base64.urlsafe_b64encode(b"delete_entry:notanint:abc:123:sig").decode().rstrip("=")
     ok, reason = confirmation.verify_token(bad, "delete_entry", 1, "x")
     assert ok is False
     assert reason is not None

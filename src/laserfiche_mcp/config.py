@@ -23,8 +23,8 @@ class DeploymentMode(str, Enum):
 class AuthMode(str, Enum):
     # username + password → /{api_version}/Repositories/{repo}/Token bearer (self-hosted, default)
     PASSWORD = "password"
-    OAUTH = "oauth"            # client_credentials grant (LFDS or compatible)
-    API_KEY = "api_key"        # cloud service principal with JWT (reserved for v2)
+    OAUTH = "oauth"  # client_credentials grant (LFDS or compatible)
+    API_KEY = "api_key"  # cloud service principal with JWT (reserved for v2)
 
 
 class ApiVersion(str, Enum):
@@ -94,7 +94,9 @@ class Settings(BaseSettings):
     )
     request_timeout_seconds: float = Field(default=30.0, gt=0)
     retry_attempts: int = Field(
-        default=3, ge=0, le=10,
+        default=3,
+        ge=0,
+        le=10,
         description="Number of times to retry transient failures (5xx, 429, "
         "connection errors) with exponential backoff.",
     )
@@ -165,17 +167,20 @@ class Settings(BaseSettings):
     )
     max_results_default: int = Field(
         default=25,
-        ge=1, le=500,
+        ge=1,
+        le=500,
         description="Default page size for list/search tools.",
     )
     max_results_ceiling: int = Field(
         default=200,
-        ge=1, le=1000,
+        ge=1,
+        le=1000,
         description="Hard cap on page size regardless of caller-requested value.",
     )
     max_page_size: int = Field(
         default=100,
-        ge=1, le=1000,
+        ge=1,
+        le=1000,
         description="Hard cap on page size for search_natural specifically. "
         "Some self-hosted servers reject SimpleSearches $top values above "
         "their internal limit; this defaults lower than max_results_ceiling.",
@@ -249,8 +254,7 @@ class Settings(BaseSettings):
         valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         if self.log_level.upper() not in valid_levels:
             raise ValueError(
-                f"LF_LOG_LEVEL must be one of {sorted(valid_levels)}, "
-                f"got {self.log_level!r}."
+                f"LF_LOG_LEVEL must be one of {sorted(valid_levels)}, got {self.log_level!r}."
             )
 
         return self

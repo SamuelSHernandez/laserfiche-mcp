@@ -62,9 +62,7 @@ class PasswordGrantStrategy(AuthStrategy):
         # form-encoded grant_type=password body. (The /{version}/{repo}/Token
         # shape without /Repositories/ that some Cloud docs show returns 404
         # on self-hosted servers regardless of version.)
-        self._token_url = (
-            f"{base_url}{api_version.value}/Repositories/{repository_id}/Token"
-        )
+        self._token_url = f"{base_url}{api_version.value}/Repositories/{repository_id}/Token"
         self._username = username
         self._password = password
         self._verify_ssl = verify_ssl
@@ -176,11 +174,7 @@ def build_auth_strategy(settings: Settings) -> AuthStrategy:
         )
 
     if settings.auth_mode is AuthMode.OAUTH:
-        assert (
-            settings.oauth_token_url
-            and settings.client_id
-            and settings.client_secret
-        )
+        assert settings.oauth_token_url and settings.client_id and settings.client_secret
         return OAuthClientCredentialsStrategy(
             token_url=str(settings.oauth_token_url),
             client_id=settings.client_id,

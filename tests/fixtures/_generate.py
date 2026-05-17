@@ -26,11 +26,7 @@ SAMPLE_TEXT = "Hello laserfiche-mcp test fixture."
 
 def _escape_pdf_string(value: str) -> bytes:
     """Escape characters that have special meaning inside a PDF literal string."""
-    escaped = (
-        value.replace("\\", r"\\")
-        .replace("(", r"\(")
-        .replace(")", r"\)")
-    )
+    escaped = value.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
     return escaped.encode("ascii")
 
 
@@ -41,11 +37,7 @@ def build_text_pdf(text: str) -> bytes:
     a heavy dev-only dependency. Uses only the PDF features pypdf's text
     extractor reliably recovers: Type 1 font, BT/ET text object, ``Tj``.
     """
-    content_body = (
-        b"BT\n/F1 18 Tf\n72 720 Td\n("
-        + _escape_pdf_string(text)
-        + b") Tj\nET\n"
-    )
+    content_body = b"BT\n/F1 18 Tf\n72 720 Td\n(" + _escape_pdf_string(text) + b") Tj\nET\n"
 
     objects: list[bytes] = [
         b"<< /Type /Catalog /Pages 2 0 R >>",

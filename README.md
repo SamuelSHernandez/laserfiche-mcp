@@ -12,15 +12,23 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that lets
 Claude (Desktop, Code, or any MCP client) search and read documents in a
 [Laserfiche](https://www.laserfiche.com) repository.
 
-> **Current release: v1.4.0** — read AND write tools for self-hosted
-> Repository API v1 and v2. Write tools are gated behind
-> `LF_READ_ONLY=false` and ship with path-prefix fences, batch caps for
-> folder deletes, two-step confirmation tokens for destructive ops, a
-> tool-level allowlist, and structured errors with stable slugs LLM
-> callers can branch on. The v1 wire format was validated against a
-> live LFRepositoryAPI server in v1.4 — see [CHANGELOG](CHANGELOG.md) for
-> the bug fixes. Cloud (JWT-signed `client_credentials`) is still on the
-> roadmap.
+> **Current release: v2.0.0** — read AND write tools for self-hosted
+> Repository API v1 and v2, reshaped per a three-pass architectural
+> audit. Every tool is now registered under a `laserfiche_{resource}_{verb}`
+> name (e.g. `laserfiche_entry_get`, `laserfiche_field_set`); the
+> original verb-first names (`get_entry`, `set_fields`, ...) remain
+> registered as deprecation aliases through v2.x and will be removed in
+> v3.0. Error responses gain top-level `kind` (one of five canonical
+> `ToolErrorKind` values), `request_id`, and `upstream_trace_id`
+> fields. Defense-in-depth additions: entry-name validation, page-range
+> validation, path-traversal rejection, cached client-side pre-flight of
+> field/tag/template/link-type names (`LF_VALIDATE_NAMES`), plus a new
+> atomic `get_template_fields` lookup and `summary_only` on the
+> definition-list tools. Write tools still gate behind `LF_READ_ONLY=false`
+> with path-prefix fences, batch caps for folder deletes, two-step
+> confirmation tokens, and a tool-level allowlist. See
+> [CHANGELOG](CHANGELOG.md) for the full per-release notes. Cloud
+> (JWT-signed `client_credentials`) is still on the roadmap.
 
 ## What you can do with it
 
@@ -97,6 +105,8 @@ Minimum required variables for self-hosted password-grant auth:
 | `LF_DELETE_FOLDER_MAX_DESCENDANTS`  | `50`    | Refuse folder deletes above this immediate-child count unless `force_large_delete=true` |
 | `LF_REQUIRE_AUDIT_REASON`           | `false` | When `true`, `delete_entry` refuses to execute without `audit_reason_id`         |
 | `LF_VALIDATE_REQUIRED_FIELDS`       | `true`  | Validate repo-wide required fields client-side before `assign_template` PUTs     |
+| `LF_VALIDATE_NAMES`                 | `true`  | Pre-flight field / tag / template / link-type names against cached schema definitions; returns `invalid_*_name` instead of an opaque 400 |
+| `LF_SCHEMA_CACHE_TTL_SECONDS`       | `300`   | Cache window for the schema-definition lookups that back `LF_VALIDATE_NAMES` and `LF_VALIDATE_REQUIRED_FIELDS`. Set to `0` to disable caching. |
 | `LF_IMPORT_MAX_BYTES`               | `25 MB` | Client-side cap on `import_document` payload size                                |
 | `LF_EDOC_MAX_BYTES`                 | `25 MB` | Cap on `get_document_edoc` downloads in `bytes`/`text` modes                     |
 
@@ -172,47 +182,57 @@ specific Repository API Server version before wiring it into Claude.
 
 ## Tools
 
+> Tool names below are shown in their original verb-first form
+> (`get_entry`, `set_fields`, ...) for readability. In v2.0 every tool is
+> *also* registered under the `laserfiche_{resource}_{verb}` form
+> (`laserfiche_entry_get`, `laserfiche_field_set`, ...). Both names
+> resolve to the same function. The `laserfiche_*` names are the
+> recommended path; the old names remain as deprecation aliases through
+> v2.x and will be removed in v3.0. The authoritative mapping lives in
+> `_V2_RENAME_MAP` in [`src/laserfiche_mcp/server.py`](src/laserfiche_mcp/server.py).
+
 ### Reads (always registered)
 
-| Tool                         | Purpose                                                                 |
-| ---------------------------- | ----------------------------------------------------------------------- |
-| `search_entries`             | Run a raw Laserfiche search query, e.g. `{LF:Name="*.pdf"}`             |
-| `search_by_name`             | Convenience wrapper: name pattern + optional folder scope               |
-| `search_natural`             | Two-mode guided search: ask for grammar+templates, then run with auto-repair on 400 |
-| `list_folder`                | List children of a folder by ID                                          |
-| `get_entry`                  | Fetch metadata for one entry by ID                                       |
-| `get_entry_by_path`          | Resolve a full path to an entry                                          |
-| `get_field_values`           | Read all template fields assigned to an entry                            |
-| `get_document_text`          | Server-side extracted text (v2 only; v1 use `get_document_edoc(mode="text")`) |
-| `get_document_edoc`          | Inspect edoc (`info`), download bytes (`bytes`), or extract text (`text`) |
-| `list_repositories`          | List repos for this account; falls back to the configured repo if endpoint disabled |
-| `list_field_definitions`     | Enumerate all field definitions in the repository                        |
-| `list_tag_definitions`       | Enumerate tag definitions                                                |
-| `list_template_definitions`  | Enumerate template definitions                                           |
-| `list_link_definitions`      | Enumerate entry-link type definitions                                    |
-| `get_audit_reasons`          | Audit reasons available to the authenticated user (for delete/export)    |
-| `get_task_status`            | Poll the status of an async operation (delete, copy)                     |
-| `wait_for_task`              | Block until an async operation reaches a terminal state                  |
+| Tool                         | v2 name                                | Purpose                                                                 |
+| ---------------------------- | -------------------------------------- | ----------------------------------------------------------------------- |
+| `search_entries`             | `laserfiche_entry_search`              | Run a raw Laserfiche search query, e.g. `{LF:Name="*.pdf"}`             |
+| `search_by_name`             | `laserfiche_entry_search_by_name`      | Convenience wrapper: name pattern + optional folder scope               |
+| `search_natural`             | `laserfiche_entry_search_natural`      | Two-mode guided search: ask for grammar+templates, then run with auto-repair on 400 |
+| `list_folder`                | `laserfiche_folder_list`               | List children of a folder by ID                                          |
+| `get_entry`                  | `laserfiche_entry_get`                 | Fetch metadata for one entry by ID                                       |
+| `get_entry_by_path`          | `laserfiche_entry_get_by_path`         | Resolve a full path to an entry                                          |
+| `get_field_values`           | `laserfiche_field_values_get`          | Read all template fields assigned to an entry                            |
+| `get_document_text`          | `laserfiche_document_get_text`         | Server-side extracted text (v2 only; v1 use `get_document_edoc(mode="text")`) |
+| `get_document_edoc`          | `laserfiche_document_get_edoc`         | Inspect edoc (`info`), download bytes (`bytes`), or extract text (`text`) |
+| `list_repositories`          | `laserfiche_repository_list`           | List repos for this account; falls back to the configured repo if endpoint disabled |
+| `list_field_definitions`     | `laserfiche_field_definition_list`     | Enumerate all field definitions; pass `summary_only=true` for a `{count, names}` shape |
+| `list_tag_definitions`       | `laserfiche_tag_definition_list`       | Enumerate tag definitions; supports `summary_only`                       |
+| `list_template_definitions`  | `laserfiche_template_definition_list`  | Enumerate template definitions; supports `summary_only`                  |
+| `list_link_definitions`      | `laserfiche_link_definition_list`      | Enumerate entry-link type definitions; supports `summary_only`           |
+| `get_template_fields`        | `laserfiche_template_field_list`       | Atomic "what fields does this template need" lookup; pass `required_only=true` to filter to mandatory fields. Replaces the three-call chain (`list_template_definitions` → `list_field_definitions` → manual filter). |
+| `get_audit_reasons`          | `laserfiche_audit_reason_list`         | Audit reasons available to the authenticated user (for delete/export)    |
+| `get_task_status`            | `laserfiche_task_get_status`           | Poll the status of an async operation (delete, copy)                     |
+| `wait_for_task`              | `laserfiche_task_wait`                 | Block until an async operation reaches a terminal state                  |
 
 ### Writes (registered only when `LF_READ_ONLY=false`)
 
-| Tool                | Purpose                                                                          | Two-step token? |
-| ------------------- | -------------------------------------------------------------------------------- | --------------- |
-| `set_fields`        | OVERWRITE all field values on an entry (fields not in the body are deleted)      | —               |
-| `merge_fields`      | GET-then-PUT helper: update specific fields, preserve the rest                   | —               |
-| `set_tags`          | OVERWRITE all tags on an entry                                                   | —               |
-| `merge_tags`        | Add/remove specific tags without touching others                                 | —               |
-| `set_links`         | OVERWRITE all entry links                                                        | —               |
-| `assign_template`   | Assign a template, optionally with initial field values (preflight-validated)    | —               |
-| `remove_template`   | Clear the template assignment                                                    | —               |
-| `create_folder`     | Create a child folder under a parent                                             | —               |
-| `import_document`   | Multipart upload from a local file path; capped by `LF_IMPORT_MAX_BYTES`         | —               |
-| `copy_entry`        | Async copy via `CopyAsync`; returns an operation token to poll                   | —               |
-| `rename_entry`      | Rename an entry — preview shows old/new path, then re-call with the token        | yes             |
-| `move_entry`        | Move (optionally rename) — fence applies to both source AND destination paths    | yes             |
-| `delete_entry`      | Delete an entry (folders cascade); preview shows child count + batch-cap status  | yes             |
-| `delete_edoc`       | Wipe the electronic-document content; entry + metadata remain                    | yes             |
-| `delete_pages`      | Delete specific page ranges; refuses empty `page_range` (would mean "delete all") | yes             |
+| Tool                | v2 name                              | Purpose                                                                          | Two-step token? |
+| ------------------- | ------------------------------------ | -------------------------------------------------------------------------------- | --------------- |
+| `set_fields`        | `laserfiche_field_set`               | OVERWRITE all field values on an entry (fields not in the body are deleted)      | —               |
+| `merge_fields`      | `laserfiche_field_merge`             | GET-then-PUT helper: update specific fields, preserve the rest                   | —               |
+| `set_tags`          | `laserfiche_tag_set`                 | OVERWRITE all tags on an entry                                                   | —               |
+| `merge_tags`        | `laserfiche_tag_merge`               | Add/remove specific tags without touching others                                 | —               |
+| `set_links`         | `laserfiche_link_set`                | OVERWRITE all entry links                                                        | —               |
+| `assign_template`   | `laserfiche_template_assign`         | Assign a template, optionally with initial field values (preflight-validated)    | —               |
+| `remove_template`   | `laserfiche_template_remove`         | Clear the template assignment                                                    | —               |
+| `create_folder`     | `laserfiche_folder_create`           | Create a child folder under a parent                                             | —               |
+| `import_document`   | `laserfiche_document_import`         | Multipart upload from a local file path; capped by `LF_IMPORT_MAX_BYTES`         | —               |
+| `copy_entry`        | `laserfiche_entry_copy`              | Async copy via `CopyAsync`; returns an operation token to poll                   | —               |
+| `rename_entry`      | `laserfiche_entry_rename`            | Rename an entry — preview shows old/new path, then re-call with the token        | yes             |
+| `move_entry`        | `laserfiche_entry_move`              | Move (optionally rename) — fence applies to both source AND destination paths    | yes             |
+| `delete_entry`      | `laserfiche_entry_delete`            | Delete an entry (folders cascade); preview shows child count + batch-cap status  | yes             |
+| `delete_edoc`       | `laserfiche_document_edoc_delete`    | Wipe the electronic-document content; entry + metadata remain                    | yes             |
+| `delete_pages`      | `laserfiche_document_pages_delete`   | Delete specific page ranges; refuses empty `page_range` (would mean "delete all") | yes             |
 
 Tools with **two-step token** return a preview + HMAC-signed
 `confirmation_token` on first call. Surface the preview to the user; on
@@ -268,35 +288,54 @@ LLM gets actionable, structured data instead of `Error executing tool ...`.
 ```json
 {
   "mode": "error",
-  "operation": "delete_entry",
+  "operation": "laserfiche_entry_delete",
+  "kind": "not_found",
   "error": "not_found",
   "status_code": 404,
   "server_error_code": null,
   "server_message": null,
   "reason": "Server returned 404 — the entry, path, or endpoint does not exist.",
+  "request_id": "9f2c…",
+  "upstream_trace_id": null,
   "entry_id": 999
 }
 ```
 
-The `error` slug is short and stable so callers can branch on it:
+`kind` is one of five canonical `ToolErrorKind` values — LLMs branch on
+this for category-level decisions (retry vs ask user vs abort):
 
-| Slug                      | Triggers                                                                     |
+| Kind                    | Meaning                                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------------------- |
+| `not_found`             | The named entry, path, or endpoint doesn't exist. Verify with the user.                  |
+| `permission_denied`     | Credentials, ACLs, or local fence config refused the operation.                          |
+| `rate_limited`          | The server told the caller to slow down. Back off and retry.                             |
+| `invalid_input`         | The request is malformed or fails a local pre-flight. Fix and re-call.                   |
+| `upstream_unavailable`  | LF returned 5xx, 405, or an opaque failure. Retry once, then surface.                    |
+
+`error` is the more-specific subkind. Server-mapped subkinds:
+
+| Subkind                   | Triggers                                                                     |
 | ------------------------- | ---------------------------------------------------------------------------- |
 | `auth_failed`             | HTTP 401/403, LF errorCode 9010, or LF 9528 ("LFDS unreachable" — usually creds too) |
-| `required_field_missing`  | LF errorCode 9039/9066, or the `LF_VALIDATE_REQUIRED_FIELDS` preflight       |
+| `required_field_missing`  | LF errorCode 9039/9066                                                       |
 | `not_found`               | HTTP 404                                                                     |
 | `method_not_allowed`      | HTTP 405 — usually an MCP routing bug                                        |
 | `unsupported_media_type`  | HTTP 415 — usually a wire-format bug (missing `Content-Type`)                |
 | `rate_limited`            | HTTP 429                                                                     |
 | `server_error`            | HTTP 5xx or unrecognized failure                                             |
 
-Some tools have their own pre-server `mode: error` shapes (e.g.
-`path_not_allowed` from the path-fence check, `exceeds_batch_cap` from
-the folder-delete probe, `invalid_confirmation_token` from the
-preview→token flow, `missing_required_fields` from the template
-validator). `list_repositories` returns `mode: fallback` instead of
-erroring when the server doesn't expose the endpoint — see the docstring
-for the response shape.
+Tools also have pre-server `mode: error` shapes (`path_not_allowed`,
+`path_traversal_blocked`, `exceeds_batch_cap`,
+`invalid_confirmation_token`, `missing_required_fields`,
+`page_range_required`, `invalid_page_range`, `invalid_name`,
+`invalid_field_name`, `invalid_tag_name`, `invalid_template_name`,
+`invalid_link_type`, `file_not_found`, `size_exceeds_cap`,
+`tool_not_allowed`). `list_repositories` returns `mode: fallback`
+instead of erroring when the server doesn't expose the endpoint — see
+the docstring for the response shape.
+
+See [`docs/error-contract.md`](docs/error-contract.md) for the full
+taxonomy, per-tool triggers, and the kind ↔ subkind mapping.
 
 ## Safety model
 
@@ -330,9 +369,23 @@ fence regardless of which tools are registered.
 
 ## Roadmap
 
-- **Next** — Server-side audit logging (sidecar file + rotation) for write-mode deployments.
-- **Cloud** — Laserfiche Cloud support (`signin.laserfiche.com` JWT-signed `client_credentials` flow).
-- **Beyond** — Workflow trigger tools, async `/Searches` flow for large result sets, server-side text extraction for Office documents.
+- **v2.x follow-ups** (deferred from the v2.0 audit) — write-tool
+  collapses (`field_update(mode)`, `tag_update(add, remove)`,
+  `link_update(mode)`), preview/execute splits of the 5 destructive
+  tools, parameter-description polish for the JSON schema the LLM sees,
+  structured JSON logging (`LF_LOG_FORMAT=json`) with a `redact()`
+  helper. Working notes in [`docs/internal/TODO.md`](docs/internal/TODO.md).
+- **Server-side audit logging** — sidecar file with rotation, capturing
+  every write tool call with the authenticated user, target entry, and
+  outcome.
+- **Cloud** — Laserfiche Cloud support (`signin.laserfiche.com`
+  JWT-signed `client_credentials` flow plus the `api.laserfiche.com`
+  v2-only endpoint surface).
+- **v3.0** — Remove the verb-first deprecation aliases (`get_entry`,
+  `set_fields`, ...). Only the `laserfiche_{resource}_{verb}` names
+  remain.
+- **Beyond** — Workflow trigger tools, async `/Searches` flow for large
+  result sets, server-side text extraction for Office documents.
 
 ## Development
 
@@ -370,9 +423,10 @@ quirks, real PDF extraction, transport-level rejections).
 
 Issues and PRs welcome — particularly:
 
-- Endpoint corrections for Repository API Server builds the v1.4 wire format hasn't been validated against
+- Endpoint corrections for Repository API Server builds the v1 / v2 wire format hasn't been validated against
 - Laserfiche Cloud client + JWT-signed `client_credentials` assertion flow
 - Server-side audit logging for write-mode deployments (sidecar file + rotation)
+- Structured JSON logging + per-tool-call redaction (`LF_LOG_FORMAT=json`)
 - Async `/Searches` flow for very large result sets
 
 This is a community project, **not** affiliated with or endorsed by

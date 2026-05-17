@@ -103,8 +103,7 @@ def path_allowed(
     for d in deny:
         if _matches_prefix(path, d):
             return False, (
-                f"Path {path!r} is under denied prefix {d!r} "
-                "(LF_WRITE_PATHS_DENY). Writes refused."
+                f"Path {path!r} is under denied prefix {d!r} (LF_WRITE_PATHS_DENY). Writes refused."
             )
 
     allow = _parse_csv(allow_csv)
@@ -212,8 +211,7 @@ def validate_page_range(range_str: str) -> tuple[bool, str | None]:
             start_str, end_str = part.split("-", 1)
             if int(start_str) > int(end_str):
                 return False, (
-                    f"page_range part {part!r} has start > end. Ranges "
-                    "must be ascending."
+                    f"page_range part {part!r} has start > end. Ranges must be ascending."
                 )
 
     return True, None

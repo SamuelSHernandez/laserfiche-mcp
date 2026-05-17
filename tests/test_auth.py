@@ -32,7 +32,9 @@ async def test_password_grant_exchanges_creds_for_bearer(httpx_mock: HTTPXMock) 
         password=SecretStr("secret"),
     )
 
-    request = httpx.Request("GET", "https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/1")
+    request = httpx.Request(
+        "GET", "https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/1"
+    )
     await strategy.apply(request)
 
     assert request.headers["Authorization"] == "Bearer tok-1"
@@ -151,9 +153,7 @@ def test_build_auth_strategy_password(lf_env: dict[str, str]) -> None:
     assert isinstance(strategy, PasswordGrantStrategy)
 
 
-def test_build_auth_strategy_oauth(
-    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_auth_strategy_oauth(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LF_AUTH_MODE", "oauth")
     monkeypatch.delenv("LF_USERNAME", raising=False)
     monkeypatch.delenv("LF_PASSWORD", raising=False)

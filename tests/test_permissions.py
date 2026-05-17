@@ -21,7 +21,9 @@ def test_none_path_is_allowed() -> None:
 
 def test_deny_matches_path_under_prefix() -> None:
     ok, reason = permissions.path_allowed(
-        "\\Trash\\foo", None, "\\Trash",
+        "\\Trash\\foo",
+        None,
+        "\\Trash",
     )
     assert ok is False
     assert reason is not None
@@ -31,21 +33,27 @@ def test_deny_matches_path_under_prefix() -> None:
 def test_deny_does_not_match_sibling() -> None:
     """`\\TrashArchive` is not `\\Trash` — prefix needs boundary."""
     ok, _ = permissions.path_allowed(
-        "\\TrashArchive\\foo", None, "\\Trash",
+        "\\TrashArchive\\foo",
+        None,
+        "\\Trash",
     )
     assert ok is True
 
 
 def test_allow_matches_path_under_prefix() -> None:
     ok, _ = permissions.path_allowed(
-        "\\Imports\\2024\\foo", "\\Imports", None,
+        "\\Imports\\2024\\foo",
+        "\\Imports",
+        None,
     )
     assert ok is True
 
 
 def test_allow_rejects_path_outside_prefix() -> None:
     ok, reason = permissions.path_allowed(
-        "\\Other\\foo", "\\Imports", None,
+        "\\Other\\foo",
+        "\\Imports",
+        None,
     )
     assert ok is False
     assert reason is not None
@@ -54,7 +62,9 @@ def test_allow_rejects_path_outside_prefix() -> None:
 
 def test_allow_csv_supports_multiple_prefixes() -> None:
     ok, _ = permissions.path_allowed(
-        "\\Archive\\WIP\\x", "\\Imports,\\Archive\\WIP", None,
+        "\\Archive\\WIP\\x",
+        "\\Imports,\\Archive\\WIP",
+        None,
     )
     assert ok is True
 
@@ -71,7 +81,9 @@ def test_deny_wins_over_allow() -> None:
 
 def test_path_matching_is_case_insensitive() -> None:
     ok, _ = permissions.path_allowed(
-        "\\IMPORTS\\foo", "\\imports", None,
+        "\\IMPORTS\\foo",
+        "\\imports",
+        None,
     )
     assert ok is True
 
@@ -80,14 +92,18 @@ def test_forward_slashes_in_config_are_normalized() -> None:
     """Operator-friendly: accept forward slashes in env var even though
     Laserfiche paths use backslashes."""
     ok, _ = permissions.path_allowed(
-        "\\Imports\\foo", "/Imports", None,
+        "\\Imports\\foo",
+        "/Imports",
+        None,
     )
     assert ok is True
 
 
 def test_extra_commas_and_whitespace_are_tolerated() -> None:
     ok, _ = permissions.path_allowed(
-        "\\Imports\\foo", "  ,\\Imports  ,  ", None,
+        "\\Imports\\foo",
+        "  ,\\Imports  ,  ",
+        None,
     )
     assert ok is True
 
@@ -96,7 +112,9 @@ def test_prefix_must_have_boundary() -> None:
     """`\\Imp` does not match `\\Imports\\foo` — same as deny test but
     on the allow side."""
     ok, _ = permissions.path_allowed(
-        "\\Imports\\foo", "\\Imp", None,
+        "\\Imports\\foo",
+        "\\Imp",
+        None,
     )
     assert ok is False
 
@@ -106,7 +124,9 @@ def test_prefix_must_have_boundary() -> None:
 
 def test_path_with_dotdot_segment_rejected_unconditionally() -> None:
     ok, reason = permissions.path_allowed(
-        "\\Sandbox\\..\\Secret", "\\Sandbox", None,
+        "\\Sandbox\\..\\Secret",
+        "\\Sandbox",
+        None,
     )
     assert ok is False
     assert reason is not None
@@ -267,11 +287,13 @@ def test_tool_allowlist_empty_means_all_allowed() -> None:
 
 def test_tool_allowlist_filters() -> None:
     ok, _ = permissions.tool_allowed(
-        "merge_fields", "merge_fields,merge_tags",
+        "merge_fields",
+        "merge_fields,merge_tags",
     )
     assert ok is True
     ok, reason = permissions.tool_allowed(
-        "delete_entry", "merge_fields,merge_tags",
+        "delete_entry",
+        "merge_fields,merge_tags",
     )
     assert ok is False
     assert reason is not None
