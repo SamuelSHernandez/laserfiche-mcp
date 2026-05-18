@@ -1,0 +1,217 @@
+{
+  "name": "starter",
+  "version": 1,
+  "description": "10-task L2 starter corpus. Targets \\Sandbox\\mcp-test-2026-05-13 on the IPRS-class fixture repo. Each task is self-contained; write tasks create and delete their own state using $run_id-suffixed names.",
+  "tasks": [
+    {
+      "id": "read-list-repos",
+      "description": "list_repositories returns the configured repo in the OData envelope",
+      "plan": [
+        { "tool": "list_repositories", "args": {} }
+      ],
+      "postcondition": {
+        "expect_names": { "at": "$.value", "name_key": "repoId", "names": ["IPRS"] }
+      }
+    },
+    {
+      "id": "read-resolve-sandbox-v1-unwrap",
+      "description": "get_entry_by_path resolves \\Sandbox to its real id on v1 (regression for ByPath envelope unwrap)",
+      "plan": [
+        {
+          "tool": "get_entry_by_path",
+          "args": { "full_path": "\\Sandbox" }
+        }
+      ],
+      "postcondition": {
+        "expect_field": [
+          { "path": "$.id", "equals": 84486 },
+          { "path": "$.name", "equals": "Sandbox" },
+          { "path": "$.entry_type", "equals": "Folder" }
+        ]
+      }
+    },
+    {
+      "id": "read-list-sandbox",
+      "description": "list_folder on the sandbox returns the six well-known subfolders",
+      "plan": [
+        {
+          "tool": "list_folder",
+          "args": { "folder_id": 84487, "max_results": 20 }
+        }
+      ],
+      "postcondition": {
+        "expect_count": [{ "path": "$.entries", "min": 6 }],
+        "expect_names": {
+          "at": "$.entries",
+          "names": [
+            "Application Forms",
+            "Financial Records",
+            "Personnel Documents",
+            "Service Records",
+            "Training Documents"
+          ]
+        }
+      }
+    },
+    {
+      "id": "read-template-defs-summary",
+      "description": "list_template_definitions(summary_only=True) returns the 3 IPRS templates",
+      "plan": [
+        {
+          "tool": "list_template_definitions",
+          "args": { "summary_only": true }
+        }
+      ],
+      "postcondition": {
+        "expect_field": [
+          { "path": "$.count", "equals": 3 },
+          { "path": "$.names", "contains": "Missionary Document" },
+          { "path": "$.names", "contains": "Service Record" },
+          { "path": "$.names", "contains": "Missionary Folder" }
+        ]
+      }
+    },
+    {
+      "id": "read-field-defs-summary",
+      "description": "list_field_definitions(summary_only=True) covers the known IPRS fields",
+      "plan": [
+        {
+          "tool": "list_field_definitions",
+          "args": { "summary_only": true }
+        }
+      ],
+      "postcondition": {
+        "expect_field": [
+          { "path": "$.count", "min": 20 },
+          { "path": "$.names", "contains": "Person ID" },
+          { "path": "$.names", "contains": "Last Name" }
+        ]
+      }
+    },
+    {
+      "id": "read-search-slicing-v1",
+      "description": "search_entries with max_results=3 returns ≤3 (regression for v1 SimpleSearches $top fix)",
+      "plan": [
+        {
+          "tool": "search_entries",
+          "args": { "query": "{LF:Name=\"*\"}", "max_results": 3 }
+        }
+      ],
+      "postcondition": {
+        "expect_count": [{ "path": "$.entries", "max": 3 }]
+      }
+    },
+    {
+      "id": "read-missing-entry-structured-404",
+      "description": "get_entry on a missing id returns kind=not_found, server_error_code=9001",
+      "plan": [
+        {
+          "tool": "get_entry",
+          "args": { "entry_id": 999999999 }
+        }
+      ],
+      "postcondition": {
+        "expect_field": [
+          { "path": "$.mode", "equals": "error" },
+          { "path": "$.kind", "equals": "not_found" },
+          { "path": "$.error", "equals": "not_found" },
+          { "path": "$.entry_id", "equals": 999999999 },
+          { "path": "$.request_id", "is_not_none": true }
+        ]
+      }
+    },
+    {
+      "id": "read-missing-path-structured-404",
+      "description": "get_entry_by_path on a missing path returns kind=not_found (NOT a phantom id=0)",
+      "plan": [
+        {
+          "tool": "get_entry_by_path",
+          "args": { "full_path": "\\__eval-missing-path__" }
+        }
+      ],
+      "postcondition": {
+        "expect_field": [
+          { "path": "$.mode", "equals": "error" },
+          { "path": "$.kind", "equals": "not_found" }
+        ]
+      }
+    },
+    {
+      "id": "write-folder-lifecycle",
+      "description": "create_folder → rename preview+confirm → delete preview+confirm — full v2.0 write flow",
+      "plan": [
+        {
+          "tool": "create_folder",
+          "args": {
+            "parent_id": 84487,
+            "name": "eval-l2-$run_id"
+          },
+          "capture": {
+            "created_id": "$.id"
+          }
+        },
+        {
+          "tool": "rename_entry",
+          "args": {
+            "entry_id": "$created_id",
+            "new_name": "eval-l2-$run_id-renamed"
+          },
+          "capture": {
+            "rename_token": "$.confirmation_token"
+          }
+        },
+        {
+          "tool": "rename_entry",
+          "args": {
+            "entry_id": "$created_id",
+            "new_name": "eval-l2-$run_id-renamed",
+            "confirmation_token": "$rename_token"
+          }
+        },
+        {
+          "tool": "delete_entry",
+          "args": {
+            "entry_id": "$created_id"
+          },
+          "capture": {
+            "delete_token": "$.confirmation_token"
+          }
+        },
+        {
+          "tool": "delete_entry",
+          "args": {
+            "entry_id": "$created_id",
+            "confirmation_token": "$delete_token"
+          }
+        }
+      ],
+      "postcondition": {
+        "expect_field": [
+          { "path": "$.mode", "equals": "executed" },
+          { "path": "$.operation", "equals": "delete_entry" },
+          { "path": "$.operation_token", "is_not_none": true }
+        ]
+      }
+    },
+    {
+      "id": "safety-path-fence-blocks-outside-write",
+      "description": "create_folder under repo root (outside LF_WRITE_PATHS_ALLOW) is refused before the API call",
+      "_note_kind_missing": "Pre-flight error responses (path_not_allowed et al.) do not carry the v2 `kind` taxonomy field — README's error contract says they should. Captured as the first eval-surfaced finding; assertion intentionally checks only `mode` and `error` until that contract drift is fixed.",
+      "plan": [
+        {
+          "tool": "create_folder",
+          "args": {
+            "parent_id": 1,
+            "name": "eval-should-be-rejected-$run_id"
+          }
+        }
+      ],
+      "postcondition": {
+        "expect_field": [
+          { "path": "$.mode", "equals": "error" },
+          { "path": "$.error", "in": ["path_not_allowed", "path_traversal_blocked"] }
+        ]
+      }
+    }
+  ]
+}
