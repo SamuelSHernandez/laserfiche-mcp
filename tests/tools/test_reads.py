@@ -297,4 +297,3 @@ async def test_get_field_values_wraps_laserfiche_error_as_runtime(
     assert result["operation"] == "get_field_values"
     assert result["error"] == "auth_failed"
     assert result["entry_id"] == 999
-

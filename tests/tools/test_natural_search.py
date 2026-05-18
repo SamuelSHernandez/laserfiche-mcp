@@ -447,4 +447,3 @@ async def test_mode_a_tolerates_get_field_values_failure(
     assert len(result["discovered_templates"]) == 1
     assert result["discovered_templates"][0]["template_name"] == "PAF"
     assert result["discovered_templates"][0]["field_names"] == []
-

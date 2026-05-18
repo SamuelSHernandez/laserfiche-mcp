@@ -298,9 +298,7 @@ async def test_run_diagnose_success_path(
         url=f"{_BASE}/Entries/1/Laserfiche.Repository.Folder/children?%24top=1&%24skip=0",
         json={"value": []},
     )
-    httpx_mock.add_response(
-        method="POST", url=f"{_BASE}/SimpleSearches", json={"value": []}
-    )
+    httpx_mock.add_response(method="POST", url=f"{_BASE}/SimpleSearches", json={"value": []})
 
     rc = await cli._run_diagnose(settings)
     assert rc == 0
@@ -478,4 +476,3 @@ def test_main_keyboard_interrupt_is_swallowed(
 
     monkeypatch.setattr(server, "mcp", _StubMCP())
     cli.main(lambda: None)  # Should NOT raise.
-
