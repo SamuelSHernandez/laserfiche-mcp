@@ -206,7 +206,7 @@ async def test_probe_optional_endpoints_runs_every_probe(httpx_mock: HTTPXMock) 
         url=f"{_BASE}/Entries/1/Laserfiche.Repository.Folder/children?%24top=1&%24skip=0",
         status_code=404,
     )
-    httpx_mock.add_response(method="POST", url=f"{_BASE}/SimpleSearches?%24top=1", status_code=500)
+    httpx_mock.add_response(method="POST", url=f"{_BASE}/SimpleSearches", status_code=500)
 
     async with LaserficheClient(settings, _StubAuth()) as client:
         results = await cli._probe_optional_endpoints(client)
@@ -299,7 +299,7 @@ async def test_run_diagnose_success_path(
         json={"value": []},
     )
     httpx_mock.add_response(
-        method="POST", url=f"{_BASE}/SimpleSearches?%24top=1", json={"value": []}
+        method="POST", url=f"{_BASE}/SimpleSearches", json={"value": []}
     )
 
     rc = await cli._run_diagnose(settings)
@@ -478,3 +478,4 @@ def test_main_keyboard_interrupt_is_swallowed(
 
     monkeypatch.setattr(server, "mcp", _StubMCP())
     cli.main(lambda: None)  # Should NOT raise.
+

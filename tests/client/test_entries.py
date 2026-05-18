@@ -124,7 +124,7 @@ async def test_search_entries_posts_to_simple_searches(
     settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=10",
+        url=f"{_BASE}/SimpleSearches",
         json={"value": []},
     )
 
@@ -133,9 +133,49 @@ async def test_search_entries_posts_to_simple_searches(
 
     request = httpx_mock.get_requests()[0]
     assert request.method == "POST"
+    # v1 must NOT send $top — some builds reject it with HTTP 400 errorCode 216.
+    assert b"%24top" not in request.url.query
     body = request.read().decode()
     assert '"searchCommand"' in body
     assert "Smith" in body
+
+
+@pytest.mark.asyncio
+async def test_search_entries_v2_keeps_top_param(
+    httpx_mock: HTTPXMock,
+    lf_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v2 servers accept and honor ``$top`` — keep using it there."""
+    monkeypatch.setenv("LF_API_VERSION", "v2")
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE_V2}/SimpleSearches?%24top=7",
+        json={"value": []},
+    )
+
+    async with _build_client(settings) as client:
+        await client.search_entries('{LF:Name="Smith"}', max_results=7)
+
+
+@pytest.mark.asyncio
+async def test_search_entries_v1_slices_to_max_results(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    """v1 servers cap SimpleSearches internally (~100) regardless of params;
+    the client slices the returned list to honor max_results."""
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/SimpleSearches",
+        json={"value": [{"id": i, "name": f"E{i}"} for i in range(50)]},
+    )
+
+    async with _build_client(settings) as client:
+        result = await client.search_entries('{LF:Name="*"}', max_results=3)
+
+    assert len(result["value"]) == 3
 
 
 # --- get_field_values -------------------------------------------------------

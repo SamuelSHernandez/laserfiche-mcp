@@ -74,7 +74,22 @@ class _EntriesMixin(_CoreClient):
         Query syntax follows Laserfiche search syntax, e.g.:
             {LF:Name="Onboarding*"}
             {[Missionary Application]:[Last Name]="Smith"}
+
+        v1 servers reject ``$top`` as a URL parameter on this endpoint
+        (HTTP 400 ``errorCode 216``) and apply their own internal cap (~100
+        rows). We omit ``$top`` on v1 and slice client-side; v2 honors
+        ``$top`` and returns the requested page.
         """
+        if self._api_version is ApiVersion.V1:
+            raw = await self._request_json(
+                "POST",
+                self._repo_path("SimpleSearches"),
+                json={"searchCommand": query},
+            )
+            value = raw.get("value")
+            if isinstance(value, list) and len(value) > max_results:
+                raw = {**raw, "value": value[:max_results]}
+            return raw
         return await self._request_json(
             "POST",
             self._repo_path("SimpleSearches"),

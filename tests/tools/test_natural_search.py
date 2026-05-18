@@ -113,7 +113,7 @@ async def test_search_natural_mode_b_executes_and_returns_results(
 ) -> None:
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=50",
+        url=f"{_BASE}/SimpleSearches",
         json={
             "value": [
                 {"id": 999, "name": "found.pdf", "entryType": "Document"},
@@ -142,7 +142,7 @@ async def test_search_natural_repair_escape_quotes(
     patched_client: LaserficheClient,
 ) -> None:
     """First call 400s; quote-escape repair fires; second call succeeds."""
-    url = f"{_BASE}/SimpleSearches?%24top=50"
+    url = f"{_BASE}/SimpleSearches"
     httpx_mock.add_response(
         method="POST",
         url=url,
@@ -172,7 +172,7 @@ async def test_search_natural_repair_wildcard_wrap_when_fuzzy(
     patched_client: LaserficheClient,
 ) -> None:
     """No quotes to escape, so the next repair (wildcard wrap) fires."""
-    url = f"{_BASE}/SimpleSearches?%24top=50"
+    url = f"{_BASE}/SimpleSearches"
     httpx_mock.add_response(
         method="POST",
         url=url,
@@ -203,7 +203,7 @@ async def test_search_natural_exhausts_repairs_and_returns_structured_error(
     patched_client: LaserficheClient,
 ) -> None:
     """Every attempt 400s; final response is a structured error with all attempts."""
-    url = f"{_BASE}/SimpleSearches?%24top=50"
+    url = f"{_BASE}/SimpleSearches"
     httpx_mock.add_response(method="POST", url=url, status_code=400, json={"e": "bad"})
     httpx_mock.add_response(method="POST", url=url, status_code=400, json={"e": "bad"})
     httpx_mock.add_response(method="POST", url=url, status_code=400, json={"e": "bad"})
@@ -231,7 +231,7 @@ async def test_search_natural_returns_error_immediately_on_non_400(
     """500/403 errors are not in the repair contract — surface them straight away."""
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=50",
+        url=f"{_BASE}/SimpleSearches",
         status_code=500,
         json={"error": "internal"},
     )
@@ -258,7 +258,7 @@ async def test_search_natural_pagination_unknown_when_full_page_and_no_next_link
     entries = [{"id": i, "name": f"doc{i}", "entryType": "Document"} for i in range(3)]
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=3",
+        url=f"{_BASE}/SimpleSearches",
         json={"value": entries},
     )
 
@@ -286,7 +286,7 @@ async def test_search_natural_clamps_max_results_to_max_page_size(
 
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=40",
+        url=f"{_BASE}/SimpleSearches",
         json={"value": []},
     )
 
@@ -447,3 +447,4 @@ async def test_mode_a_tolerates_get_field_values_failure(
     assert len(result["discovered_templates"]) == 1
     assert result["discovered_templates"][0]["template_name"] == "PAF"
     assert result["discovered_templates"][0]["field_names"] == []
+

@@ -23,7 +23,7 @@ async def test_search_entries_happy_path(
 ) -> None:
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=25",
+        url=f"{_BASE}/SimpleSearches",
         json={"value": [{"id": 7, "name": "x.pdf", "entryType": "Document"}]},
     )
 
@@ -40,7 +40,7 @@ async def test_search_entries_wraps_laserfiche_error_as_runtime(
 ) -> None:
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=25",
+        url=f"{_BASE}/SimpleSearches",
         status_code=500,
         json={"error": "internal"},
     )
@@ -59,7 +59,7 @@ async def test_search_by_name_builds_lf_query_with_wildcards(
     """search_by_name must wrap the pattern in {LF:Name="..."} syntax verbatim."""
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=25",
+        url=f"{_BASE}/SimpleSearches",
         json={"value": []},
     )
 
@@ -77,7 +77,7 @@ async def test_search_by_name_appends_lookin_when_folder_provided(
 ) -> None:
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=25",
+        url=f"{_BASE}/SimpleSearches",
         json={"value": []},
     )
 
@@ -100,7 +100,7 @@ async def test_search_by_name_escapes_quotes_in_pattern(
     """A user-supplied " must be escaped before being interpolated into the query."""
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=25",
+        url=f"{_BASE}/SimpleSearches",
         json={"value": []},
     )
 
@@ -120,7 +120,7 @@ async def test_search_by_name_wraps_laserfiche_error_as_runtime(
 ) -> None:
     httpx_mock.add_response(
         method="POST",
-        url=f"{_BASE}/SimpleSearches?%24top=25",
+        url=f"{_BASE}/SimpleSearches",
         status_code=500,
         json={"e": "boom"},
     )
@@ -297,3 +297,4 @@ async def test_get_field_values_wraps_laserfiche_error_as_runtime(
     assert result["operation"] == "get_field_values"
     assert result["error"] == "auth_failed"
     assert result["entry_id"] == 999
+
