@@ -199,11 +199,6 @@ async def get_entry_by_path(full_path: str) -> dict[str, Any]:
     On failure: returns ``{"mode": "error", "error": <slug>,
     "full_path": <str>, ...}``. Common slugs: ``not_found`` (no entry at
     that path), ``auth_failed``.
-
-    **Caveat**: some self-hosted v1 builds return an empty sentinel entry
-    (id=0, entry_type="Unknown") for paths they can't resolve, rather than
-    a clean 404. Treat ``id=0`` from this tool as "not found" even when
-    the response wasn't classified as an error.
     """
     try:
         raw = await _app.get_client().get_entry_by_path(full_path)

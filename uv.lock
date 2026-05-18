@@ -511,12 +511,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.2.0" },
+    { name = "httpx", specifier = ">=0.27.0,<1" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.2.0,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pydantic-settings", specifier = ">=2.0.0" },
-    { name = "pypdf", specifier = ">=4.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0,<3" },
+    { name = "pydantic-settings", specifier = ">=2.0.0,<3" },
+    { name = "pypdf", specifier = ">=4.0.0,<6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
@@ -939,14 +939,14 @@ crypto = [
 
 [[package]]
 name = "pypdf"
-version = "6.11.0"
+version = "5.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/58/6dd97d78a4b17a7a6b9d1c6ad23895abc41f0fdc49c553cc05bdfdcc36d0/pypdf-6.11.0.tar.gz", hash = "sha256:062b51c81b0910e6d2755e99e1c5547a0a23b7d0a32322af66240d8edcfabe87", size = 6453975, upload-time = "2026-05-09T13:26:48.955Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/89/3a/584b97a228950ed85aec97c811c68473d9b8d149e6a8c155668287cf1a28/pypdf-5.9.0.tar.gz", hash = "sha256:30f67a614d558e495e1fbb157ba58c1de91ffc1718f5e0dfeb82a029233890a1", size = 5035118, upload-time = "2025-07-27T14:04:52.364Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/07/b1/68feb7eb3b99f0c020b414234825f4a5d70e0126c18d933770e8c93a35fc/pypdf-6.11.0-py3-none-any.whl", hash = "sha256:769394d5756d5b304c9b6bef88b54b1816b328e7e6fc9254e625529a15ed4ab8", size = 338819, upload-time = "2026-05-09T13:26:46.904Z" },
+    { url = "https://files.pythonhosted.org/packages/48/d9/6cff57c80a6963e7dd183bf09e9f21604a77716644b1e580e97b259f7612/pypdf-5.9.0-py3-none-any.whl", hash = "sha256:be10a4c54202f46d9daceaa8788be07aa8cd5ea8c25c529c50dd509206382c35", size = 313193, upload-time = "2025-07-27T14:04:50.53Z" },
 ]
 
 [[package]]

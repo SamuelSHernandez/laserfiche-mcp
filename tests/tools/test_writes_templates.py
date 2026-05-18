@@ -64,7 +64,7 @@ async def test_assign_template_blocks_when_required_field_missing(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {
@@ -144,7 +144,7 @@ async def test_assign_template_validation_passes_when_required_field_already_set
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {
@@ -190,7 +190,7 @@ async def test_assign_template_validation_accepts_required_field_via_caller_fiel
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {
@@ -242,7 +242,7 @@ async def test_assign_template_validation_flags_only_unsupplied_missing(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {"name": "A", "fieldType": "String", "isRequired": True, "listValues": []},
@@ -276,7 +276,7 @@ async def test_assign_template_validation_falls_through_on_read_failure(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
         status_code=500,
     )
     httpx_mock.add_response(
@@ -358,7 +358,7 @@ async def test_assign_template_rejects_unknown_template(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/TemplateDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "Personnel"}]},
         is_reusable=True,
     )

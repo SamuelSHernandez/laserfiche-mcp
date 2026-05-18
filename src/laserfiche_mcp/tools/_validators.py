@@ -232,15 +232,14 @@ async def validate_required_fields(
         return None
     client = _app.get_client()
     try:
-        defs = await client.list_field_definitions(max_results=500, skip=0)
+        defs_by_name = await client.cached_field_definitions()
         current = await client.get_field_values(entry_id)
     except LaserficheError:
         return None  # let the actual call surface the error
 
-    required_names: list[dict[str, Any]] = []
-    for fd in defs.get("value") or []:
-        if fd.get("isRequired"):
-            required_names.append(fd)
+    required_names: list[dict[str, Any]] = [
+        fd for fd in defs_by_name.values() if fd.get("isRequired")
+    ]
     if not required_names:
         return None
 

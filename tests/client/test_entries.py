@@ -50,6 +50,27 @@ async def test_get_entry_by_path_passes_full_path(
     assert result["id"] == 99
 
 
+@pytest.mark.asyncio
+async def test_get_entry_by_path_unwraps_v1_entry_envelope(
+    httpx_mock: HTTPXMock, lf_env: dict[str, str]
+) -> None:
+    """v1 Repository API wraps the entry in ``{"entry": {...}}``; client must
+    unwrap so EntryDetail.from_api (top-level keys) sees the real fields."""
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/ByPath?fullPath=%5CSandbox",
+        json={"entry": {"id": 84486, "name": "Sandbox", "entryType": "Folder"}},
+    )
+
+    async with _build_client(settings) as client:
+        result = await client.get_entry_by_path("\\Sandbox")
+
+    assert result["id"] == 84486
+    assert result["name"] == "Sandbox"
+    assert result["entryType"] == "Folder"
+
+
 # --- list_folder ------------------------------------------------------------
 
 

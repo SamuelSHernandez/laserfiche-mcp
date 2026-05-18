@@ -9,6 +9,7 @@ makes the relationship obvious and avoids cross-mixin call dependencies.
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 from urllib.parse import urljoin
 
@@ -138,18 +139,47 @@ class _DefinitionsMixin(_CoreClient):
     # so operators can tune the cache window without recreating the
     # client.
 
+    async def _collect_all_definitions(
+        self,
+        fetch: Callable[[int, int], Awaitable[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        """Page through a definitions endpoint with adaptive ``$top`` backoff.
+
+        Starts at ``Settings.max_results_ceiling`` (default 200). Some
+        self-hosted v1 builds reject larger ``$top`` values with HTTP 400
+        ``errorCode 216`` ("query parameter not valid"); on that we halve
+        the page size and retry, down to 1. Anything else propagates.
+        """
+        page_size = max(1, self._settings.max_results_ceiling)
+        items: list[dict[str, Any]] = []
+        skip = 0
+        while True:
+            try:
+                raw = await fetch(page_size, skip)
+            except LaserficheError as exc:
+                if exc.status_code == 400 and page_size > 1:
+                    page_size = max(1, page_size // 2)
+                    continue
+                raise
+            batch = raw.get("value") or []
+            items.extend(batch)
+            if len(batch) < page_size:
+                return items
+            skip += page_size
+
     async def cached_field_definitions(self) -> dict[str, dict[str, Any]]:
         """Cached map of field-name → field-definition dict.
 
-        Underlying GET /FieldDefinitions is paged at $top=500 to fetch
-        every field in one round trip on typical repositories. Cache
-        expires after ``Settings.schema_cache_ttl_seconds``.
+        Pages GET /FieldDefinitions with the configured ceiling as ``$top``.
+        Cache expires after ``Settings.schema_cache_ttl_seconds``.
         """
         cached = self._cache_alive(self._field_def_cache)
         if cached is not None:
             return cached
-        raw = await self.list_field_definitions(max_results=500, skip=0)
-        result = {(fd.get("name") or ""): fd for fd in (raw.get("value") or []) if fd.get("name")}
+        items = await self._collect_all_definitions(
+            lambda top, skip: self.list_field_definitions(max_results=top, skip=skip)
+        )
+        result = {(fd.get("name") or ""): fd for fd in items if fd.get("name")}
         ttl = self._settings.schema_cache_ttl_seconds
         self._field_def_cache = (result, time.monotonic() + ttl)
         return result
@@ -159,8 +189,10 @@ class _DefinitionsMixin(_CoreClient):
         cached = self._cache_alive(self._tag_def_cache)
         if cached is not None:
             return cached
-        raw = await self.list_tag_definitions(max_results=500, skip=0)
-        result = {(td.get("name") or ""): td for td in (raw.get("value") or []) if td.get("name")}
+        items = await self._collect_all_definitions(
+            lambda top, skip: self.list_tag_definitions(max_results=top, skip=skip)
+        )
+        result = {(td.get("name") or ""): td for td in items if td.get("name")}
         ttl = self._settings.schema_cache_ttl_seconds
         self._tag_def_cache = (result, time.monotonic() + ttl)
         return result
@@ -170,8 +202,10 @@ class _DefinitionsMixin(_CoreClient):
         cached = self._cache_alive(self._template_def_cache)
         if cached is not None:
             return cached
-        raw = await self.list_template_definitions(max_results=500, skip=0)
-        result = {(td.get("name") or ""): td for td in (raw.get("value") or []) if td.get("name")}
+        items = await self._collect_all_definitions(
+            lambda top, skip: self.list_template_definitions(max_results=top, skip=skip)
+        )
+        result = {(td.get("name") or ""): td for td in items if td.get("name")}
         ttl = self._settings.schema_cache_ttl_seconds
         self._template_def_cache = (result, time.monotonic() + ttl)
         return result
@@ -181,9 +215,11 @@ class _DefinitionsMixin(_CoreClient):
         cached = self._cache_alive(self._link_def_cache)
         if cached is not None:
             return cached
-        raw = await self.list_link_definitions(max_results=500, skip=0)
+        items = await self._collect_all_definitions(
+            lambda top, skip: self.list_link_definitions(max_results=top, skip=skip)
+        )
         result: dict[int, dict[str, Any]] = {}
-        for ld in raw.get("value") or []:
+        for ld in items:
             ltid = ld.get("linkTypeId")
             if isinstance(ltid, int):
                 result[ltid] = ld

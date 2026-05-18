@@ -293,7 +293,7 @@ async def test_set_fields_rejects_unknown_field_name(
     monkeypatch.setattr(settings, "validate_names", True)
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "Status"}]},
         is_reusable=True,
     )
@@ -327,7 +327,7 @@ async def test_set_tags_rejects_unknown_tag(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/TagDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/TagDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "Confidential"}]},
         is_reusable=True,
     )
@@ -353,7 +353,7 @@ async def test_set_links_rejects_unknown_link_type(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/LinkDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/LinkDefinitions?%24top=200&%24skip=0",
         json={"value": [{"linkTypeId": 1, "sourceLabel": "Supersedes"}]},
         is_reusable=True,
     )

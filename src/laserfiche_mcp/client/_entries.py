@@ -17,12 +17,20 @@ class _EntriesMixin(_CoreClient):
         return await self._request_json("GET", self._repo_path(f"Entries/{entry_id}"))
 
     async def get_entry_by_path(self, full_path: str) -> dict[str, Any]:
-        """GET /Entries/ByPath?fullPath={path}"""
-        return await self._request_json(
+        """GET /Entries/ByPath?fullPath={path}
+
+        v1 wraps the response in ``{"entry": {...}}``; v2 returns the entry
+        at top level. Unwrap here so callers see one consistent shape.
+        """
+        raw = await self._request_json(
             "GET",
             self._repo_path("Entries/ByPath"),
             params={"fullPath": full_path},
         )
+        inner = raw.get("entry") if isinstance(raw, dict) else None
+        if isinstance(inner, dict):
+            return inner
+        return raw
 
     async def list_folder(
         self,

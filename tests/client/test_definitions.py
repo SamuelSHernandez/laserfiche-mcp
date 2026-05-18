@@ -140,7 +140,7 @@ async def test_cached_field_definitions_keyed_by_name(
     settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE_V1}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {"id": 14, "name": "Employee ID", "fieldType": "String", "isRequired": False},
@@ -163,7 +163,7 @@ async def test_cached_field_definitions_hits_cache_on_second_call(
     settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE_V1}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "F1"}]},
     )
     async with _build_client(settings) as client:
@@ -180,12 +180,12 @@ async def test_invalidate_schema_caches_forces_refresh(
     settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE_V1}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "F1"}]},
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE_V1}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "F1"}, {"id": 2, "name": "F2"}]},
     )
     async with _build_client(settings) as client:
@@ -203,7 +203,7 @@ async def test_cached_tag_definitions_keyed_by_name(
     settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE_V1}/TagDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE_V1}/TagDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "Confidential"}]},
     )
     async with _build_client(settings) as client:
@@ -218,7 +218,7 @@ async def test_cached_template_definitions_keyed_by_name(
     settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE_V1}/TemplateDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE_V1}/TemplateDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {"id": 2, "name": "Missionary Document", "fieldCount": 14},
@@ -238,7 +238,7 @@ async def test_cached_link_definitions_keyed_by_id(
     settings = Settings()  # type: ignore[call-arg]
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE_V1}/LinkDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE_V1}/LinkDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {"linkTypeId": 1, "sourceLabel": "Supersedes"},
@@ -262,15 +262,80 @@ async def test_schema_cache_ttl_zero_means_no_caching(
     # Two responses queued — both should be consumed (no cache hit).
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE_V1}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "F1"}]},
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE_V1}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "F1"}]},
     )
     async with _build_client(settings) as client:
         await client.cached_field_definitions()
         await client.cached_field_definitions()
     # If both mocks were consumed, pytest-httpx didn't raise an unmatched-request error.
+
+
+@pytest.mark.asyncio
+async def test_cached_field_definitions_halves_page_size_on_400(
+    httpx_mock: HTTPXMock,
+    lf_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the server rejects a large $top with 400, the cache halves and retries.
+
+    Reproduces the IPRS-class v1 server: $top=200 → 400 errorCode 216,
+    $top=100 → 400, $top=50 → 400, $top=25 → 200 OK.
+    """
+    monkeypatch.setenv("LF_MAX_RESULTS_DEFAULT", "25")
+    monkeypatch.setenv("LF_MAX_RESULTS_CEILING", "200")
+    settings = Settings()  # type: ignore[call-arg]
+    for top in (200, 100, 50):
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_V1}/FieldDefinitions?%24top={top}&%24skip=0",
+            status_code=400,
+            json={"error": {"code": 216, "message": "query parameter not valid"}},
+        )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=25&%24skip=0",
+        json={"value": [{"id": 1, "name": "F1"}]},
+    )
+    async with _build_client(settings) as client:
+        result = await client.cached_field_definitions()
+    assert "F1" in result
+
+
+@pytest.mark.asyncio
+async def test_cached_field_definitions_pages_until_short_batch(
+    httpx_mock: HTTPXMock,
+    lf_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ceiling-sized pages are walked until the server returns < page_size items.
+
+    Defense against the v1 errorCode-216 case: never assume the whole
+    definitions list fits in one round trip.
+    """
+    monkeypatch.setenv("LF_MAX_RESULTS_DEFAULT", "2")
+    monkeypatch.setenv("LF_MAX_RESULTS_CEILING", "2")
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=2&%24skip=0",
+        json={"value": [{"id": 1, "name": "F1"}, {"id": 2, "name": "F2"}]},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=2&%24skip=2",
+        json={"value": [{"id": 3, "name": "F3"}, {"id": 4, "name": "F4"}]},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=2&%24skip=4",
+        json={"value": [{"id": 5, "name": "F5"}]},  # short batch → stop
+    )
+    async with _build_client(settings) as client:
+        result = await client.cached_field_definitions()
+    assert set(result.keys()) == {"F1", "F2", "F3", "F4", "F5"}

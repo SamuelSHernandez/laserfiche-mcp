@@ -133,7 +133,7 @@ async def test_get_template_fields_returns_template_metadata(
 ) -> None:
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/TemplateDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {
@@ -146,7 +146,7 @@ async def test_get_template_fields_returns_template_metadata(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {
@@ -183,7 +183,7 @@ async def test_get_template_fields_required_only_filters(
 ) -> None:
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/TemplateDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {"id": 2, "name": "T", "templateFieldNames": ["A", "B"]},
@@ -192,7 +192,7 @@ async def test_get_template_fields_required_only_filters(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/FieldDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
                 {"id": 1, "name": "A", "fieldType": "String", "isRequired": True},
@@ -213,7 +213,7 @@ async def test_get_template_fields_returns_error_on_unknown_template(
 ) -> None:
     httpx_mock.add_response(
         method="GET",
-        url=f"{_BASE}/TemplateDefinitions?%24top=500&%24skip=0",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
         json={"value": [{"id": 1, "name": "Personnel"}]},
     )
     result = await server.get_template_fields(template_name="DoesNotExist")
