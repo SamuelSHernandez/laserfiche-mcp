@@ -65,7 +65,17 @@ class _StubAuth(AuthStrategy):
 
 @pytest.fixture
 def lf_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:
-    """Set baseline LF_* env vars for the test, isolated via monkeypatch."""
+    """Set baseline LF_* env vars for the test, isolated via monkeypatch.
+
+    Skipped when ``LF_INTEGRATION_TEST=1`` is set in the shell — the opt-in
+    integration tests need the real ``LF_*`` env to talk to a real server
+    rather than the ``lf.example.test`` fakes.
+    """
+    import os
+
+    if os.environ.get("LF_INTEGRATION_TEST") == "1":
+        yield {k: os.environ.get(k, "") for k in _BASE_ENV}
+        return
     for key, value in _BASE_ENV.items():
         monkeypatch.setenv(key, value)
     yield dict(_BASE_ENV)

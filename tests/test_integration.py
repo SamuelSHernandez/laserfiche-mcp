@@ -32,7 +32,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from laserfiche_mcp import server
+from laserfiche_mcp import _app, server
 from laserfiche_mcp.auth import build_auth_strategy
 from laserfiche_mcp.client import LaserficheClient
 from laserfiche_mcp.config import Settings
@@ -65,7 +65,9 @@ async def real_client(
     settings = Settings()  # type: ignore[call-arg]
     auth = build_auth_strategy(settings)
     async with LaserficheClient(settings, auth) as client:
-        monkeypatch.setattr(server, "_client", lambda: client)
+        accessor = lambda: client  # noqa: E731
+        monkeypatch.setattr(_app, "get_client", accessor)
+        monkeypatch.setattr(server, "_client", accessor)
         yield client
 
 
@@ -84,10 +86,11 @@ async def test_integration_search_natural_mode_a_against_real_folder(
         folder_path=folder_path,
     )
 
-    assert result.mode == "guidance"
-    assert result.grammar is not None
-    assert result.candidate_queries, "Mode A should always return at least one candidate"
-    assert result.follow_up is not None
+    assert isinstance(result, dict)
+    assert result.get("mode") == "guidance"
+    assert result.get("grammar") is not None
+    assert result.get("candidate_queries"), "Mode A should always return at least one candidate"
+    assert result.get("follow_up") is not None
 
 
 @pytest.mark.asyncio
@@ -108,12 +111,13 @@ async def test_integration_search_natural_mode_b_surfaces_structured_outcome(
         max_results=5,
     )
 
-    assert result.mode in {"results", "error"}
-    if result.mode == "error":
+    assert isinstance(result, dict)
+    assert result.get("mode") in {"results", "error"}
+    if result.get("mode") == "error":
         # If the server rejects every attempt, the structured error must
         # carry diagnostics — not just an empty shape.
-        assert result.attempts, "error mode must record at least one attempt"
-        assert result.next_action, "error mode must include a next_action hint"
+        assert result.get("attempts"), "error mode must record at least one attempt"
+        assert result.get("next_action"), "error mode must include a next_action hint"
 
 
 # --- get_document_edoc ------------------------------------------------------
@@ -207,11 +211,8 @@ async def test_integration_get_entry_by_path_missing_returns_structured_error(
     """Same as above, for the path-resolution variant."""
     result = await server.get_entry_by_path(full_path="\\__definitely-missing-path__")
     assert isinstance(result, dict)
-    # Some v1 builds return id=0 sentinel instead of a 404; both are acceptable.
-    if result.get("mode") == "error":
-        assert result.get("error") in {"not_found", "auth_failed"}
-    else:
-        assert result.get("id") == 0
+    assert result.get("mode") == "error"
+    assert result.get("error") in {"not_found", "auth_failed"}
 
 
 @pytest.mark.asyncio
