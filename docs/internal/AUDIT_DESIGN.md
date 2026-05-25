@@ -226,8 +226,8 @@ doesn't.
   (`server.py:1187-1211`). Clear. But check: `is_electronic_document`,
   `is_required`, `is_multi_value` follow the `is_*` convention — good.
 - **Non-ISO timestamps** — pydantic models normalize to ISO, but raw
-  OData passthroughs preserve whatever the server sends. On the GC
-  IPRS server the raw responses use ISO 8601 (`2026-05-13T15:23:45.789Z`),
+  OData passthroughs preserve whatever the server sends. On the test
+  v1 server the raw responses use ISO 8601 (`2026-05-13T15:23:45.789Z`),
   but we shouldn't rely on that for builds with different config.
 
 ### Verdict

@@ -204,6 +204,15 @@ class Settings(BaseSettings):
         default="INFO",
         description="Python logging level for the server (DEBUG, INFO, WARNING, ERROR).",
     )
+    log_format: str = Field(
+        default="text",
+        description="Output format for log lines. 'text' (default) emits "
+        "human-readable lines; 'json' emits one JSON object per line "
+        "(suitable for piping to jq or forwarding to Datadog / Splunk). "
+        "Per-tool-call events include `tool`, `request_id`, `outcome`, "
+        "`duration_ms`, redacted args, and (on error) `error_kind` + "
+        "`error_subkind` + `upstream_trace_id`.",
+    )
 
     # --- Validation ---
     @model_validator(mode="after")
@@ -255,6 +264,12 @@ class Settings(BaseSettings):
         if self.log_level.upper() not in valid_levels:
             raise ValueError(
                 f"LF_LOG_LEVEL must be one of {sorted(valid_levels)}, got {self.log_level!r}."
+            )
+
+        valid_formats = {"text", "json"}
+        if self.log_format.lower() not in valid_formats:
+            raise ValueError(
+                f"LF_LOG_FORMAT must be one of {sorted(valid_formats)}, got {self.log_format!r}."
             )
 
         return self

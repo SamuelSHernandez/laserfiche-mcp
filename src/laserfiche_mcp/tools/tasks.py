@@ -4,15 +4,30 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app
 from ..errors import LaserficheError, classify_lf_error
 from ._registry import register
 
+_OPERATION_TOKEN = Annotated[
+    str,
+    Field(
+        description=(
+            "Operation token returned by an async tool (delete_entry, "
+            "copy_entry, occasionally import_document). Server-scoped; "
+            "tokens from a different server instance won't resolve."
+        ),
+        examples=["op-12345-abcd", "task-9f2c-7c1e"],
+        min_length=1,
+    ),
+]
+
 
 @register(v2_name="laserfiche_task_get_status")
-async def get_task_status(operation_token: str) -> dict[str, Any]:
+async def get_task_status(operation_token: _OPERATION_TOKEN) -> dict[str, Any]:
     """Look up the status of an async operation by its token.
 
     The async tools (``delete_entry``, ``copy_entry``, sometimes
@@ -51,9 +66,29 @@ async def get_task_status(operation_token: str) -> dict[str, Any]:
 
 @register(v2_name="laserfiche_task_wait")
 async def wait_for_task(
-    operation_token: str,
-    timeout_seconds: int = 60,
-    poll_interval_seconds: float = 1.0,
+    operation_token: _OPERATION_TOKEN,
+    timeout_seconds: Annotated[
+        int,
+        Field(
+            default=60,
+            description=(
+                "Maximum time to wait. Set higher for large folder deletes "
+                "or large copies. Returns the last observed status with "
+                "timed_out=True if the deadline is reached."
+            ),
+            ge=1,
+            le=3600,
+        ),
+    ] = 60,
+    poll_interval_seconds: Annotated[
+        float,
+        Field(
+            default=1.0,
+            description="Delay between status checks. Bounded below at 0.1s.",
+            ge=0.1,
+            le=60.0,
+        ),
+    ] = 1.0,
 ) -> dict[str, Any]:
     """Block until an async operation reaches a terminal state.
 

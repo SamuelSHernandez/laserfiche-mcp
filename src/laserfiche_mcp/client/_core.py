@@ -20,6 +20,7 @@ import httpx
 from ..auth import AuthStrategy
 from ..config import ApiVersion, Settings
 from ..errors import LaserficheError
+from ..observability import redact
 
 logger = logging.getLogger("laserfiche_mcp.client")
 
@@ -93,6 +94,17 @@ class _CoreClient:
     def _repo_path(self, suffix: str) -> str:
         return build_repo_path(self._base_url, self._repository_id, suffix, self._api_version)
 
+    def _redact_url(self, url: httpx.URL) -> str:
+        """Return ``url`` with the configured host and repo-id replaced.
+
+        Used by retry warnings so the WARNING-level log output doesn't carry
+        a deployment fingerprint (hostname + repository ID) into shared log
+        aggregators. The path and query string survive untouched so
+        operators can still see which endpoint was retried.
+        """
+        host = self._settings.repo_api_url.host if self._settings.repo_api_url else None
+        return cast(str, redact(str(url), host=host, repo_id=self._repository_id or None))
+
     async def _send(self, request: httpx.Request) -> httpx.Response:
         """Apply auth, send, and retry on transient failures."""
         if self._http is None:
@@ -113,7 +125,7 @@ class _CoreClient:
                 logger.warning(
                     "Network error on %s %s (attempt %d/%d): %s; retrying in %ds",
                     request.method,
-                    request.url,
+                    self._redact_url(request.url),
                     attempt + 1,
                     attempts,
                     exc,
@@ -128,7 +140,7 @@ class _CoreClient:
                     "Retryable status %d on %s %s (attempt %d/%d); retrying in %ds",
                     response.status_code,
                     request.method,
-                    request.url,
+                    self._redact_url(request.url),
                     attempt + 1,
                     attempts,
                     delay,

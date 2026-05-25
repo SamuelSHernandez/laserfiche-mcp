@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import mimetypes
 import os
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app
 from .._app import get_settings
@@ -26,12 +28,65 @@ from ._validators import (
 
 @register(v2_name="laserfiche_folder_create", is_write=True)
 async def create_folder(
-    parent_id: int,
-    name: str,
-    template_name: str | None = None,
-    fields: dict[str, list[Any]] | None = None,
+    parent_id: Annotated[
+        int,
+        Field(
+            description=(
+                "Integer entry ID of the destination folder. Root is "
+                "typically ID 1. Resolve a path with get_entry_by_path "
+                "first if you only have a path string."
+            ),
+            ge=1,
+        ),
+    ],
+    name: Annotated[
+        str,
+        Field(
+            description=(
+                "New folder name. Backslashes, forward slashes, NUL bytes, "
+                "and control characters are rejected. Max length 128."
+            ),
+            examples=["2024-Onboarding", "Q3 Reports"],
+            min_length=1,
+            max_length=128,
+        ),
+    ],
+    template_name: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Optional template to assign on creation. Use "
+                "list_template_definitions to discover names."
+            ),
+            examples=["Personnel Document"],
+        ),
+    ] = None,
+    fields: Annotated[
+        dict[str, list[Any]] | None,
+        Field(
+            default=None,
+            description=(
+                "Optional initial template-field values. Mapping of field "
+                "name → list of values (one item per single-value field, "
+                "many for multi-value). Required when the assigned "
+                "template (or repo-wide required fields) demand them."
+            ),
+            examples=[{"Status": ["Active"], "Department": ["HR"]}],
+        ),
+    ] = None,
     *,
-    auto_rename: bool = False,
+    auto_rename: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "When True, the server appends a numeric suffix if name "
+                "already exists in the parent. When False (default), a "
+                "collision returns an error."
+            ),
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """Create a new folder as a child of ``parent_id``.
 
@@ -110,11 +165,33 @@ async def create_folder(
 
 @register(v2_name="laserfiche_entry_copy", is_write=True)
 async def copy_entry(
-    source_id: int,
-    parent_id: int,
-    name: str,
+    source_id: Annotated[
+        int,
+        Field(description="Integer entry ID of the entry to copy.", ge=1),
+    ],
+    parent_id: Annotated[
+        int,
+        Field(description="Integer entry ID of the destination folder.", ge=1),
+    ],
+    name: Annotated[
+        str,
+        Field(
+            description="New name for the copy. Must be path-safe (no backslashes).",
+            min_length=1,
+            max_length=128,
+        ),
+    ],
     *,
-    auto_rename: bool = False,
+    auto_rename: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "When True, server appends a numeric suffix if name "
+                "collides in the destination."
+            ),
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """Copy an existing entry into a new location with a new name.
 
@@ -226,15 +303,80 @@ def _build_import_metadata(
 
 @register(v2_name="laserfiche_document_import", is_write=True)
 async def import_document(
-    parent_id: int,
-    name: str,
-    file_path: str,
-    template_name: str | None = None,
-    fields: dict[str, list[Any]] | None = None,
-    tags: list[str] | None = None,
-    content_type: str | None = None,
+    parent_id: Annotated[
+        int,
+        Field(description="Integer entry ID of the destination folder.", ge=1),
+    ],
+    name: Annotated[
+        str,
+        Field(
+            description=(
+                "Filename to use inside Laserfiche (extension matters for "
+                "content-type sniffing). Backslashes are not allowed."
+            ),
+            examples=["invoice-2024-Q3.pdf", "smith-john-resume.docx"],
+            min_length=1,
+            max_length=128,
+        ),
+    ],
+    file_path: Annotated[
+        str,
+        Field(
+            description=(
+                "Absolute or working-directory-relative path to the local "
+                "file. Must exist and be readable by the MCP process. "
+                "Path is interpreted on the MCP server's filesystem — "
+                "typically the same machine as Claude Desktop/Code."
+            ),
+            examples=["/tmp/uploads/invoice.pdf", "C:\\Users\\me\\Documents\\report.pdf"],
+            min_length=1,
+        ),
+    ],
+    template_name: Annotated[
+        str | None,
+        Field(default=None, description="Optional template to assign on import."),
+    ] = None,
+    fields: Annotated[
+        dict[str, list[Any]] | None,
+        Field(
+            default=None,
+            description="Optional template-field values to set on import.",
+            examples=[{"Vendor": ["Acme"], "Invoice Date": ["2024-09-15"]}],
+        ),
+    ] = None,
+    tags: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description=(
+                "Optional list of tag names to attach. Tags must already "
+                "exist as definitions (see list_tag_definitions)."
+            ),
+            examples=[["Confidential", "Q3-2024"]],
+        ),
+    ] = None,
+    content_type: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Override the auto-detected MIME type. If omitted, the "
+                "client sniffs from `name`'s extension."
+            ),
+            examples=[
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ],
+        ),
+    ] = None,
     *,
-    auto_rename: bool = False,
+    auto_rename: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="When True, server appends a numeric suffix if name collides.",
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """Upload a local file as a new document into a Laserfiche folder.
 

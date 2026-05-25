@@ -22,8 +22,9 @@ This module owns two responsibilities:
 
 from __future__ import annotations
 
-import uuid as _uuid
 from typing import Any
+
+from .observability import get_request_id_or_new
 
 
 class LaserficheError(Exception):
@@ -217,7 +218,10 @@ def classify_lf_error(
         "server_error_code": error_code,
         "server_message": title,
         "reason": reason,
-        "request_id": str(_uuid.uuid4()),
+        # request_id is the per-tool-call UUID set by tool_logger via
+        # ContextVar. Outside a tool-logger context (direct test calls)
+        # we fall back to a fresh UUID so the field is never null.
+        "request_id": get_request_id_or_new(),
         "upstream_trace_id": trace_id,
     }
     if entry_id is not None:
@@ -237,8 +241,10 @@ def invalid_token_response(
         "mode": "error",
         "operation": operation,
         "entry_id": entry_id,
+        "kind": "invalid_input",
         "error": "invalid_confirmation_token",
         "reason": reason,
+        "request_id": get_request_id_or_new(),
         "next_step": (
             "Re-run the same tool without confirmation_token to get a fresh "
             "preview and a new token."

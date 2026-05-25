@@ -7,6 +7,148 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — observability (PLAN_ERRORS.md step 7)
+- **`observability.py` module** with three primitives:
+  - **`redact(obj, *, host=None, repo_id=None)`** — single redaction
+    helper. Replaces values of credential-like keys (`password`,
+    `token`, `api_key`, `confirmation_token`, etc.) with
+    `"<redacted>"`, recursing into dicts/lists/tuples. Strings have
+    the configured host and repo-id substrings rewritten to
+    `"<repo_host>"` / `"<repo_id>"` (whole-segment match for repo-id).
+  - **`request_id` ContextVar** + `get_request_id()` /
+    `get_request_id_or_new()`. The decorator below sets the var on
+    entry; `errors.classify_lf_error` reads it so the per-tool-call
+    log line and the agent-visible error response carry the same ID.
+  - **`tool_logger` decorator** — emits exactly one structured event
+    per tool call: `{tool, request_id, outcome, duration_ms, args
+    (redacted), error_kind?, error_subkind?, upstream_trace_id?}`.
+    Idempotent (double-wrapping is a no-op), so it's safe to apply
+    once at registration and reuse the wrapped function under both
+    the legacy and v2 names.
+  - **`JsonLogFormatter` + `configure_logging(level, format_)`** —
+    one JSON object per log line when `LF_LOG_FORMAT=json`. Plain
+    text format remains the default. Per-tool-call events hoist to
+    a top-level `event` key for easy `jq` filtering.
+- **`LF_LOG_FORMAT` env var** (`text` | `json`, default `text`).
+  Surfaced in `--diagnose` output alongside the existing log-level
+  and write-mode reports.
+- Retry warnings in `client/_core.py` now log the **full URL** with
+  host + repo-id substituted — strictly more diagnostic value than
+  the prior path-only redaction, with the same safety guarantee.
+
+### Added — preview/execute splits (PLAN.md step 4)
+Ten new tools, two per destructive operation, registered alongside
+the existing multiplex tools as v2.x peers (no breaking change):
+- `rename_entry_preview` / `rename_entry_execute`
+- `move_entry_preview` / `move_entry_execute`
+- `delete_entry_preview` / `delete_entry_execute`
+- `delete_edoc_preview` / `delete_edoc_execute`
+- `delete_pages_preview` / `delete_pages_execute`
+
+Each split refuses the wrong call shape with a structured error:
+`..._preview` returns `preview_does_not_accept_token` if the agent
+passes a token; `..._execute` returns `execute_requires_token` if
+the agent omits it (or passes the empty string). v2 names follow
+`laserfiche_{resource}_{verb}_{preview|execute}` per the existing
+naming map.
+
+### Added — rich parameter descriptions in JSON schema (PLAN_DESIGN.md step 6)
+Every tool parameter with a non-obvious shape now carries
+`Annotated[type, Field(description=..., examples=[...])]` annotations.
+The MCP catalog the LLM sees gains:
+
+- Rich descriptions on params like `query` (Laserfiche search syntax),
+  `full_path` (backslash format), `name_pattern` (wildcard rules),
+  `page_range` (refused-when-empty rationale), `fields` / `updates`
+  (multi-value list shape with empty-list-to-clear semantics),
+  `links` (target/linkType dict shape), `file_path` (MCP-server
+  filesystem caveat), `confirmation_token` (TTL + binding).
+- Concrete `examples` arrays so the model can copy proven shapes
+  instead of guessing — Laserfiche query clauses, sample paths,
+  field-update dicts, page ranges.
+- Min/max constraints (`ge`, `le`, `min_length`, `max_length`) on
+  numeric and string params where they exist server-side or
+  client-side.
+
+Tools touched: every read tool (search/list/get), every write tool
+(set/merge/create/copy/import/rename/move/delete/template), the 5
+v2.x collapses (field_update etc.), and the 10 preview/execute
+splits. No runtime behavior change — purely schema enrichment.
+
+### Added — collapsed write tools (PLAN.md step 3)
+Five new tools that subsume the existing `set_*` / `merge_*` /
+`assign_*` / `remove_*` pairs so the LLM only has to learn one
+name + a `mode` argument:
+- **`field_update(entry_id, updates, mode="merge")`** — wraps
+  `merge_fields` (default, safer) and `set_fields` (`mode="replace"`).
+- **`tag_update(entry_id, add=None, remove=None, replace=None)`** —
+  wraps `merge_tags` (when `replace` is omitted) and `set_tags`
+  (when `replace=...` is supplied, even `replace=[]` to clear).
+  Refuses `conflicting_modes` if both `replace` and `add`/`remove`
+  are passed.
+- **`link_update(entry_id, links, mode="replace")`** — wraps
+  `set_links`. `mode="merge"` reads current links, unions, and PUTs
+  (the server has no delta endpoint; this is GET-then-PUT).
+- **`template_assign_or_remove(entry_id, template_name=None, fields=None)`**
+  — wraps `assign_template` (when `template_name` is set) and
+  `remove_template` (when `None`). Refuses `fields=` on the remove
+  path with `fields_ignored_on_remove`.
+- **`task_wait_or_poll(operation_token, timeout_seconds=60)`** —
+  wraps `wait_for_task` (default) and `get_task_status`
+  (`timeout_seconds=0`).
+
+Original tool names remain registered as peers.
+
+### Changed — request_id is now per-call, not per-error
+`errors.classify_lf_error` previously generated a fresh UUID4 on
+every invocation, so two errors in the same tool call would get
+different `request_id`s. The classifier now reads from the
+ContextVar set by `tool_logger`, falling back to a fresh UUID only
+when called outside any tool-logger context. Net effect: a tool call
+that emits one log line and surfaces one error response shows the
+same `request_id` on both — an operator can pivot from log to error
+or vice versa with a single grep.
+
+### Added — contributor experience
+- **`.gitattributes`** enforcing LF line endings on every text file.
+  Stops Windows clones from failing `ruff format --check` locally
+  with 58 unrelated "would reformat" entries — the most common
+  blocker for first-time contributors on Windows.
+- **`smithery.yaml`** now exposes every runtime env var the server
+  understands: `LF_API_VERSION`, `LF_VALIDATE_NAMES`,
+  `LF_SCHEMA_CACHE_TTL_SECONDS`, `LF_MAX_PAGE_SIZE`,
+  `LF_EDOC_MAX_BYTES`, plus the full write-mode safety block
+  (`LF_WRITE_PATHS_ALLOW/DENY`, `LF_WRITE_TOOLS_ALLOWED`,
+  `LF_DELETE_FOLDER_MAX_DESCENDANTS`, `LF_REQUIRE_AUDIT_REASON`,
+  `LF_VALIDATE_REQUIRED_FIELDS`, `LF_IMPORT_MAX_BYTES`). One-click
+  Smithery installs can now configure write mode end-to-end.
+
+### Changed — public-release sanitization
+- **Log redaction in auth and retry paths.** `auth.py` `_refresh()` log
+  lines no longer include the token URL (operator already configured
+  the host; DEBUG-level URL emission added needless deployment-context
+  to log aggregators). Client retry warnings in `client/_core.py` now
+  log only `request.url.path` instead of the full URL — the host (and
+  any embedded credentials in unusual configs) no longer reach WARNING
+  output. Path retains repo-id + endpoint so retries are still
+  diagnosable.
+- **Example template names** in docstrings, search grammar, tutorial,
+  and tests changed from domain-specific (`Missionary Application`,
+  `Missionary Document`) to neutral (`Loan Application`,
+  `Personnel Document`). No behavior change; LLM-facing tool docs
+  and `getting-started.md` show generic examples.
+- **Test fixture repo ID** in `tests/client/test_definitions.py`
+  replaced (`IPRS` → `MAIN`); related comment generalized.
+- **`docs/internal/` worked notes** sanitized: example hostnames
+  (`gc-its-dm-repo`) → `lf.example.com`, deployment references
+  (`GC IPRS sandbox`, `IPRS server`) → generic (`v1 test repository`,
+  `test v1 server`). Documents remain accurate; the customer-specific
+  identifiers are removed.
+- **`docs/internal/AUDIT_ERRORS.md`** logging-leak findings annotated
+  as remediated with pointers to the new locations.
+- **`CONTRIBUTING.md`** adds a Windows line-ending note and lists
+  `ruff format --check` alongside the other CI commands.
+
 ## [2.0.0] - 2026-05-14
 
 This is a major release that reshapes the public surface based on a

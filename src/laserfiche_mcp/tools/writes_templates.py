@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app
 from ..errors import LaserficheError, classify_lf_error
@@ -22,9 +24,35 @@ from ._validators import (
 
 @register(v2_name="laserfiche_template_assign", is_write=True)
 async def assign_template(
-    entry_id: int,
-    template_name: str,
-    fields: dict[str, list[Any]] | None = None,
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID to template.", ge=1),
+    ],
+    template_name: Annotated[
+        str,
+        Field(
+            description=(
+                "Exact name of the template. Case-sensitive on most builds. "
+                "Use list_template_definitions or get_template_fields to "
+                "discover what's available."
+            ),
+            examples=["Personnel Document", "Invoice", "Loan Application"],
+        ),
+    ],
+    fields: Annotated[
+        dict[str, list[Any]] | None,
+        Field(
+            default=None,
+            description=(
+                "Optional initial field values to set in the same call. "
+                "Mapping of field name → list of values (one item for "
+                "single-value, many for multi-value). Often required when "
+                "the template declares required fields — the validator "
+                "tells you which."
+            ),
+            examples=[{"Last Name": ["Smith"], "Hire Date": ["2024-01-15"]}],
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Assign a template to an entry, optionally with initial field values.
 
@@ -109,7 +137,9 @@ async def assign_template(
 
 
 @register(v2_name="laserfiche_template_remove", is_write=True)
-async def remove_template(entry_id: int) -> dict[str, Any]:
+async def remove_template(
+    entry_id: Annotated[int, Field(description="Integer entry ID.", ge=1)],
+) -> dict[str, Any]:
     """Clear the template assigned to an entry.
 
     Removes the template association; templated field values are

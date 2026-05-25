@@ -2,12 +2,45 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app
 from .._app import clamp_max_results, get_settings
 from ..errors import LaserficheError, classify_lf_error
 from ._registry import register
+
+# Shared field annotations for the four list_*_definitions tools so the
+# JSON schema the LLM sees stays consistent across them.
+_DEF_MAX_RESULTS = Annotated[
+    int | None,
+    Field(
+        default=None,
+        description="Page size (default 25, capped by LF_MAX_RESULTS_CEILING).",
+        ge=1,
+        le=1000,
+    ),
+]
+_DEF_SKIP = Annotated[
+    int,
+    Field(
+        default=0,
+        description="0-indexed offset for pagination through large repositories.",
+        ge=0,
+    ),
+]
+_DEF_SUMMARY_ONLY = Annotated[
+    bool,
+    Field(
+        default=False,
+        description=(
+            "When True, return only {count, names} instead of the full "
+            "OData listing — useful for 'what's available?' lookups that "
+            "would otherwise return 30-50 KB of definition payload."
+        ),
+    ),
+]
 
 
 @register(v2_name="laserfiche_repository_list")
@@ -70,10 +103,10 @@ def _summarize_definition_list(raw: dict[str, Any]) -> dict[str, Any]:
 
 @register(v2_name="laserfiche_field_definition_list")
 async def list_field_definitions(
-    max_results: int | None = None,
-    skip: int = 0,
+    max_results: _DEF_MAX_RESULTS = None,
+    skip: _DEF_SKIP = 0,
     *,
-    summary_only: bool = False,
+    summary_only: _DEF_SUMMARY_ONLY = False,
 ) -> dict[str, Any]:
     """List every field definition in the repository.
 
@@ -114,10 +147,10 @@ async def list_field_definitions(
 
 @register(v2_name="laserfiche_tag_definition_list")
 async def list_tag_definitions(
-    max_results: int | None = None,
-    skip: int = 0,
+    max_results: _DEF_MAX_RESULTS = None,
+    skip: _DEF_SKIP = 0,
     *,
-    summary_only: bool = False,
+    summary_only: _DEF_SUMMARY_ONLY = False,
 ) -> dict[str, Any]:
     """List every tag definition in the repository.
 
@@ -151,11 +184,21 @@ async def list_tag_definitions(
 
 @register(v2_name="laserfiche_template_definition_list")
 async def list_template_definitions(
-    template_name: str | None = None,
-    max_results: int | None = None,
-    skip: int = 0,
+    template_name: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "If set, return only the template with this exact name. "
+                "Case-sensitive on most builds."
+            ),
+            examples=["Personnel Document", "Loan Application"],
+        ),
+    ] = None,
+    max_results: _DEF_MAX_RESULTS = None,
+    skip: _DEF_SKIP = 0,
     *,
-    summary_only: bool = False,
+    summary_only: _DEF_SUMMARY_ONLY = False,
 ) -> dict[str, Any]:
     """List template definitions in the repository.
 
@@ -193,9 +236,27 @@ async def list_template_definitions(
 
 @register(v2_name="laserfiche_template_field_list")
 async def get_template_fields(
-    template_name: str,
+    template_name: Annotated[
+        str,
+        Field(
+            description=(
+                "Exact template name (case-sensitive on most builds). Use "
+                "list_template_definitions to discover available names."
+            ),
+            examples=["Personnel Document", "Loan Application", "Invoice"],
+        ),
+    ],
     *,
-    required_only: bool = False,
+    required_only: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "When True, return only fields where is_required is true — "
+                "useful for 'what's the minimum I have to supply?' workflows."
+            ),
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """Return the fields belonging to a single template, with full field metadata.
 
@@ -285,10 +346,10 @@ async def get_template_fields(
 
 @register(v2_name="laserfiche_link_definition_list")
 async def list_link_definitions(
-    max_results: int | None = None,
-    skip: int = 0,
+    max_results: _DEF_MAX_RESULTS = None,
+    skip: _DEF_SKIP = 0,
     *,
-    summary_only: bool = False,
+    summary_only: _DEF_SUMMARY_ONLY = False,
 ) -> dict[str, Any]:
     """List the entry-link type definitions available on this repository.
 

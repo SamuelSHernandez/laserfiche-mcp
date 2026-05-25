@@ -18,11 +18,30 @@ Every PR should leave these clean:
 ```bash
 uv run pytest
 uv run ruff check src tests
+uv run ruff format --check src tests
 uv run mypy src
 ```
 
-CI runs the same three commands across Python 3.10–3.13 on every push and
+CI runs the same commands across Python 3.10–3.13 on every push and
 pull request.
+
+### Windows line-ending note
+
+The repo's [`.gitattributes`](.gitattributes) normalizes all text
+files to LF. `ruff format --check` is configured `line-ending = "lf"`
+and will flag every file as "would reformat" if your working tree
+has CRLF endings.
+
+If you cloned the repo *before* `.gitattributes` was added (or if your
+clone shows CRLF on disk despite the attribute), run once:
+
+```bash
+git rm --cached -r .
+git reset --hard
+```
+
+That re-checks-out every tracked file with the attributes applied. No
+content change — just line endings.
 
 ## Where help is most welcome
 

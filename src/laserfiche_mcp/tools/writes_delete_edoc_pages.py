@@ -10,7 +10,9 @@ whole entry (and recursively all descendants for folders).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app, confirmation
 from ..errors import LaserficheError, classify_lf_error, invalid_token_response
@@ -28,8 +30,20 @@ from ._validators import validate_page_range_input
 
 @register(v2_name="laserfiche_document_edoc_delete", is_write=True)
 async def delete_edoc(
-    entry_id: int,
-    confirmation_token: str | None = None,
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID of an electronic document.", ge=1),
+    ],
+    confirmation_token: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "From the preview response. HMAC-signed, 5-minute TTL. "
+                "Omit to get a fresh preview; pass to execute."
+            ),
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Wipe a document's binary content while keeping the entry metadata.
 
@@ -127,9 +141,30 @@ async def delete_edoc(
 
 @register(v2_name="laserfiche_document_pages_delete", is_write=True)
 async def delete_pages(
-    entry_id: int,
-    page_range: str,
-    confirmation_token: str | None = None,
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID of a paginated document.", ge=1),
+    ],
+    page_range: Annotated[
+        str,
+        Field(
+            description=(
+                "Page-range expression. REQUIRED and non-empty. The API "
+                "treats empty as 'delete all pages' — this tool refuses "
+                "empty to remove that footgun. Pass an explicit wide "
+                "range like '1-9999' if you genuinely want every page."
+            ),
+            examples=["1,2,3", "1-3,5", "2-7,10-12", "1-9999"],
+            min_length=1,
+        ),
+    ],
+    confirmation_token: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="From the preview. HMAC-signed, 5-minute TTL.",
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Delete specific pages from a paginated document. **Two-step: preview, then execute.**
 

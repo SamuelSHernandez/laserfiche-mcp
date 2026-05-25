@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app, confirmation
 from ..errors import LaserficheError, classify_lf_error, invalid_token_response
@@ -61,9 +63,33 @@ def _rename_preview(
 
 @register(v2_name="laserfiche_entry_rename", is_write=True)
 async def rename_entry(
-    entry_id: int,
-    new_name: str,
-    confirmation_token: str | None = None,
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID to rename.", ge=1),
+    ],
+    new_name: Annotated[
+        str,
+        Field(
+            description=(
+                "New name to apply. Path-safe (no backslashes, forward "
+                "slashes, NUL bytes, or control characters). Max 128 chars."
+            ),
+            examples=["report-final.pdf", "Smith,John-renamed.pdf"],
+            min_length=1,
+            max_length=128,
+        ),
+    ],
+    confirmation_token: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "From the preview response. HMAC-signed, 5-minute TTL, "
+                "bound to (operation, entry_id, current_name). Omit to get "
+                "a fresh preview; pass to execute."
+            ),
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Rename an entry. **Two-step: preview first, then execute with token.**
 
@@ -206,10 +232,37 @@ def _move_preview(
 
 @register(v2_name="laserfiche_entry_move", is_write=True)
 async def move_entry(
-    entry_id: int,
-    new_parent_id: int,
-    confirmation_token: str | None = None,
-    new_name: str | None = None,
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID of the entry to move.", ge=1),
+    ],
+    new_parent_id: Annotated[
+        int,
+        Field(description="Integer entry ID of the destination folder.", ge=1),
+    ],
+    confirmation_token: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "From the preview response. HMAC-signed, 5-minute TTL. "
+                "Omit to get a fresh preview; pass to execute."
+            ),
+        ),
+    ] = None,
+    new_name: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Optional rename to apply in the same operation. If "
+                "omitted, the entry keeps its current name in the new "
+                "location. Path-safe (no backslashes)."
+            ),
+            min_length=1,
+            max_length=128,
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Move an entry to a different parent folder. **Two-step: preview, then execute.**
 

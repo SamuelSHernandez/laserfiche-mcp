@@ -115,7 +115,11 @@ async def test_all_tools_registered() -> None:
     LF_READ_ONLY=false at startup (see test_write_tools_registered_when_writes_enabled)."""
     tools = await server.mcp.list_tools()
     names = {t.name for t in tools}
-    # v1.x names — kept as deprecation shims through v2.0.
+    # v1.x names — kept as deprecation shims through v2.0. The
+    # ``task_wait_or_poll`` entry is the v2.x collapse of
+    # ``get_task_status`` + ``wait_for_task`` (PLAN.md step 3); it's
+    # the only collapse that's a read (the field/tag/link/template
+    # collapses are all writes).
     legacy = {
         "search_entries",
         "search_by_name",
@@ -135,6 +139,7 @@ async def test_all_tools_registered() -> None:
         "get_task_status",
         "wait_for_task",
         "get_template_fields",
+        "task_wait_or_poll",
     }
     # v2.0 names — laserfiche_{resource}_{verb}. From _V2_RENAME_MAP.
     v2 = set(server._V2_RENAME_MAP.values())

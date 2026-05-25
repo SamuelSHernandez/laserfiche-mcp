@@ -24,6 +24,7 @@ from .auth import build_auth_strategy
 from .client import LaserficheClient
 from .config import Settings
 from .errors import LaserficheError
+from .observability import configure_logging
 
 logger = logging.getLogger("laserfiche_mcp")
 
@@ -227,6 +228,7 @@ async def _run_diagnose(settings: Settings) -> int:
             line(result.label, result.display_status())
 
     _print_write_mode_report(settings)
+    _print_observability_report(settings)
 
     print()
     print(
@@ -235,6 +237,20 @@ async def _run_diagnose(settings: Settings) -> int:
         "for the relevant error slug."
     )
     return 0
+
+
+def _print_observability_report(settings: Settings) -> None:
+    """Print the ``Observability:`` section of the diagnostic report."""
+
+    def line(label: str, status: str) -> None:
+        print(f"  {label:<32} {status}")
+
+    print()
+    print("Observability:")
+    line("LF_LOG_LEVEL", settings.log_level.upper())
+    line("LF_LOG_FORMAT", settings.log_format.lower())
+    line("Per-tool-call structured log", "enabled (tool_logger decorator)")
+    line("Credential redaction", "enabled (observability.redact)")
 
 
 def _load_config_file(path: str) -> None:
@@ -284,7 +300,7 @@ def main(register_writes: Callable[[], None]) -> None:
         sys.exit(2)
 
     log_level = _resolve_log_level(settings, args)
-    logging.basicConfig(level=log_level)
+    configure_logging(level=log_level, format_=settings.log_format)
 
     if args.diagnose:
         exit_code = asyncio.run(_run_diagnose(settings))
