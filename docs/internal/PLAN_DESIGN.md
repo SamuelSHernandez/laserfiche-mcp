@@ -162,7 +162,7 @@ async def laserfiche_entry_search(
         ),
         examples=[
             '{LF:Name="Onboarding*"}',
-            '{[Missionary Application]:[Last Name]="Smith"}',
+            '{[Loan Application]:[Last Name]="Smith"}',
             '{LF:Name="*.pdf"} & {[Application]:[Status]="Approved"}',
         ],
     )],
@@ -714,11 +714,11 @@ For every shim:
 - Assert wire-shape matches v1.5 (where preservable) or matches the
   documented v2 shape (where not).
 
-### Integration tests against GC IPRS
+### Integration tests against the test v1 repository
 
 Per `PLAN.md` 2e:
 - Full surface coverage (one call per tool).
-- Workflow F E2E (`template_field_list` against Missionary Document).
+- Workflow F E2E (`template_field_list` against Personnel Document).
 - Pre-flight validation E2E (unknown field, unknown template,
   unknown tag, wrong entry_type).
 - Path-traversal block E2E.

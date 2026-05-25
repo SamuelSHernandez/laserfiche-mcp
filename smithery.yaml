@@ -28,11 +28,16 @@ configSchema:
     LF_REPOSITORY_ID:
       type: string
       description: "Repository name or ID to operate against."
+    LF_API_VERSION:
+      type: string
+      enum: [v1, v2]
+      default: v1
+      description: "LFRepositoryAPI version exposed by your server. Probe with GET {LF_REPO_API_URL}/v1/Repositories vs /v2/Repositories — whichever returns a JSON 200 is your version."
     LF_AUTH_MODE:
       type: string
       enum: [password, oauth]
       default: password
-      description: "Auth strategy. 'password' exchanges username/password for a bearer token via /v2/{repo}/Token. 'oauth' uses a client_credentials grant against an LFDS-compatible OAuth server."
+      description: "Auth strategy. 'password' exchanges username/password for a bearer token via /{api_version}/Repositories/{repo}/Token. 'oauth' uses a client_credentials grant against an LFDS-compatible OAuth server."
     LF_USERNAME:
       type: string
       description: "Service account username (for password mode)."
@@ -80,8 +85,50 @@ configSchema:
       type: integer
       default: 200
       description: "Hard cap on page size regardless of caller-requested value."
+    LF_MAX_PAGE_SIZE:
+      type: integer
+      default: 100
+      description: "Dedicated page-size cap for search_natural. Some self-hosted SimpleSearches implementations reject $top above an internal limit."
+    LF_EDOC_MAX_BYTES:
+      type: integer
+      default: 26214400
+      description: "Cap on get_document_edoc downloads in bytes/text modes (default 25 MB)."
     LF_LOG_LEVEL:
       type: string
       enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
       default: INFO
       description: "Python logging verbosity."
+    LF_VALIDATE_NAMES:
+      type: boolean
+      default: true
+      description: "Pre-flight field / tag / template / link-type names against cached schema definitions before write calls. Returns structured invalid_*_name errors instead of opaque server 400s."
+    LF_SCHEMA_CACHE_TTL_SECONDS:
+      type: integer
+      default: 300
+      description: "Cache window for the schema-definition lookups that back LF_VALIDATE_NAMES and LF_VALIDATE_REQUIRED_FIELDS. Set to 0 to disable caching."
+    # --- Write-mode safety guards (only relevant when LF_READ_ONLY=false) -----
+    LF_WRITE_PATHS_ALLOW:
+      type: string
+      description: "Comma-separated path prefixes where writes are permitted (case-insensitive). Strongest single fence — recommended for any non-trivial write deployment. Example: \\Imports\\Pending,\\Archive\\WIP"
+    LF_WRITE_PATHS_DENY:
+      type: string
+      description: "Comma-separated path prefixes where writes are refused. Deny wins over allow."
+    LF_WRITE_TOOLS_ALLOWED:
+      type: string
+      description: "Comma-separated write-tool names to scope what registers at startup. Example: merge_fields,merge_tags,assign_template for metadata-only deployments."
+    LF_DELETE_FOLDER_MAX_DESCENDANTS:
+      type: integer
+      default: 50
+      description: "Refuse folder deletes above this immediate-child count unless force_large_delete=true is passed with the confirmation token."
+    LF_REQUIRE_AUDIT_REASON:
+      type: boolean
+      default: false
+      description: "When true, delete_entry refuses without an audit_reason_id. Use get_audit_reasons to enumerate valid IDs."
+    LF_VALIDATE_REQUIRED_FIELDS:
+      type: boolean
+      default: true
+      description: "Validate repository-wide required fields client-side before assign_template PUTs."
+    LF_IMPORT_MAX_BYTES:
+      type: integer
+      default: 26214400
+      description: "Client-side cap on import_document payload size (default 25 MB)."

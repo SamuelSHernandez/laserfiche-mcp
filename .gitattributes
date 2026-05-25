@@ -1,0 +1,30 @@
+# Normalize all text files to LF in the repo AND working tree.
+#
+# Without this, Windows checkouts with `core.autocrlf=true` end up with
+# CRLF line endings on disk, which `ruff format --check` (configured
+# `line-ending = "lf"` in pyproject.toml) flags as "would reformat" on
+# every file. The CI gate runs on Linux, hides the problem from main,
+# and silently breaks the local developer experience on Windows.
+#
+# Effect: a Windows clone after this lands will have LF line endings
+# regardless of the user's `core.autocrlf` setting. Existing clones
+# need a one-time `git add --renormalize . && git commit` (or simply
+# `git rm --cached -r . && git checkout .`) — see CONTRIBUTING.md.
+
+* text=auto eol=lf
+
+# Explicit overrides for clarity.
+*.py    text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.lock  text eol=lf
+*.sh    text eol=lf
+*.txt   text eol=lf
+
+# Binary fixtures — never normalize.
+*.pdf   binary
+*.png   binary
+*.jpg   binary

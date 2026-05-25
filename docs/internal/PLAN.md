@@ -208,7 +208,7 @@ Tests must pass.
 
 ### Step 8 — Final: tests, docs, version bump, ship
 - Full unit + mock-integration test pass.
-- Integration test pass against GC IPRS sandbox (with
+- Integration test pass against the v1 test repository (with
   `LF_INTEGRATION_TEST=1`).
 - Update `README.md`, `CHANGELOG.md`, `docs/error-contract.md`,
   `docs/getting-started.md`, `TODO.md`.
@@ -329,7 +329,7 @@ Every new and changed tool gets coverage across three test surfaces.
 - Path-fence `..` rejection: tests for normalized and un-normalized
   `..` segments, mixed slash variants.
 
-### Integration tests (`LF_INTEGRATION_TEST=1` against GC IPRS sandbox)
+### Integration tests (`LF_INTEGRATION_TEST=1` against the v1 test repository)
 
 Extend `tests/test_integration.py`:
 
@@ -339,7 +339,7 @@ Extend `tests/test_integration.py`:
   assert it returns the same structured result and logs a
   deprecation warning.
 - **Workflow F:** call `template_field_list` against a real
-  Missionary Document template; verify required fields are flagged.
+  Personnel Document template; verify required fields are flagged.
 - **Pre-flight validations against real schema:** unknown template
   name returns `invalid_template_name` with the valid template list;
   unknown field name returns `invalid_field_name`.
@@ -352,8 +352,8 @@ Extend `tests/test_integration.py`:
 
 ### CLI tests (`--diagnose`)
 
-- After Step 8, `uv run laserfiche-mcp --diagnose` against the GC
-  IPRS sandbox reports:
+- After Step 8, `uv run laserfiche-mcp --diagnose` against the v1
+  test repository reports:
   - All 36 v2 tools registered (or 32 + 5 split + 1 new − 4 collapse
     + 0 deletion = 36, less 11 old-name shims if hidden).
   - Auth succeeds.
@@ -363,15 +363,15 @@ Extend `tests/test_integration.py`:
 
 ### Live Claude Code smoke
 
-End-to-end against the GC IPRS sandbox with the new MCP version:
+End-to-end against the v1 test repository with the new MCP version:
 
-1. "Find a recent Missionary Document and tell me who it's about."
+1. "Find a recent Personnel Document and tell me who it's about."
 2. "Set the Status field on entry X to 'Approved'." (Verifies
    `field_update` with mode default = "merge".)
 3. "Delete the test folder Y from yesterday." (Verifies the
    preview/execute split end-to-end.)
 4. "What templates are available?" → "What fields does the
-   Missionary Document template need?" (Verifies the new
+   Personnel Document template need?" (Verifies the new
    `template_field_list` tool.)
 
 ---

@@ -8,7 +8,9 @@ deletes.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app, confirmation
 from .._app import get_settings
@@ -153,12 +155,53 @@ def _delete_entry_check_caps(
 
 @register(v2_name="laserfiche_entry_delete", is_write=True)
 async def delete_entry(
-    entry_id: int,
-    confirmation_token: str | None = None,
-    audit_reason_id: int | None = None,
-    comment: str | None = None,
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID to delete.", ge=1),
+    ],
+    confirmation_token: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "From the preview response. HMAC-signed, 5-minute TTL, "
+                "bound to (operation, entry_id, entry_name). Omit to get "
+                "a fresh preview; pass to execute."
+            ),
+        ),
+    ] = None,
+    audit_reason_id: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description=(
+                "Required when LF_REQUIRE_AUDIT_REASON=true. Use "
+                "get_audit_reasons to enumerate valid IDs for the "
+                "authenticated user."
+            ),
+            ge=1,
+        ),
+    ] = None,
+    comment: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Optional free-text comment recorded alongside the audit reason.",
+            max_length=500,
+        ),
+    ] = None,
     *,
-    force_large_delete: bool = False,
+    force_large_delete: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Required when the folder's child count exceeds "
+                "LF_DELETE_FOLDER_MAX_DESCENDANTS (default 50). The LLM "
+                "has to explicitly opt in to a large delete."
+            ),
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """Delete an entry. **Two-step: preview, then execute with token.**
 

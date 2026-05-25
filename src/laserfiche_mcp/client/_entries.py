@@ -73,7 +73,7 @@ class _EntriesMixin(_CoreClient):
 
         Query syntax follows Laserfiche search syntax, e.g.:
             {LF:Name="Onboarding*"}
-            {[Missionary Application]:[Last Name]="Smith"}
+            {[Loan Application]:[Last Name]="Smith"}
 
         v1 servers reject ``$top`` as a URL parameter on this endpoint
         (HTTP 400 ``errorCode 216``) and apply their own internal cap (~100

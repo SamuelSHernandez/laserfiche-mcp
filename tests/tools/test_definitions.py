@@ -138,7 +138,7 @@ async def test_get_template_fields_returns_template_metadata(
             "value": [
                 {
                     "id": 2,
-                    "name": "Missionary Document",
+                    "name": "Personnel Document",
                     "templateFieldNames": ["Last Name", "Status"],
                 },
             ]
@@ -168,8 +168,8 @@ async def test_get_template_fields_returns_template_metadata(
             ]
         },
     )
-    result = await server.get_template_fields(template_name="Missionary Document")
-    assert result["template_name"] == "Missionary Document"
+    result = await server.get_template_fields(template_name="Personnel Document")
+    assert result["template_name"] == "Personnel Document"
     assert result["template_id"] == 2
     assert result["field_count"] == 2
     field_names = {f["name"] for f in result["fields"]}

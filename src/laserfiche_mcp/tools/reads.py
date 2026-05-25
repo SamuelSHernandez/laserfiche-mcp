@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app
 from .._app import clamp_max_results
@@ -13,8 +15,33 @@ from ._registry import register
 
 @register(v2_name="laserfiche_entry_search")
 async def search_entries(
-    query: str,
-    max_results: int | None = None,
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "Laserfiche search expression. Each clause wrapped in braces "
+                "and combined with `&` (AND) or `|` (OR). Quote string "
+                'values with double quotes; escape inner quotes with `\\"`.'
+            ),
+            examples=[
+                '{LF:Name="*.pdf"}',
+                '{LF:Name="Onboarding*"} & {LF:LookIn="\\\\Imports\\\\2024"}',
+                '{[Loan Application]:[Last Name]="Smith"}',
+            ],
+        ),
+    ],
+    max_results: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description=(
+                "Page size. Defaults to LF_MAX_RESULTS_DEFAULT (25). "
+                "Capped at LF_MAX_RESULTS_CEILING (typically 200)."
+            ),
+            ge=1,
+            le=1000,
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Run a raw Laserfiche search query and return matching entries.
 
@@ -27,7 +54,7 @@ async def search_entries(
     Query syntax cheat sheet:
 
     - ``{LF:Name="Onboarding*"}`` — name pattern (``*`` and ``?`` wildcards)
-    - ``{[Missionary Application]:[Last Name]="Smith"}`` — field on template
+    - ``{[Loan Application]:[Last Name]="Smith"}`` — field on template
     - ``{LF:LookIn="\\Imports\\2024"}`` — restrict to a folder subtree
     - Combine with ``&`` (AND) / ``|`` (OR), e.g.
       ``{LF:Name="*.pdf"} & {[Application]:[Status]="Approved"}``
@@ -61,9 +88,37 @@ async def search_entries(
 
 @register(v2_name="laserfiche_entry_search_by_name")
 async def search_by_name(
-    name_pattern: str,
-    in_folder_path: str | None = None,
-    max_results: int | None = None,
+    name_pattern: Annotated[
+        str,
+        Field(
+            description=(
+                "Name with optional wildcards. `*` matches any sequence "
+                "(including empty); `?` matches exactly one character. "
+                "Case-insensitive. No wildcards = exact match."
+            ),
+            examples=["Onboarding*", "*.pdf", "Smith,?", "Q?-2024-*"],
+        ),
+    ],
+    in_folder_path: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Optional backslash-delimited folder path to scope the "
+                "search. Forward slashes are also accepted."
+            ),
+            examples=["\\Imports\\2024", "\\HR\\Onboarding"],
+        ),
+    ] = None,
+    max_results: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Page size (default 25, capped by LF_MAX_RESULTS_CEILING).",
+            ge=1,
+            le=1000,
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Find entries by file/folder name pattern, optionally scoped to a folder path.
 
@@ -107,9 +162,34 @@ async def search_by_name(
 
 @register(v2_name="laserfiche_folder_list")
 async def list_folder(
-    folder_id: int,
-    max_results: int | None = None,
-    skip: int = 0,
+    folder_id: Annotated[
+        int,
+        Field(
+            description="Integer entry ID of the parent folder. The root folder is typically ID 1.",
+            ge=1,
+        ),
+    ],
+    max_results: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Page size (default 25, capped by LF_MAX_RESULTS_CEILING).",
+            ge=1,
+            le=1000,
+        ),
+    ] = None,
+    skip: Annotated[
+        int,
+        Field(
+            default=0,
+            description=(
+                "0-indexed offset for pagination. Combine with max_results "
+                "to walk a large folder in chunks; check next_link to know "
+                "when to stop."
+            ),
+            ge=0,
+        ),
+    ] = 0,
 ) -> dict[str, Any]:
     """List the immediate children (documents and subfolders) of a folder by ID.
 
@@ -180,7 +260,21 @@ async def get_entry(entry_id: int) -> dict[str, Any]:
 
 
 @register(v2_name="laserfiche_entry_get_by_path")
-async def get_entry_by_path(full_path: str) -> dict[str, Any]:
+async def get_entry_by_path(
+    full_path: Annotated[
+        str,
+        Field(
+            description=(
+                "Path from the repository root, backslash-separated. "
+                "Forward slashes are also accepted. Case-insensitive."
+            ),
+            examples=[
+                "\\Imports\\2024\\Onboarding\\Smith,John",
+                "\\HR\\Personnel\\Doe,Jane.pdf",
+            ],
+        ),
+    ],
+) -> dict[str, Any]:
     """Resolve a backslash-delimited Laserfiche path to its entry.
 
     Use this when the user refers to a location by its name path rather

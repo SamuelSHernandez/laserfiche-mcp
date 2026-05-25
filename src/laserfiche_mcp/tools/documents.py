@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import io
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from pydantic import Field
 
 from .. import _app
 from .._app import get_settings
@@ -13,7 +15,17 @@ from ._registry import register
 
 
 @register(v2_name="laserfiche_document_get_text")
-async def get_document_text(entry_id: int, max_chars: int = 50_000) -> dict[str, Any]:
+async def get_document_text(
+    entry_id: Annotated[int, Field(description="Entry ID of an electronic document.", ge=1)],
+    max_chars: Annotated[
+        int,
+        Field(
+            default=50_000,
+            description="Truncate the returned text after this many characters.",
+            ge=1,
+        ),
+    ] = 50_000,
+) -> dict[str, Any]:
     """Download a document's server-extracted text (v2-only).
 
     Use for "summarize this document", "what does this say", or any other
@@ -242,10 +254,42 @@ def _edoc_text_response(
 
 @register(v2_name="laserfiche_document_get_edoc")
 async def get_document_edoc(
-    entry_id: int,
-    mode: Literal["info", "bytes", "text"] = "info",
-    max_bytes: int | None = None,
-    text_char_limit: int = 50_000,
+    entry_id: Annotated[
+        int,
+        Field(description="Entry ID of an electronic document (not a folder).", ge=1),
+    ],
+    mode: Annotated[
+        Literal["info", "bytes", "text"],
+        Field(
+            default="info",
+            description=(
+                "'info' (default): metadata only, no bytes returned. "
+                "'bytes': base64 payload, capped by max_bytes / LF_EDOC_MAX_BYTES. "
+                "'text': server-side extracted text — PDF via pypdf, text/* "
+                "decoded directly, other types return unsupported_content_type. "
+                "OCR is not attempted."
+            ),
+        ),
+    ] = "info",
+    max_bytes: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description=(
+                "Per-call override for LF_EDOC_MAX_BYTES (default 25 MB). "
+                "Only applies to mode='bytes' and 'text'."
+            ),
+            ge=1,
+        ),
+    ] = None,
+    text_char_limit: Annotated[
+        int,
+        Field(
+            default=50_000,
+            description="Truncate extracted text after this many characters (mode='text' only).",
+            ge=1,
+        ),
+    ] = 50_000,
 ) -> dict[str, Any]:
     """Download or inspect a document's raw electronic file (edoc).
 

@@ -76,7 +76,12 @@ class PasswordGrantStrategy(AuthStrategy):
         request.headers["Authorization"] = f"Bearer {self._access_token}"
 
     async def _refresh(self) -> None:
-        logger.debug("Exchanging password for bearer token at %s", self._token_url)
+        # URL deliberately omitted (operator already configured the host;
+        # logging it at DEBUG just adds noise to log aggregators). If a
+        # future addition needs to log a URL here, route it through
+        # ``redact(url, host=..., repo_id=...)`` to keep the deployment
+        # context out of WARNING-or-lower output.
+        logger.debug("Exchanging password for bearer token (password grant)")
         async with httpx.AsyncClient(
             verify=self._verify_ssl,
             timeout=self._timeout_seconds,
@@ -134,7 +139,7 @@ class OAuthClientCredentialsStrategy(AuthStrategy):
         request.headers["Authorization"] = f"Bearer {self._access_token}"
 
     async def _refresh(self) -> None:
-        logger.debug("Refreshing OAuth access token from %s", self._token_url)
+        logger.debug("Refreshing OAuth access token (client_credentials)")
         async with httpx.AsyncClient(
             verify=self._verify_ssl,
             timeout=self._timeout_seconds,

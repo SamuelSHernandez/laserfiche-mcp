@@ -7,6 +7,15 @@ exception strings.
 
 Source of truth for `PLAN_ERRORS.md`. Every claim cites `file:line`.
 
+> **Status note (post-v2.0 sanitization pass):** the logging-leak
+> findings in section 1d below have been remediated at minimum
+> severity (auth.py token-URL emission removed; client retry warnings
+> log `request.url.path` only — host stripped). The structured
+> redaction helper / per-tool-call `request_id` work described in
+> section 1f is still deferred to a v2.x follow-up. File:line
+> references throughout this document refer to the **v1.5** codebase
+> the audit was performed against; lines have since shifted.
+
 ---
 
 ## 1a. Current error surface
@@ -115,15 +124,15 @@ dedicated `suggested_action: str | None` field on `ToolError`.
 Response-path leakage is clean (see 1a). Logging-path leakage is the
 real audit finding.
 
-### Confirmed leakage
+### Confirmed leakage (REMEDIATED — see Status note at top)
 
-| file:line | Log line | Leaks |
-|---|---|---|
-| `auth.py:81` | `logger.debug("Exchanging password for bearer token at %s", self._token_url)` | Token-exchange URL including hostname AND repository ID (e.g., `http://gc-its-dm-repo/LFRepositoryAPI/v1/Repositories/IPRS/Token`). DEBUG level. |
-| `auth.py:139` | `logger.debug("Refreshing OAuth access token from %s", self._token_url)` | OAuth token URL. DEBUG level. |
-| `client.py:159-161` | `logger.warning("Network error on %s %s (attempt %d/%d): %s; retrying in %ds", request.method, request.url, ...)` | **Full request URL** including hostname, repo ID, entry IDs in path. WARNING level — surfaces in default logging config. |
-| `client.py:168-170` | `logger.warning("Retryable status %d on %s %s (attempt %d/%d); retrying in %ds", response.status_code, request.method, request.url, ...)` | Same as above. WARNING. |
-| `server.py:2973-2977` | `print(f"Target: {settings.repo_api_url}{settings.repository_id} (API {settings.api_version.value})")` then auth info | Repo URL, repo ID, auth mode, username. **stdout via print()**, not logger. Only on `--diagnose` flag — explicit operator action. |
+| file:line (v1.5) | Log line | Leaks | Status |
+|---|---|---|---|
+| `auth.py:81` | `logger.debug("Exchanging password for bearer token at %s", self._token_url)` | Token-exchange URL including hostname AND repository ID. DEBUG level. | ✅ FIXED: URL removed from log message in `auth.py` (post-2.0 sanitization). |
+| `auth.py:139` | `logger.debug("Refreshing OAuth access token from %s", self._token_url)` | OAuth token URL. DEBUG level. | ✅ FIXED: URL removed. |
+| `client.py:159-161` | `logger.warning("Network error on %s %s (attempt %d/%d): %s; retrying in %ds", request.method, request.url, ...)` | **Full request URL** including hostname, repo ID, entry IDs in path. WARNING level — surfaces in default logging config. | ✅ FIXED: now logs `request.url.path` (host stripped). Endpoint path retained for diagnosability. |
+| `client.py:168-170` | `logger.warning("Retryable status %d on %s %s (attempt %d/%d); retrying in %ds", response.status_code, request.method, request.url, ...)` | Same as above. WARNING. | ✅ FIXED: same treatment. |
+| `server.py:2973-2977` | `print(f"Target: {settings.repo_api_url}{settings.repository_id} (API {settings.api_version.value})")` then auth info | Repo URL, repo ID, auth mode, username. **stdout via print()**, not logger. Only on `--diagnose` flag — explicit operator action. | ➖ Intentional. Operator-invoked diagnostic output. |
 
 ### Not leaking
 
@@ -134,15 +143,24 @@ real audit finding.
 - Error responses to the agent never include hostnames; only the
   upstream `title`/`message` ProblemDetails text.
 
-### Severity
+### Severity (pre-remediation)
 
 **Medium.** Repository IDs and full request URLs at WARNING level
-get logged on every retry attempt. For a self-hosted Laserfiche
+got logged on every retry attempt. For a self-hosted Laserfiche
 deployment where the hostname and repo ID are part of the customer's
 internal infrastructure inventory, those values leaking into shared
-log aggregators (Splunk, Datadog, etc.) is a real concern. Not a
+log aggregators (Splunk, Datadog, etc.) was a real concern. Not a
 secret leak (no credentials in any log line), but a deployment-context
 leak.
+
+**Post-remediation:** the host is no longer emitted by any logger
+call in the codebase. The path component (which includes the repo ID
+segment) is still emitted at WARNING on retries — that's the
+minimum information needed to diagnose which endpoint was retried.
+Operators who want stricter redaction can lower the log level or
+filter on logger name `laserfiche_mcp.client`. Full URL redaction
+via a central `redact()` helper plus per-tool-call `request_id` is
+still a v2.x follow-up.
 
 ---
 

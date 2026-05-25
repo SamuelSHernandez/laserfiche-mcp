@@ -225,7 +225,7 @@ A few common patterns:
 
 ```text
 {LF:Name="Onboarding*"}                                   # name match
-{[Missionary Application]:[Last Name]="Smith"}            # template field
+{[Loan Application]:[Last Name]="Smith"}                  # template field
 {LF:LookIn="\Imports\2024"}                               # scope to a folder
 {LF:Name="*.pdf"} & {[Application]:[Status]="Approved"}   # combined
 ```

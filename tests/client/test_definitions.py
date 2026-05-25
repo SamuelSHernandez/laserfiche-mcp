@@ -103,14 +103,14 @@ async def test_list_repositories_normalizes_bare_list_response(
         url="https://lf.example.test/LFRepositoryAPI/v1/Repositories",
         json=[
             {"repoId": "ASTR", "repoName": "Astronomy"},
-            {"repoId": "IPRS", "repoName": "Insurance"},
+            {"repoId": "MAIN", "repoName": "Insurance"},
         ],
     )
 
     async with _build_client(settings) as client:
         result = await client.list_repositories()
     assert isinstance(result, dict)
-    assert [r["repoId"] for r in result["value"]] == ["ASTR", "IPRS"]
+    assert [r["repoId"] for r in result["value"]] == ["ASTR", "MAIN"]
 
 
 @pytest.mark.asyncio
@@ -221,14 +221,14 @@ async def test_cached_template_definitions_keyed_by_name(
         url=f"{_BASE_V1}/TemplateDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
-                {"id": 2, "name": "Missionary Document", "fieldCount": 14},
+                {"id": 2, "name": "Personnel Document", "fieldCount": 14},
             ]
         },
     )
     async with _build_client(settings) as client:
         result = await client.cached_template_definitions()
-    assert "Missionary Document" in result
-    assert result["Missionary Document"]["fieldCount"] == 14
+    assert "Personnel Document" in result
+    assert result["Personnel Document"]["fieldCount"] == 14
 
 
 @pytest.mark.asyncio
@@ -284,7 +284,7 @@ async def test_cached_field_definitions_halves_page_size_on_400(
 ) -> None:
     """When the server rejects a large $top with 400, the cache halves and retries.
 
-    Reproduces the IPRS-class v1 server: $top=200 → 400 errorCode 216,
+    Reproduces a v1 server quirk: $top=200 → 400 errorCode 216,
     $top=100 → 400, $top=50 → 400, $top=25 → 200 OK.
     """
     monkeypatch.setenv("LF_MAX_RESULTS_DEFAULT", "25")

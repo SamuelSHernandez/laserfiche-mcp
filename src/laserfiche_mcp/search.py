@@ -28,8 +28,8 @@ Path scoping (limits the search to a folder subtree):
   {LF:LookIn="\\\\Imports\\\\2024"}
 
 Template field search (template name and field name in their own brackets):
-  {[Missionary Application]:[Last Name]="Smith"}
-  {[Missionary Application]:[Submitted Date]>=02/01/2024}
+  {[Loan Application]:[Last Name]="Smith"}
+  {[Loan Application]:[Submitted Date]>=02/01/2024}
 
 Combined:
   {LF:Name="*.pdf"} & {[Application]:[Status]="Approved"}

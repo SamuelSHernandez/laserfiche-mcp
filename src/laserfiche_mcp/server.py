@@ -40,6 +40,7 @@ from .cli import (
 from .cli import (
     main as _cli_main,
 )
+from .observability import tool_logger
 
 # Import every tool module so each ``@register`` fires and the registry
 # is populated before _register_read_tools() runs below.
@@ -47,8 +48,10 @@ from .tools import (  # noqa: F401
     definitions,
     documents,
     natural_search,
+    preview_execute_splits,
     reads,
     tasks,
+    write_collapses,
     writes_create_copy_import,
     writes_delete_edoc_pages,
     writes_delete_entry,
@@ -73,9 +76,16 @@ def _register_one(spec: ToolSpec) -> None:
 
     Both registrations point at the same function — the v2 name is the
     recommended path, the legacy name is a deprecation shim through v2.x.
+
+    The function is wrapped with ``tool_logger`` so every call (regardless
+    of which name the agent used) emits one structured log event with a
+    UUID4 ``request_id`` propagated via ContextVar to ``classify_lf_error``.
+    The decorator is idempotent, so applying it once and registering the
+    same wrapped function under both names gives one log line per call.
     """
-    mcp.tool(name=spec.legacy_name)(spec.fn)
-    mcp.tool(name=spec.v2_name)(spec.fn)
+    wrapped = tool_logger(spec.fn)
+    mcp.tool(name=spec.legacy_name)(wrapped)
+    mcp.tool(name=spec.v2_name)(wrapped)
 
 
 def _register_read_tools() -> None:

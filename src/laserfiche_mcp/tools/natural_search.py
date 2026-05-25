@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app
 from .._app import clamp_search_page_size
@@ -262,12 +264,69 @@ async def _run_execute_mode(
 
 @register(v2_name="laserfiche_entry_search_natural")
 async def search_natural(
-    question: str,
-    lf_query: str | None = None,
-    folder_path: str | None = None,
-    max_results: int = 50,
+    question: Annotated[
+        str,
+        Field(
+            description=(
+                "The user's natural-language search question. Used by Mode A "
+                "to extract keywords for candidate queries and surfaced in "
+                "Mode B responses for correlation."
+            ),
+            examples=[
+                "find the latest invoice from Acme",
+                "what onboarding docs do we have for Smith?",
+            ],
+        ),
+    ],
+    lf_query: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Laserfiche query to execute (Mode B). Omit to get guidance "
+                "(Mode A): grammar reference, sampled templates, candidate "
+                "queries to refine."
+            ),
+            examples=['{LF:Name="*Acme*"}', '{[Invoice]:[Vendor]="Acme*"}'],
+        ),
+    ] = None,
+    folder_path: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Backslash-delimited folder path. In Mode A, narrows the "
+                "template sample to this subtree; in Mode B, the LLM should "
+                'embed {LF:LookIn="<path>"} in lf_query itself if scoping '
+                "is wanted."
+            ),
+            examples=["\\HR\\Personnel", "\\Imports\\2024"],
+        ),
+    ] = None,
+    max_results: Annotated[
+        int,
+        Field(
+            default=50,
+            description=(
+                "Page size. Clamped to LF_MAX_PAGE_SIZE (default 100) — some "
+                "self-hosted SimpleSearches implementations 400 on larger $top."
+            ),
+            ge=1,
+            le=500,
+        ),
+    ] = 50,
     *,
-    fuzzy: bool = True,
+    fuzzy: Annotated[
+        bool,
+        Field(
+            default=True,
+            description=(
+                "When True (default), Mode B attempts a wildcard-wrap repair "
+                "if the server 400s on a Name=value clause with no wildcards. "
+                "Set False for exact-match queries that should NOT be relaxed."
+            ),
+        ),
+    ] = True,
 ) -> dict[str, Any]:
     """Two-mode search: guidance first, then execution with automatic repair.
 

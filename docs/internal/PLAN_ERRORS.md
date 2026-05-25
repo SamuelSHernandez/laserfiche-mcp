@@ -346,7 +346,7 @@ In `tests/test_observability.py`:
 - Dict containing `{"password": "x"}` → `{"password": "<redacted>"}`.
 - Nested: `{"creds": {"password": "x"}}` → `{"creds": {"password": "<redacted>"}}`.
 - Case-insensitive: `{"Password": "x"}` → redacted.
-- URL with repo host: `"http://gc-its-dm-repo/...IPRS..."` → host and `IPRS` substrings replaced.
+- URL with repo host: `"http://lf.example.com/...myrepo..."` → host and repo-id substrings replaced.
 - Confirmation token: redacted.
 - Non-sensitive args (`entry_id`, `query`, `mode`): pass through unchanged.
 
@@ -474,7 +474,7 @@ ContextVars across `await` boundaries by default, but some libraries
 client.something()` doesn't propagate, the request_id won't be
 available when an error fires deep in the client.
 
-**Resolution:** test explicitly with the GC IPRS sandbox under
+**Resolution:** test explicitly with the v1 test repository under
 adversarial network conditions (mock 500 from middleware).
 
 ### Risk 3 — `retry_after_seconds` source

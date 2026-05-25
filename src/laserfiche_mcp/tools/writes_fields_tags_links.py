@@ -7,7 +7,9 @@ None of them create or delete entries themselves — they mutate metadata.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from .. import _app
 from ..errors import LaserficheError, classify_lf_error
@@ -25,11 +27,29 @@ from ._validators import (
     validate_tag_names,
 )
 
+_FIELDS_PARAM = Annotated[
+    dict[str, list[Any]],
+    Field(
+        description=(
+            "Mapping of field name → list of values. Single-value fields "
+            "take a one-item list; multi-value fields take many. To clear "
+            "a field, pass an empty list (e.g. {'Note': []})."
+        ),
+        examples=[
+            {"Last Name": ["Smith"], "Hire Date": ["2024-01-15"]},
+            {"Tags": ["urgent", "review"], "Status": ["Approved"]},
+        ],
+    ),
+]
+
 
 @register(v2_name="laserfiche_field_set", is_write=True)
 async def set_fields(
-    entry_id: int,
-    fields: dict[str, list[Any]],
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID to write to.", ge=1),
+    ],
+    fields: _FIELDS_PARAM,
 ) -> dict[str, Any]:
     """OVERWRITE all field values on an entry. Destructive — read carefully.
 
@@ -76,8 +96,11 @@ async def set_fields(
 
 @register(v2_name="laserfiche_field_merge", is_write=True)
 async def merge_fields(
-    entry_id: int,
-    updates: dict[str, list[Any]],
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID to update.", ge=1),
+    ],
+    updates: _FIELDS_PARAM,
 ) -> dict[str, Any]:
     """Update specific fields on an entry, preserving the rest.
 
@@ -143,8 +166,22 @@ async def merge_fields(
 
 @register(v2_name="laserfiche_tag_set", is_write=True)
 async def set_tags(
-    entry_id: int,
-    tags: list[str],
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID.", ge=1),
+    ],
+    tags: Annotated[
+        list[str],
+        Field(
+            description=(
+                "Full list of tag names that should be on the entry after "
+                "this call. Pass [] to clear all tags. Tags must already "
+                "exist as repository-level definitions (see "
+                "list_tag_definitions)."
+            ),
+            examples=[["Confidential", "Q3-2024"], []],
+        ),
+    ],
 ) -> dict[str, Any]:
     """OVERWRITE the tag list on an entry. Destructive — read carefully.
 
@@ -187,9 +224,26 @@ async def set_tags(
 
 @register(v2_name="laserfiche_tag_merge", is_write=True)
 async def merge_tags(
-    entry_id: int,
-    add: list[str] | None = None,
-    remove: list[str] | None = None,
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID.", ge=1),
+    ],
+    add: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description="Tag names to add. Tags already on the entry are no-ops.",
+            examples=[["Confidential"]],
+        ),
+    ] = None,
+    remove: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description="Tag names to remove. Tags not on the entry are silently ignored.",
+            examples=[["Draft"]],
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Add and/or remove specific tags on an entry, preserving the rest.
 
@@ -257,8 +311,26 @@ async def merge_tags(
 
 @register(v2_name="laserfiche_link_set", is_write=True)
 async def set_links(
-    entry_id: int,
-    links: list[dict[str, Any]],
+    entry_id: Annotated[
+        int,
+        Field(description="Integer entry ID — the source of each link.", ge=1),
+    ],
+    links: Annotated[
+        list[dict[str, Any]],
+        Field(
+            description=(
+                "List of link descriptors. Each item is "
+                "{'targetId': <int>, 'linkTypeId': <int>} where "
+                "linkTypeId comes from list_link_definitions and "
+                "targetId is the other entry's ID. Pass [] to clear "
+                "all links."
+            ),
+            examples=[
+                [{"targetId": 42, "linkTypeId": 1}],
+                [{"targetId": 100, "linkTypeId": 2}, {"targetId": 200, "linkTypeId": 2}],
+            ],
+        ),
+    ],
 ) -> dict[str, Any]:
     """OVERWRITE the entry-link list on an entry. Destructive — read carefully.
 
