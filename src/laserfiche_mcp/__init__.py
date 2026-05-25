@@ -5,5 +5,5 @@ We deliberately don't re-export ``server`` here so that ``client``, ``auth``, an
 ``config`` can be imported (e.g. by tests) without requiring a valid env.
 """
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __all__: list[str] = []
