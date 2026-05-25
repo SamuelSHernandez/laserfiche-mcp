@@ -38,9 +38,7 @@ logger = logging.getLogger("laserfiche_mcp.tools")
 
 # --- Request-ID propagation ---------------------------------------------------
 
-_request_id_var: ContextVar[str | None] = ContextVar(
-    "laserfiche_mcp_request_id", default=None
-)
+_request_id_var: ContextVar[str | None] = ContextVar("laserfiche_mcp_request_id", default=None)
 
 
 def get_request_id() -> str | None:

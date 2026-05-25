@@ -60,9 +60,7 @@ class TestRedact:
         assert result == {"entry_id": 42, "query": "x", "mode": "info"}
 
     def test_confirmation_token_is_redacted(self) -> None:
-        assert redact({"confirmation_token": "abc.def.ghi"}) == {
-            "confirmation_token": REDACTED
-        }
+        assert redact({"confirmation_token": "abc.def.ghi"}) == {"confirmation_token": REDACTED}
 
     def test_input_not_mutated(self) -> None:
         original = {"password": "x", "nested": {"token": "y"}}

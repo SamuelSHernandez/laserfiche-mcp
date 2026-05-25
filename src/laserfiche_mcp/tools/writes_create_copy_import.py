@@ -187,8 +187,7 @@ async def copy_entry(
         Field(
             default=False,
             description=(
-                "When True, server appends a numeric suffix if name "
-                "collides in the destination."
+                "When True, server appends a numeric suffix if name collides in the destination."
             ),
         ),
     ] = False,

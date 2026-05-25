@@ -158,10 +158,7 @@ async def tag_update(
         list[str] | None,
         Field(
             default=None,
-            description=(
-                "Tags to add (merge semantics). Mutually exclusive with "
-                "`replace`."
-            ),
+            description=("Tags to add (merge semantics). Mutually exclusive with `replace`."),
             examples=[["Confidential"]],
         ),
     ] = None,
@@ -169,10 +166,7 @@ async def tag_update(
         list[str] | None,
         Field(
             default=None,
-            description=(
-                "Tags to remove (merge semantics). Mutually exclusive "
-                "with `replace`."
-            ),
+            description=("Tags to remove (merge semantics). Mutually exclusive with `replace`."),
             examples=[["Draft"]],
         ),
     ] = None,
@@ -223,8 +217,7 @@ async def tag_update(
         return _invalid_input(
             "tag_update",
             "conflicting_modes",
-            "Pass either `replace=` (overwrite) or `add=`/`remove=` (delta), "
-            "not both.",
+            "Pass either `replace=` (overwrite) or `add=`/`remove=` (delta), not both.",
             entry_id=entry_id,
         )
     if not using_replace and not using_delta:
@@ -369,10 +362,7 @@ async def template_assign_or_remove(
         str | None,
         Field(
             default=None,
-            description=(
-                "Exact template name to assign, or None to clear the "
-                "current assignment."
-            ),
+            description=("Exact template name to assign, or None to clear the current assignment."),
             examples=["Personnel Document", "Invoice"],
         ),
     ] = None,

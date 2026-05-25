@@ -21,7 +21,7 @@ async def search_entries(
             description=(
                 "Laserfiche search expression. Each clause wrapped in braces "
                 "and combined with `&` (AND) or `|` (OR). Quote string "
-                "values with double quotes; escape inner quotes with `\\\"`."
+                'values with double quotes; escape inner quotes with `\\"`.'
             ),
             examples=[
                 '{LF:Name="*.pdf"}',

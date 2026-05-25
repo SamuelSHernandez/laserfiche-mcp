@@ -78,9 +78,7 @@ async def test_field_update_replace_calls_set_fields(
 
     # set_fields returns the raw server response — no `operation` key,
     # which is what distinguishes the replace path from merge.
-    result = await field_update(
-        entry_id=42, updates={"Status": ["New"]}, mode="replace"
-    )
+    result = await field_update(entry_id=42, updates={"Status": ["New"]}, mode="replace")
     assert result == {"value": []}
 
 

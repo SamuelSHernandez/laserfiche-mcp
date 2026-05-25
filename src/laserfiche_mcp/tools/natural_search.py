@@ -297,7 +297,7 @@ async def search_natural(
             description=(
                 "Backslash-delimited folder path. In Mode A, narrows the "
                 "template sample to this subtree; in Mode B, the LLM should "
-                "embed {LF:LookIn=\"<path>\"} in lf_query itself if scoping "
+                'embed {LF:LookIn="<path>"} in lf_query itself if scoping '
                 "is wanted."
             ),
             examples=["\\HR\\Personnel", "\\Imports\\2024"],
