@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-05-24
+
+Public-release readiness pass. Closes the deferrals from PLAN.md /
+PLAN_ERRORS.md / PLAN_DESIGN.md that v2.0.0 punted on, plus a
+sanitization sweep that removes accidental customer-specific
+identifiers from source, tests, and internal docs.
+
+No breaking changes — every new tool registers as a v2.x peer
+alongside the existing multiplex / set+merge / assign+remove pairs.
+v3.0 (eventual) is when the original verb-first names go away;
+v2.x is additive only.
+
 ### Added — observability (PLAN_ERRORS.md step 7)
 - **`observability.py` module** with three primitives:
   - **`redact(obj, *, host=None, repo_id=None)`** — single redaction
@@ -579,7 +591,8 @@ Writes are off by default. Set `LF_READ_ONLY=false` to register them; otherwise 
 
 Initial public release. **Yanked** — see v0.2.0 for the correct auth flow and endpoint paths.
 
-[Unreleased]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.4.1...v1.4.2
