@@ -59,6 +59,28 @@ scope a deployment to e.g. metadata-only writes.
 - Python 3.10+ (the install path below uses [`uv`](https://docs.astral.sh/uv/) so you don't have to think about this)
 - An MCP-capable client (Claude Desktop, Claude Code, MCP Inspector, etc.)
 
+## One-click install (Claude Desktop Extension)
+
+Not comfortable editing JSON config and environment variables? Don't. The
+server also ships as a **Claude Desktop Extension** — a single `.mcpb` file you
+double-click to install. Claude Desktop then shows a native settings form
+(Repository URL, service account, password) instead of a config file; the
+password is stored in your OS keychain, and the server starts read-only by
+default. No terminal, no Python, no `uv` to install — Claude Desktop runs it on
+its bundled runtime.
+
+```bash
+./scripts/build-extension.sh        # produces dist/laserfiche-mcp.mcpb
+```
+
+Then double-click `dist/laserfiche-mcp.mcpb`, or in Claude Desktop go to
+**Settings → Extensions → Install extension**, and fill in the form. Full
+walkthrough (and the maintainer build/release steps) in
+[`docs/desktop-extension.md`](docs/desktop-extension.md).
+
+The extension covers the common self-hosted password-grant setup. For OAuth, or
+to tune the advanced knobs, use the classic config path below.
+
 ## Install
 
 Pick whichever fits your workflow:

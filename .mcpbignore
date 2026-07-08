@@ -1,0 +1,31 @@
+# Files excluded from the .mcpb Desktop Extension bundle.
+# Keep the bundle to the source uv needs to resolve and run the server.
+
+.git/
+.github/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+
+# Tests and dev-only assets
+tests/
+docs/
+scripts/
+*.mcpb
+dist/
+
+# Repo docs the runtime doesn't need (README stays for attribution/license)
+CHANGELOG.md
+CONTRIBUTING.md
+SECURITY.md
+smithery.yaml
+.env
+.env.example
+
+# Design/scratch artifacts
+*interface-mockup*.html
+scratchpad/
