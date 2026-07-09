@@ -13,7 +13,7 @@ jobs:
     name: Build distributions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Guard: the tag must match pyproject.toml, manifest.json, AND server.json.
       # Fails the whole release before anything is published, so a forgotten
@@ -81,7 +81,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The Python distributions built earlier (wheel + sdist). Downloaded here
       # so they end up in dist/ alongside the .mcpb for a single upload.
@@ -111,7 +111,7 @@ jobs:
           cp dist/laserfiche-mcp.mcpb "dist/laserfiche-mcp-${version}.mcpb"
 
       - name: Attach wheel + sdist + .mcpb to the GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
@@ -128,7 +128,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install mcp-publisher
         run: |
