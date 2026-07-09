@@ -441,6 +441,11 @@ taxonomy, per-tool triggers, and the kind ↔ subkind mapping.
 
 ## Safety model
 
+Wondering **what Claude actually sees and where your document content goes**?
+See [Data handling & privacy](docs/data-handling.md) — it covers the data flow,
+what leaves the machine, and how to scope a service account so sensitive folders
+are never exposed. The rest of this section is about the **write-mode** guards.
+
 Writes are off by default. When you enable them (`LF_READ_ONLY=false`),
 the following guards are available — all independent, all opt-in
 except as noted:
