@@ -9,7 +9,7 @@ Search and read your Laserfiche documents by chatting with Claude. One download,
 You need two things:
 
 - [Claude Desktop](https://claude.ai/download) — the free Claude app for Mac or Windows
-- The extension file: [`laserfiche-mcp-2.1.0.mcpb`](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/download/v2.1.0/laserfiche-mcp-2.1.0.mcpb) from the [v2.1.0 release page](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/tag/v2.1.0)
+- The extension file: [**download `laserfiche-mcp.mcpb`**](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/latest/download/laserfiche-mcp.mcpb) (always the newest version), or browse the [latest release](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/latest)
 
 ### 2. Double-click & connect
 

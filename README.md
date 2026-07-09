@@ -14,10 +14,10 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that lets
 Claude (Desktop, Code, or any MCP client) search and read documents in a
 [Laserfiche](https://www.laserfiche.com) repository.
 
-Current release **v2.1.0** — read and write tools for self-hosted Repository
-API v1 and v2, with per-tool structured logging and credential redaction. See
-the [changelog](CHANGELOG.md) for per-release detail and the [roadmap](#roadmap)
-for what's next.
+Current release **v2.2.0** — read and write tools for self-hosted Repository
+API v1 and v2, a one-click Claude Desktop extension, and an optional remote HTTP
+transport with per-user OAuth for web clients. See the [changelog](CHANGELOG.md)
+for detail and the [roadmap](#roadmap) for what's next.
 
 ## What you can do with it
 
@@ -52,7 +52,7 @@ Chat with your Laserfiche repository from Claude Desktop — no terminal, no con
 
 **1. Download**
 
-Grab [`laserfiche-mcp-2.1.0.mcpb`](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/download/v2.1.0/laserfiche-mcp-2.1.0.mcpb) from the [latest release](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/tag/v2.1.0). You'll need [Claude Desktop](https://claude.ai/download) installed first.
+[**Download the extension**](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/latest/download/laserfiche-mcp.mcpb) (always the newest version), or browse the [latest release](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/latest). You'll need [Claude Desktop](https://claude.ai/download) installed first.
 
 **2. Double-click & connect**
 

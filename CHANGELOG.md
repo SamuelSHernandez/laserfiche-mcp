@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-07-09
+
+Distribution and access: a no-terminal install path for end users, and a
+remote transport so web clients can connect. No breaking changes.
+
+### Added
+- **Claude Desktop extension (`.mcpb`)** — double-click install with a native
+  settings form (credentials go to the OS keychain); no JSON editing. Adds
+  `manifest.json`, `mcp_entry.py`, `.mcpbignore`, and
+  `scripts/build-extension.sh`, with a walkthrough in
+  `docs/desktop-extension.md`.
+- **Remote HTTP transport** — `laserfiche-mcp --http` serves the same tools over
+  MCP Streamable HTTP for web/cloud clients (claude.ai / ChatGPT connectors).
+  Loopback-bound by default; `LF_HTTP_HOST` / `LF_HTTP_PORT` / `LF_HTTP_PATH`,
+  optional static bearer token `LF_HTTP_AUTH_TOKEN`. See `docs/remote-http.md`.
+- **Per-user OAuth (Resource Server)** for `--http` — verifies each caller's JWT
+  access token against an external IdP's JWKS (audience, issuer, expiry, scopes)
+  and serves RFC 9728 protected-resource metadata so claude.ai / ChatGPT can
+  discover the authorization server. Enable with `LF_HTTP_OAUTH_ISSUER` /
+  `LF_HTTP_PUBLIC_URL` (+ audience/scopes/algorithms); requires the optional
+  `[oauth]` extra (PyJWT). Authentication is at the connector edge — Laserfiche
+  calls still run as the configured service account.
+- **Discoverability** — `server.json` for the official MCP registry, a PyPI
+  ownership marker in the README, and refreshed PyPI metadata.
+
+### Changed
+- **README restructured** — a two-path `Install` section (Desktop extension for
+  everyone; pip / uvx for developers) and an accurate release status line.
+- **Release workflow** now builds and attaches the `.mcpb` (a versioned file
+  plus a stable `laserfiche-mcp.mcpb`) and fails fast if the tag doesn't match
+  the `pyproject.toml` and `manifest.json` versions.
+
 ## [2.1.0] - 2026-05-24
 
 Public-release readiness pass. Closes the deferrals from PLAN.md /
@@ -591,7 +623,8 @@ Writes are off by default. Set `LF_READ_ONLY=false` to register them; otherwise 
 
 Initial public release. **Yanked** — see v0.2.0 for the correct auth flow and endpoint paths.
 
-[Unreleased]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.4.2...v1.5.0

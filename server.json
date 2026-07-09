@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.SamuelSHernandez/laserfiche-mcp",
-  "description": "MCP server for self-hosted Laserfiche repositories — search and read documents from Claude.",
+  "description": "MCP server for self-hosted Laserfiche repositories \u2014 search and read documents from Claude.",
   "repository": {
     "url": "https://github.com/SamuelSHernandez/laserfiche-mcp",
     "source": "github"
   },
-  "version": "2.1.0",
+  "version": "2.2.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "laserfiche-mcp",
-      "version": "2.1.0",
+      "version": "2.2.0",
       "transport": {
         "type": "stdio"
       },

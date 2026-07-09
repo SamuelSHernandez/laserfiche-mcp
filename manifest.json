@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "laserfiche-mcp",
   "display_name": "Laserfiche Assistant",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Search and read documents in a self-hosted Laserfiche repository from Claude \u2014 no terminal or JSON editing required.",
   "long_description": "Connects Claude to a self-hosted Laserfiche Repository API Server. Fill in your repository URL and service-account credentials in the settings form below and click Save \u2014 Claude can then search the repository, list folders, look up entries, read template field values, and extract document text. Ships read-only by default; the write surface stays disabled unless you turn off Read-only mode. Community project, not affiliated with Laserfiche.",
   "author": {

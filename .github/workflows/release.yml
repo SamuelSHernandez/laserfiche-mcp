@@ -94,10 +94,13 @@ jobs:
       - name: Build the Desktop extension (.mcpb)
         run: bash scripts/build-extension.sh
 
-      - name: Name the .mcpb by version
+      # Attach both a versioned file (canonical, immutable per release) and a
+      # stable unversioned copy, so /releases/latest/download/laserfiche-mcp.mcpb
+      # is a permanent one-click download that always points at the newest release.
+      - name: Name the .mcpb (versioned + stable copy)
         run: |
           version="${GITHUB_REF_NAME#v}"
-          mv dist/laserfiche-mcp.mcpb "dist/laserfiche-mcp-${version}.mcpb"
+          cp dist/laserfiche-mcp.mcpb "dist/laserfiche-mcp-${version}.mcpb"
 
       - name: Attach wheel + sdist + .mcpb to the GitHub Release
         uses: softprops/action-gh-release@v2
