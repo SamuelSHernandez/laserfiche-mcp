@@ -1,0 +1,133 @@
+{
+  "manifest_version": "0.4",
+  "name": "laserfiche-mcp",
+  "display_name": "Laserfiche Assistant",
+  "version": "2.1.0",
+  "description": "Search and read documents in a self-hosted Laserfiche repository from Claude \u2014 no terminal or JSON editing required.",
+  "long_description": "Connects Claude to a self-hosted Laserfiche Repository API Server. Fill in your repository URL and service-account credentials in the settings form below and click Save \u2014 Claude can then search the repository, list folders, look up entries, read template field values, and extract document text. Ships read-only by default; the write surface stays disabled unless you turn off Read-only mode. Community project, not affiliated with Laserfiche.",
+  "author": {
+    "name": "Samuel S. Hernandez",
+    "url": "https://github.com/SamuelSHernandez/laserfiche-mcp"
+  },
+  "license": "MIT",
+  "keywords": [
+    "laserfiche",
+    "mcp",
+    "document-management",
+    "ecm",
+    "records"
+  ],
+  "server": {
+    "type": "uv",
+    "entry_point": "mcp_entry.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "mcp_entry.py"
+      ],
+      "env": {
+        "LF_DEPLOYMENT_MODE": "self_hosted",
+        "LF_AUTH_MODE": "password",
+        "LF_REPO_API_URL": "${user_config.repo_api_url}",
+        "LF_REPOSITORY_ID": "${user_config.repository_id}",
+        "LF_USERNAME": "${user_config.username}",
+        "LF_PASSWORD": "${user_config.password}",
+        "LF_API_VERSION": "${user_config.api_version}",
+        "LF_READ_ONLY": "${user_config.read_only}",
+        "LF_VERIFY_SSL": "${user_config.verify_ssl}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "laserfiche_search",
+      "description": "Search the repository with native Laserfiche syntax"
+    },
+    {
+      "name": "laserfiche_search_natural",
+      "description": "Guided natural-language search (templates first, then executes)"
+    },
+    {
+      "name": "laserfiche_folder_list",
+      "description": "List the contents of a folder"
+    },
+    {
+      "name": "laserfiche_entry_get",
+      "description": "Look up a single entry by ID"
+    },
+    {
+      "name": "laserfiche_entry_get_by_path",
+      "description": "Resolve a repository path to an entry"
+    },
+    {
+      "name": "laserfiche_field_values_get",
+      "description": "Read all template field values on an entry"
+    },
+    {
+      "name": "laserfiche_document_edoc_get",
+      "description": "Read document metadata, bytes, or extracted text"
+    }
+  ],
+  "user_config": {
+    "repo_api_url": {
+      "type": "string",
+      "title": "Repository API URL",
+      "description": "Base URL of your Laserfiche Repository API Server, with no trailing path. Example: https://lf.example.com/LFRepositoryAPI",
+      "required": true
+    },
+    "repository_id": {
+      "type": "string",
+      "title": "Repository name",
+      "description": "The repository name or ID \u2014 the same one you pick in the Web Access client login.",
+      "required": true
+    },
+    "username": {
+      "type": "string",
+      "title": "Service account username",
+      "description": "A Laserfiche service account with read access to the repository.",
+      "required": true
+    },
+    "password": {
+      "type": "string",
+      "title": "Service account password",
+      "description": "Stored securely in your operating system's keychain \u2014 never written to a plaintext config file.",
+      "sensitive": true,
+      "required": true
+    },
+    "api_version": {
+      "type": "string",
+      "title": "API version",
+      "description": "Which Repository API surface your server exposes: type v1 (most current on-prem installations) or v2 (newer builds). If unsure, leave v1.",
+      "default": "v1",
+      "required": false
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only mode",
+      "description": "Recommended. When on, Claude can search and read but can never create, change, or delete anything. Turn off only after reading the Safety model in the README.",
+      "default": true,
+      "required": false
+    },
+    "verify_ssl": {
+      "type": "boolean",
+      "title": "Verify TLS certificate",
+      "description": "Leave on for production. Turn off only for a dev server with a self-signed certificate.",
+      "default": true,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}

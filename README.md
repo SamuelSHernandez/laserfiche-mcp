@@ -53,6 +53,42 @@ unless `force_large_delete=true` when child count exceeds
 `LF_DELETE_FOLDER_MAX_DESCENDANTS`, and `LF_WRITE_TOOLS_ALLOWED` can
 scope a deployment to e.g. metadata-only writes.
 
+## Quick start — use it from Claude Desktop
+
+Chat with Claude about the documents in your Laserfiche repository — no terminal, no config files.
+
+### Install in 3 steps
+
+**1. Download**
+
+Grab [`laserfiche-mcp-2.1.0.mcpb`](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/download/v2.1.0/laserfiche-mcp-2.1.0.mcpb) from the [latest release](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/tag/v2.1.0). You'll need [Claude Desktop](https://claude.ai/download) installed first.
+
+**2. Double-click & connect**
+
+Double-click the file, click **Install**, and fill in the short form that appears:
+
+| Field | What to enter |
+|---|---|
+| Repository API URL | Your Laserfiche server address, e.g. `https://your-server/LFRepositoryAPI` |
+| Repository name | The repository you pick when signing in to Laserfiche Web Access |
+| Username | A Laserfiche account that can read the repository |
+| Password | That account's password — stored safely in your computer's keychain |
+
+Not sure what goes where? Ask whoever runs Laserfiche at your organization — it takes them a minute.
+
+**3. Ask**
+
+Open a chat and try:
+
+- *"Find every invoice from March in the Accounting folder."*
+- *"What's in the Onboarding folder? Summarize the newest document."*
+- *"Search for contracts mentioning Acme and list them with dates."*
+
+> [!NOTE]
+> Claude can **look, but never change or delete** — the extension is read-only by default, and your password lives in your operating system's keychain, not a text file.
+
+New to the extension or setting it up for a team? The full walkthrough is in [docs/desktop-extension.md](docs/desktop-extension.md). Prefer pip / CLI / a remote server? See [Install](#install) below.
+
 ## Requirements
 
 - A reachable Laserfiche **Repository API Server** (self-hosted) and a service account that can read it
