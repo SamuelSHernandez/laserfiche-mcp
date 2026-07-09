@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.SamuelSHernandez/laserfiche-mcp -->
+
 # laserfiche-mcp
 
 [![PyPI version](https://img.shields.io/pypi/v/laserfiche-mcp.svg)](https://pypi.org/project/laserfiche-mcp/)
@@ -12,23 +14,10 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that lets
 Claude (Desktop, Code, or any MCP client) search and read documents in a
 [Laserfiche](https://www.laserfiche.com) repository.
 
-> **Current release: v2.0.0** — read AND write tools for self-hosted
-> Repository API v1 and v2, reshaped per a three-pass architectural
-> audit. Every tool is now registered under a `laserfiche_{resource}_{verb}`
-> name (e.g. `laserfiche_entry_get`, `laserfiche_field_set`); the
-> original verb-first names (`get_entry`, `set_fields`, ...) remain
-> registered as deprecation aliases through v2.x and will be removed in
-> v3.0. Error responses gain top-level `kind` (one of five canonical
-> `ToolErrorKind` values), `request_id`, and `upstream_trace_id`
-> fields. Defense-in-depth additions: entry-name validation, page-range
-> validation, path-traversal rejection, cached client-side pre-flight of
-> field/tag/template/link-type names (`LF_VALIDATE_NAMES`), plus a new
-> atomic `get_template_fields` lookup and `summary_only` on the
-> definition-list tools. Write tools still gate behind `LF_READ_ONLY=false`
-> with path-prefix fences, batch caps for folder deletes, two-step
-> confirmation tokens, and a tool-level allowlist. See
-> [CHANGELOG](CHANGELOG.md) for the full per-release notes. Cloud
-> (JWT-signed `client_credentials`) is still on the roadmap.
+Current release **v2.1.0** — read and write tools for self-hosted Repository
+API v1 and v2, with per-tool structured logging and credential redaction. See
+the [changelog](CHANGELOG.md) for per-release detail and the [roadmap](#roadmap)
+for what's next.
 
 ## What you can do with it
 
@@ -53,11 +42,13 @@ unless `force_large_delete=true` when child count exceeds
 `LF_DELETE_FOLDER_MAX_DESCENDANTS`, and `LF_WRITE_TOOLS_ALLOWED` can
 scope a deployment to e.g. metadata-only writes.
 
-## Quick start — use it from Claude Desktop
+## Install
 
-Chat with Claude about the documents in your Laserfiche repository — no terminal, no config files.
+Two ways to run it, depending on who you are.
 
-### Install in 3 steps
+### For everyone — the Claude Desktop extension
+
+Chat with your Laserfiche repository from Claude Desktop — no terminal, no config files.
 
 **1. Download**
 
@@ -87,23 +78,20 @@ Open a chat and try:
 > [!NOTE]
 > Claude can **look, but never change or delete** — the extension is read-only by default, and your password lives in your operating system's keychain, not a text file.
 
-New to the extension or setting it up for a team? The full walkthrough is in [docs/desktop-extension.md](docs/desktop-extension.md). Prefer pip / CLI / a remote server? See [Install](#install) below.
+Full walkthrough for end users and team rollouts: [docs/desktop-extension.md](docs/desktop-extension.md).
 
-## Requirements
-
-- A reachable Laserfiche **Repository API Server** (self-hosted) and a service account that can read it
-- Python 3.10+ (the install path below uses [`uv`](https://docs.astral.sh/uv/) so you don't have to think about this)
-- An MCP-capable client (Claude Desktop, Claude Code, MCP Inspector, etc.)
-
-## Install
-
-Pick whichever fits your workflow:
+### For developers — the Python package
 
 ```bash
-# Run directly without cloning
-uvx laserfiche-mcp
+uvx laserfiche-mcp            # run directly, no install
+pip install laserfiche-mcp    # or add it to your environment
+```
 
-# Or clone for development
+Requires Python 3.10+ and a reachable Laserfiche **Repository API Server**
+(self-hosted) with a service account that can read it, plus any MCP client
+(Claude Desktop, Claude Code, MCP Inspector). For local development:
+
+```bash
 git clone https://github.com/SamuelSHernandez/laserfiche-mcp
 cd laserfiche-mcp
 uv sync --extra dev
