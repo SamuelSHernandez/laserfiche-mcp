@@ -66,10 +66,14 @@ jobs:
       - name: Publish to PyPI via trusted publishing
         uses: pypa/gh-action-pypi-publish@release/v1
 
+  # Depends on `build`, NOT `publish`: the .mcpb and the GitHub Release must ship
+  # even when PyPI publishing fails (e.g. a trusted-publisher misconfiguration).
+  # This job packs the .mcpb itself, so it never enters the dist/ the publish job
+  # uploads to PyPI. publish and github-release run in parallel off the build.
   github-release:
-    name: Build .mcpb and attach everything to the release
+    name: Build .mcpb and publish the GitHub Release
     runs-on: ubuntu-latest
-    needs: publish
+    needs: build
     permissions:
       contents: write
     steps:
@@ -84,8 +88,8 @@ jobs:
           path: dist/
 
       # Node is only needed at build time for the mcpb packer; end users never
-      # need it. The .mcpb is packed here (after PyPI publish) so it never lands
-      # in the dist/ that the publish job uploads to PyPI.
+      # need it. Packed in this job (not the build job), so it never lands in the
+      # dist/ that the publish job uploads to PyPI.
       - name: Set up Node (for the mcpb packer)
         uses: actions/setup-node@v4
         with:
