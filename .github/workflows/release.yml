@@ -15,20 +15,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Guard: the tag must match the version in pyproject.toml AND manifest.json.
+      # Guard: the tag must match pyproject.toml, manifest.json, AND server.json.
       # Fails the whole release before anything is published, so a forgotten
-      # version bump can't ship a mismatched PyPI package or .mcpb.
+      # version bump can't ship a mismatched PyPI package, .mcpb, or registry entry.
       - name: Verify tag matches package versions
         run: |
           version="${GITHUB_REF_NAME#v}"
           pyproject_v=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           manifest_v=$(python3 -c "import json; print(json.load(open('manifest.json'))['version'])")
-          echo "tag=$version  pyproject=$pyproject_v  manifest=$manifest_v"
+          server_v=$(python3 -c "import json; print(json.load(open('server.json'))['version'])")
+          echo "tag=$version  pyproject=$pyproject_v  manifest=$manifest_v  server=$server_v"
           if [ "$version" != "$pyproject_v" ]; then
             echo "::error::tag v$version does not match pyproject.toml version $pyproject_v"; exit 1
           fi
           if [ "$version" != "$manifest_v" ]; then
             echo "::error::tag v$version does not match manifest.json version $manifest_v"; exit 1
+          fi
+          if [ "$version" != "$server_v" ]; then
+            echo "::error::tag v$version does not match server.json version $server_v"; exit 1
           fi
 
       - name: Install uv
@@ -112,3 +116,26 @@ jobs:
           files: dist/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  # Publish (or update) the entry in the official MCP registry from server.json.
+  # Runs after PyPI publish because the registry verifies namespace ownership via
+  # the `mcp-name` marker in the *published* PyPI README. Authenticates with
+  # GitHub OIDC — no token and no interactive login.
+  registry:
+    name: Publish to the MCP Registry
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Log in via GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json
+        run: ./mcp-publisher publish
