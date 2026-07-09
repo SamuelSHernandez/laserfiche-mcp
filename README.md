@@ -180,6 +180,55 @@ This opens a UI where you can call each tool directly and watch the
 JSON-RPC traffic — useful for verifying endpoint shapes against your
 specific Repository API Server version before wiring it into Claude.
 
+## Remote HTTP (web clients)
+
+The default transport is **stdio** — for local clients that launch the server
+as a subprocess (Claude Desktop, Claude Code, Cursor, Gemini CLI). Web and
+cloud clients (**claude.ai custom connectors**, **ChatGPT connectors**) can't
+spawn a local process; they connect to a URL. The same server can serve those
+clients over **Streamable HTTP**:
+
+```bash
+laserfiche-mcp --http                 # binds 127.0.0.1:8000, path /mcp
+laserfiche-mcp --http --port 9000     # override port for this run
+```
+
+Configuration (all optional, `LF_*` env like everything else):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LF_HTTP_HOST` | `127.0.0.1` | Bind interface. Loopback by default — not reachable off the machine. |
+| `LF_HTTP_PORT` | `8000` | Listen port. |
+| `LF_HTTP_PATH` | `/mcp` | Endpoint path; clients connect to `http(s)://host:port/mcp`. |
+| `LF_HTTP_AUTH_TOKEN` | *(unset)* | Static bearer token required on every request. |
+
+Verify locally with the Inspector (point it at the URL, not the command):
+
+```bash
+laserfiche-mcp --http &
+npx @modelcontextprotocol/inspector   # then connect to http://127.0.0.1:8000/mcp
+```
+
+### Connecting a web client
+
+claude.ai and ChatGPT connectors need a **public HTTPS URL**. In practice that
+means putting this server behind a reverse proxy (or a tunnel like `cloudflared`
+/ `ngrok` for a spike) and adding the resulting `https://…/mcp` URL as a custom
+connector in the client's settings.
+
+> [!WARNING]
+> **Read this before exposing `--http` to a network.** This server speaks plain
+> HTTP with an optional static token — it is *not* a hardened public endpoint.
+> - Keep `LF_HTTP_HOST` on loopback unless you have a reason not to; binding to a
+>   routable interface **without** `LF_HTTP_AUTH_TOKEN` logs a warning because it
+>   leaves your repository reachable unauthenticated.
+> - Terminate **TLS at a reverse proxy** in front of this server.
+> - Your Laserfiche server is self-hosted behind a firewall; a public connector
+>   needs a deliberate **network path in** to it (VPN / DMZ / tunnel).
+> - Per-user **OAuth** is not built in yet — the static bearer token is a single
+>   shared secret. See [docs/remote-http.md](docs/remote-http.md) for the full
+>   deployment and security checklist.
+
 ## Tools
 
 > Tool names below are shown in their original verb-first form

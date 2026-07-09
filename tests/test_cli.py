@@ -54,6 +54,20 @@ def test_cli_parse_args_diagnose_flag() -> None:
     assert args.diagnose is True
 
 
+def test_cli_parse_args_http_defaults() -> None:
+    args = cli._parse_args([])
+    assert args.http is False
+    assert args.host is None
+    assert args.port is None
+
+
+def test_cli_parse_args_http_with_overrides() -> None:
+    args = cli._parse_args(["--http", "--host", "0.0.0.0", "--port", "9443"])
+    assert args.http is True
+    assert args.host == "0.0.0.0"
+    assert args.port == 9443
+
+
 def test_cli_parse_args_verbose_counts() -> None:
     args = cli._parse_args(["-v"])
     assert args.verbose == 1
@@ -461,6 +475,30 @@ def test_main_config_flag_loads_dotenv_then_starts(
     cli.main(lambda: register_called.append("registered"))
     assert register_called == ["registered"]
     assert stub_mcp_run_called == [True]
+
+
+def test_main_http_flag_routes_to_run_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--http calls run_http (not mcp.run) with CLI host/port overrides applied."""
+    monkeypatch.setattr(
+        "sys.argv",
+        ["laserfiche-mcp", "--http", "--host", "0.0.0.0", "--port", "9443"],
+    )
+    from laserfiche_mcp import http_transport
+
+    captured: list[tuple[str, int]] = []
+
+    def _stub_run_http(settings: Any) -> None:
+        captured.append((settings.http_host, settings.http_port))
+
+    monkeypatch.setattr(http_transport, "run_http", _stub_run_http)
+
+    class _StubMCP:
+        def run(self) -> None:  # pragma: no cover - must not be called
+            raise AssertionError("stdio mcp.run() should not run in --http mode")
+
+    monkeypatch.setattr(server, "mcp", _StubMCP())
+    cli.main(lambda: None)
+    assert captured == [("0.0.0.0", 9443)]
 
 
 def test_main_keyboard_interrupt_is_swallowed(

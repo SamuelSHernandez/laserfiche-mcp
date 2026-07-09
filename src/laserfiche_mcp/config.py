@@ -214,6 +214,38 @@ class Settings(BaseSettings):
         "`error_subkind` + `upstream_trace_id`.",
     )
 
+    # --- HTTP transport (remote / web clients) ---
+    # The default stdio transport serves local clients that spawn the server as
+    # a subprocess (Claude Desktop, Claude Code, Cursor, Gemini CLI). Web and
+    # cloud clients — claude.ai custom connectors, ChatGPT connectors — cannot
+    # spawn a process; they connect to a URL. Running `laserfiche-mcp --http`
+    # serves the same tools over Streamable HTTP for those clients.
+    http_host: str = Field(
+        default="127.0.0.1",
+        description="Interface the --http server binds to. Defaults to loopback "
+        "so the server is NOT reachable off this machine. Set to 0.0.0.0 (or a "
+        "specific interface) to expose it — only behind a reverse proxy that "
+        "terminates TLS, and only with LF_HTTP_AUTH_TOKEN set.",
+    )
+    http_port: int = Field(
+        default=8000,
+        ge=1,
+        le=65535,
+        description="TCP port the --http server listens on.",
+    )
+    http_path: str = Field(
+        default="/mcp",
+        description="URL path the Streamable HTTP endpoint is mounted at. Web "
+        "clients connect to http(s)://<host>:<port><path>.",
+    )
+    http_auth_token: SecretStr | None = Field(
+        default=None,
+        description="Static bearer token required on every --http request "
+        "(Authorization: Bearer <token>). When unset, the HTTP server accepts "
+        "unauthenticated requests — safe only on loopback. Required before "
+        "exposing the server to any network.",
+    )
+
     # --- Validation ---
     @model_validator(mode="after")
     def _validate(self) -> Settings:
@@ -271,5 +303,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"LF_LOG_FORMAT must be one of {sorted(valid_formats)}, got {self.log_format!r}."
             )
+
+        if not self.http_path.startswith("/"):
+            raise ValueError(f"LF_HTTP_PATH must start with '/', got {self.http_path!r}.")
 
         return self
