@@ -1,0 +1,59 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.SamuelSHernandez/laserfiche-mcp",
+  "description": "MCP server for self-hosted Laserfiche repositories \u2014 search and read documents from Claude.",
+  "repository": {
+    "url": "https://github.com/SamuelSHernandez/laserfiche-mcp",
+    "source": "github"
+  },
+  "version": "2.2.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "laserfiche-mcp",
+      "version": "2.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "LF_REPO_API_URL",
+          "description": "Base URL of your Laserfiche Repository API Server, e.g. https://lf.example.com/LFRepositoryAPI",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "LF_REPOSITORY_ID",
+          "description": "Repository name or ID to operate against.",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "LF_USERNAME",
+          "description": "Service-account username with read access to the repository.",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "LF_PASSWORD",
+          "description": "Service-account password.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "LF_API_VERSION",
+          "description": "Repository API version: v1 (default) or v2.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "LF_READ_ONLY",
+          "description": "Read-only mode. Defaults to true; set false to register the write tools.",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

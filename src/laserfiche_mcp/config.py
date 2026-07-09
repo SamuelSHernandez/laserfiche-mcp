@@ -214,6 +214,86 @@ class Settings(BaseSettings):
         "`error_subkind` + `upstream_trace_id`.",
     )
 
+    # --- HTTP transport (remote / web clients) ---
+    # The default stdio transport serves local clients that spawn the server as
+    # a subprocess (Claude Desktop, Claude Code, Cursor, Gemini CLI). Web and
+    # cloud clients — claude.ai custom connectors, ChatGPT connectors — cannot
+    # spawn a process; they connect to a URL. Running `laserfiche-mcp --http`
+    # serves the same tools over Streamable HTTP for those clients.
+    http_host: str = Field(
+        default="127.0.0.1",
+        description="Interface the --http server binds to. Defaults to loopback "
+        "so the server is NOT reachable off this machine. Set to 0.0.0.0 (or a "
+        "specific interface) to expose it — only behind a reverse proxy that "
+        "terminates TLS, and only with LF_HTTP_AUTH_TOKEN set.",
+    )
+    http_port: int = Field(
+        default=8000,
+        ge=1,
+        le=65535,
+        description="TCP port the --http server listens on.",
+    )
+    http_path: str = Field(
+        default="/mcp",
+        description="URL path the Streamable HTTP endpoint is mounted at. Web "
+        "clients connect to http(s)://<host>:<port><path>.",
+    )
+    http_auth_token: SecretStr | None = Field(
+        default=None,
+        description="Static bearer token required on every --http request "
+        "(Authorization: Bearer <token>). When unset, the HTTP server accepts "
+        "unauthenticated requests — safe only on loopback. Required before "
+        "exposing the server to any network.",
+    )
+
+    # --- OAuth Resource Server (per-user auth for --http) ---
+    # When LF_HTTP_OAUTH_ISSUER is set, the --http server acts as an OAuth 2.1
+    # Resource Server: it verifies per-user bearer tokens issued by an external
+    # authorization server (LFDS, Entra, Okta, Auth0, Google) and rejects
+    # anything else with 401. This is authentication at the connector edge —
+    # verified requests still reach Laserfiche via the configured service
+    # account (LF_USERNAME / OAuth client_credentials). OAuth takes precedence
+    # over LF_HTTP_AUTH_TOKEN when both are set.
+    http_oauth_issuer: HttpUrl | None = Field(
+        default=None,
+        description="Issuer URL of the external authorization server that mints "
+        "user access tokens. Enables OAuth Resource Server mode. Used for the "
+        "`iss` claim check and, unless LF_HTTP_OAUTH_JWKS_URL is set, to "
+        "discover the JWKS via {issuer}/.well-known/openid-configuration.",
+    )
+    http_public_url: HttpUrl | None = Field(
+        default=None,
+        description="Public HTTPS URL this server is reachable at, including the "
+        "MCP path (e.g. https://lf.example.com/mcp). Advertised in the "
+        "protected-resource metadata so clients can discover the authorization "
+        "server. Required when LF_HTTP_OAUTH_ISSUER is set.",
+    )
+    http_oauth_audience: str | None = Field(
+        default=None,
+        description="Expected `aud` claim on incoming tokens — the identifier "
+        "this Resource Server is registered as in the authorization server. "
+        "Defaults to LF_HTTP_PUBLIC_URL when unset. The audience check is what "
+        "stops a token minted for another service from being replayed here.",
+    )
+    http_oauth_jwks_url: HttpUrl | None = Field(
+        default=None,
+        description="Explicit JWKS (JSON Web Key Set) URL for token-signature "
+        "verification. Optional — when unset it is discovered from the issuer's "
+        "OpenID configuration.",
+    )
+    http_oauth_required_scopes: str | None = Field(
+        default=None,
+        description="Comma- or space-separated scopes a token must carry to be "
+        "accepted (e.g. 'laserfiche.read'). When unset, any validly-signed "
+        "token for the right audience is accepted.",
+    )
+    http_oauth_algorithms: str = Field(
+        default="RS256",
+        description="Comma-separated allowlist of JWT signing algorithms. "
+        "Defaults to RS256; asymmetric algorithms only — 'none' and HMAC "
+        "families are rejected to avoid signature-bypass classes.",
+    )
+
     # --- Validation ---
     @model_validator(mode="after")
     def _validate(self) -> Settings:
@@ -272,4 +352,53 @@ class Settings(BaseSettings):
                 f"LF_LOG_FORMAT must be one of {sorted(valid_formats)}, got {self.log_format!r}."
             )
 
+        if not self.http_path.startswith("/"):
+            raise ValueError(f"LF_HTTP_PATH must start with '/', got {self.http_path!r}.")
+
+        if self.http_oauth_issuer is not None:
+            if self.http_public_url is None:
+                raise ValueError(
+                    "LF_HTTP_PUBLIC_URL is required when LF_HTTP_OAUTH_ISSUER is set "
+                    "(clients need it to discover the authorization server)."
+                )
+            # Reject signature-bypass-prone algorithms up front. A Resource
+            # Server verifies with a public key, so only asymmetric families are
+            # allowed — HMAC (shared secret) and 'none' must never be accepted.
+            allowed_families = ("RS", "ES", "PS", "EdDSA")
+            for alg in self.oauth_algorithms:
+                if not alg.startswith(allowed_families):
+                    raise ValueError(
+                        f"LF_HTTP_OAUTH_ALGORITHMS entry {alg!r} is not an asymmetric "
+                        f"algorithm. Allowed families: {', '.join(allowed_families)}."
+                    )
+
         return self
+
+    # --- Derived accessors ---
+    @property
+    def oauth_enabled(self) -> bool:
+        """True when OAuth Resource Server mode is configured for --http."""
+        return self.http_oauth_issuer is not None
+
+    @property
+    def oauth_effective_audience(self) -> str | None:
+        """The `aud` value to enforce: explicit audience, else the public URL."""
+        if self.http_oauth_audience:
+            return self.http_oauth_audience
+        if self.http_public_url is not None:
+            return str(self.http_public_url)
+        return None
+
+    @property
+    def oauth_algorithms(self) -> list[str]:
+        """Parsed, whitespace/comma-tolerant JWT algorithm allowlist."""
+        raw = self.http_oauth_algorithms.replace(",", " ")
+        return [a.strip() for a in raw.split() if a.strip()]
+
+    @property
+    def oauth_required_scopes(self) -> list[str]:
+        """Parsed required-scope list (empty when none configured)."""
+        if not self.http_oauth_required_scopes:
+            return []
+        raw = self.http_oauth_required_scopes.replace(",", " ")
+        return [s.strip() for s in raw.split() if s.strip()]

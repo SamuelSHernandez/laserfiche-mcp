@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.SamuelSHernandez/laserfiche-mcp -->
+
 # laserfiche-mcp
 
 [![PyPI version](https://img.shields.io/pypi/v/laserfiche-mcp.svg)](https://pypi.org/project/laserfiche-mcp/)
@@ -12,23 +14,10 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that lets
 Claude (Desktop, Code, or any MCP client) search and read documents in a
 [Laserfiche](https://www.laserfiche.com) repository.
 
-> **Current release: v2.0.0** — read AND write tools for self-hosted
-> Repository API v1 and v2, reshaped per a three-pass architectural
-> audit. Every tool is now registered under a `laserfiche_{resource}_{verb}`
-> name (e.g. `laserfiche_entry_get`, `laserfiche_field_set`); the
-> original verb-first names (`get_entry`, `set_fields`, ...) remain
-> registered as deprecation aliases through v2.x and will be removed in
-> v3.0. Error responses gain top-level `kind` (one of five canonical
-> `ToolErrorKind` values), `request_id`, and `upstream_trace_id`
-> fields. Defense-in-depth additions: entry-name validation, page-range
-> validation, path-traversal rejection, cached client-side pre-flight of
-> field/tag/template/link-type names (`LF_VALIDATE_NAMES`), plus a new
-> atomic `get_template_fields` lookup and `summary_only` on the
-> definition-list tools. Write tools still gate behind `LF_READ_ONLY=false`
-> with path-prefix fences, batch caps for folder deletes, two-step
-> confirmation tokens, and a tool-level allowlist. See
-> [CHANGELOG](CHANGELOG.md) for the full per-release notes. Cloud
-> (JWT-signed `client_credentials`) is still on the roadmap.
+Current release **v2.2.0** — read and write tools for self-hosted Repository
+API v1 and v2, a one-click Claude Desktop extension, and an optional remote HTTP
+transport with per-user OAuth for web clients. See the [changelog](CHANGELOG.md)
+for detail and the [roadmap](#roadmap) for what's next.
 
 ## What you can do with it
 
@@ -53,21 +42,56 @@ unless `force_large_delete=true` when child count exceeds
 `LF_DELETE_FOLDER_MAX_DESCENDANTS`, and `LF_WRITE_TOOLS_ALLOWED` can
 scope a deployment to e.g. metadata-only writes.
 
-## Requirements
-
-- A reachable Laserfiche **Repository API Server** (self-hosted) and a service account that can read it
-- Python 3.10+ (the install path below uses [`uv`](https://docs.astral.sh/uv/) so you don't have to think about this)
-- An MCP-capable client (Claude Desktop, Claude Code, MCP Inspector, etc.)
-
 ## Install
 
-Pick whichever fits your workflow:
+Two ways to run it, depending on who you are.
+
+### For everyone — the Claude Desktop extension
+
+Chat with your Laserfiche repository from Claude Desktop — no terminal, no config files.
+
+**1. Download**
+
+[**Download the extension**](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/latest/download/laserfiche-mcp.mcpb) (always the newest version), or browse the [latest release](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/latest). You'll need [Claude Desktop](https://claude.ai/download) installed first.
+
+**2. Double-click & connect**
+
+Double-click the file, click **Install**, and fill in the short form that appears:
+
+| Field | What to enter |
+|---|---|
+| Repository API URL | Your Laserfiche server address, e.g. `https://your-server/LFRepositoryAPI` |
+| Repository name | The repository you pick when signing in to Laserfiche Web Access |
+| Username | A Laserfiche account that can read the repository |
+| Password | That account's password — stored safely in your computer's keychain |
+
+Not sure what goes where? Ask whoever runs Laserfiche at your organization — it takes them a minute.
+
+**3. Ask**
+
+Open a chat and try:
+
+- *"Find every invoice from March in the Accounting folder."*
+- *"What's in the Onboarding folder? Summarize the newest document."*
+- *"Search for contracts mentioning Acme and list them with dates."*
+
+> [!NOTE]
+> Claude can **look, but never change or delete** — the extension is read-only by default, and your password lives in your operating system's keychain, not a text file.
+
+Full walkthrough for end users and team rollouts: [docs/desktop-extension.md](docs/desktop-extension.md).
+
+### For developers — the Python package
 
 ```bash
-# Run directly without cloning
-uvx laserfiche-mcp
+uvx laserfiche-mcp            # run directly, no install
+pip install laserfiche-mcp    # or add it to your environment
+```
 
-# Or clone for development
+Requires Python 3.10+ and a reachable Laserfiche **Repository API Server**
+(self-hosted) with a service account that can read it, plus any MCP client
+(Claude Desktop, Claude Code, MCP Inspector). For local development:
+
+```bash
 git clone https://github.com/SamuelSHernandez/laserfiche-mcp
 cd laserfiche-mcp
 uv sync --extra dev
@@ -179,6 +203,84 @@ npx @modelcontextprotocol/inspector uvx laserfiche-mcp
 This opens a UI where you can call each tool directly and watch the
 JSON-RPC traffic — useful for verifying endpoint shapes against your
 specific Repository API Server version before wiring it into Claude.
+
+## Remote HTTP (web clients)
+
+The default transport is **stdio** — for local clients that launch the server
+as a subprocess (Claude Desktop, Claude Code, Cursor, Gemini CLI). Web and
+cloud clients (**claude.ai custom connectors**, **ChatGPT connectors**) can't
+spawn a local process; they connect to a URL. The same server can serve those
+clients over **Streamable HTTP**:
+
+```bash
+laserfiche-mcp --http                 # binds 127.0.0.1:8000, path /mcp
+laserfiche-mcp --http --port 9000     # override port for this run
+```
+
+Configuration (all optional, `LF_*` env like everything else):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LF_HTTP_HOST` | `127.0.0.1` | Bind interface. Loopback by default — not reachable off the machine. |
+| `LF_HTTP_PORT` | `8000` | Listen port. |
+| `LF_HTTP_PATH` | `/mcp` | Endpoint path; clients connect to `http(s)://host:port/mcp`. |
+| `LF_HTTP_AUTH_TOKEN` | *(unset)* | Static shared bearer token. Simplest auth; ignored when OAuth is on. |
+| `LF_HTTP_OAUTH_ISSUER` | *(unset)* | Turns on **per-user OAuth** — verifies each caller's token against this authorization server. |
+
+The `--http` server chooses its auth by precedence: **OAuth** (if
+`LF_HTTP_OAUTH_ISSUER` is set) → **static token** (if `LF_HTTP_AUTH_TOKEN`) →
+**none** (loopback only). OAuth is the multi-user path for claude.ai / ChatGPT;
+see [Per-user OAuth](#per-user-oauth) below.
+
+Verify locally with the Inspector (point it at the URL, not the command):
+
+```bash
+laserfiche-mcp --http &
+npx @modelcontextprotocol/inspector   # then connect to http://127.0.0.1:8000/mcp
+```
+
+### Per-user OAuth
+
+For a multi-user connector, run the server as an **OAuth 2.1 Resource Server** —
+each user signs in through your existing identity provider (LFDS, Microsoft
+Entra, Okta, Auth0, Google) and the server verifies their token:
+
+```bash
+pip install 'laserfiche-mcp[oauth]'
+
+LF_HTTP_OAUTH_ISSUER="https://login.microsoftonline.com/<tenant>/v2.0" \
+LF_HTTP_PUBLIC_URL="https://lf.example.com/mcp" \
+LF_HTTP_OAUTH_AUDIENCE="api://laserfiche-mcp" \
+LF_HTTP_OAUTH_REQUIRED_SCOPES="laserfiche.read" \
+  laserfiche-mcp --http --host 0.0.0.0
+```
+
+The server then serves protected-resource metadata (RFC 9728), so claude.ai /
+ChatGPT discover your authorization server, run the `authorization_code` + PKCE
+flow, and present a bearer token that this server verifies (signature via JWKS,
+plus `aud` / `iss` / `exp` / scopes). This is authentication **at the edge** —
+verified requests still reach Laserfiche via the shared service account, so the
+Laserfiche audit trail shows that account, not the end user. Full details,
+including IdP registration and the security checklist, are in
+[docs/remote-http.md](docs/remote-http.md).
+
+### Connecting a web client
+
+claude.ai and ChatGPT connectors need a **public HTTPS URL**. In practice that
+means putting this server behind a reverse proxy (or a tunnel like `cloudflared`
+/ `ngrok` for a spike) and adding the resulting `https://…/mcp` URL as a custom
+connector in the client's settings.
+
+> [!WARNING]
+> **Read this before exposing `--http` to a network.**
+> - Configure auth: OAuth (`LF_HTTP_OAUTH_ISSUER`) for multi-user, or at least a
+>   long random `LF_HTTP_AUTH_TOKEN`. Binding off-loopback with neither logs a
+>   warning and leaves your repository reachable unauthenticated.
+> - Terminate **TLS at a reverse proxy** in front of this server (it speaks plain HTTP).
+> - Your Laserfiche server is self-hosted behind a firewall; a public connector
+>   needs a deliberate **network path in** to it (VPN / DMZ / tunnel).
+> - See [docs/remote-http.md](docs/remote-http.md) for the full deployment and
+>   security checklist.
 
 ## Tools
 

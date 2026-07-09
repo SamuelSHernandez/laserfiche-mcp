@@ -32,19 +32,32 @@ _HELP_TEXT = """\
 laserfiche-mcp — Model Context Protocol server for Laserfiche.
 
 Usage:
-  laserfiche-mcp                Start the stdio MCP server.
+  laserfiche-mcp                Start the stdio MCP server (for local clients
+                                that spawn it: Claude Desktop, Cursor, etc.).
+  laserfiche-mcp --http         Serve over Streamable HTTP for web / cloud
+                                clients (claude.ai and ChatGPT connectors).
   laserfiche-mcp --diagnose     Probe the configured server and print a
                                 deployment-fitness report (no MCP started).
   laserfiche-mcp --help         Show this message.
   laserfiche-mcp --version      Print version and exit.
 
 Options:
+  --http                        Run the Streamable HTTP transport instead of
+                                stdio. Binds to LF_HTTP_HOST:LF_HTTP_PORT
+                                (default 127.0.0.1:8000, path /mcp). Loopback
+                                by default; see --host / --port to override.
+  --host HOST                   Override LF_HTTP_HOST for this run (--http only).
+  --port PORT                   Override LF_HTTP_PORT for this run (--http only).
   -v, --verbose                 Increase log verbosity (DEBUG). Repeats are
                                 accepted but have no further effect.
   -q, --quiet                   Decrease log verbosity (WARNING). Mutually
                                 exclusive with --verbose.
   --config PATH                 Load environment from a specific .env file
                                 instead of the default $CWD/.env discovery.
+
+Exposing --http to a network requires LF_HTTP_AUTH_TOKEN (a bearer token
+checked on every request) and TLS terminated by a reverse proxy in front.
+See https://github.com/SamuelSHernandez/laserfiche-mcp#remote-http.
 
 Configuration is read from LF_* environment variables (or a .env file in
 the working directory). Required at a minimum:
@@ -103,6 +116,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("-h", "--help", action="store_true")
     parser.add_argument("-V", "--version", action="store_true")
     parser.add_argument("--diagnose", action="store_true")
+    parser.add_argument("--http", action="store_true")
+    parser.add_argument("--host", metavar="HOST", default=None)
+    parser.add_argument("--port", metavar="PORT", type=int, default=None)
     parser.add_argument("--config", metavar="PATH", default=None)
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("-v", "--verbose", action="count", default=0)
@@ -307,6 +323,17 @@ def main(register_writes: Callable[[], None]) -> None:
         sys.exit(exit_code)
 
     register_writes()
+
+    if args.http:
+        # CLI overrides win over LF_HTTP_* env for this run.
+        if args.host is not None:
+            settings.http_host = args.host
+        if args.port is not None:
+            settings.http_port = args.port
+        from .http_transport import run_http  # noqa: PLC0415
+
+        run_http(settings)
+        return
 
     # Import the FastMCP instance lazily to keep cli.py decoupled from the
     # tool-registration side effects in server.py.

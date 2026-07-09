@@ -15,6 +15,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Guard: the tag must match the version in pyproject.toml AND manifest.json.
+      # Fails the whole release before anything is published, so a forgotten
+      # version bump can't ship a mismatched PyPI package or .mcpb.
+      - name: Verify tag matches package versions
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          pyproject_v=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          manifest_v=$(python3 -c "import json; print(json.load(open('manifest.json'))['version'])")
+          echo "tag=$version  pyproject=$pyproject_v  manifest=$manifest_v"
+          if [ "$version" != "$pyproject_v" ]; then
+            echo "::error::tag v$version does not match pyproject.toml version $pyproject_v"; exit 1
+          fi
+          if [ "$version" != "$manifest_v" ]; then
+            echo "::error::tag v$version does not match manifest.json version $manifest_v"; exit 1
+          fi
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
@@ -51,7 +67,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    name: Attach artifacts to GitHub Release
+    name: Build .mcpb and attach everything to the release
     runs-on: ubuntu-latest
     needs: publish
     permissions:
@@ -59,13 +75,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download artifacts
+      # The Python distributions built earlier (wheel + sdist). Downloaded here
+      # so they end up in dist/ alongside the .mcpb for a single upload.
+      - name: Download Python distributions
         uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
 
-      - name: Attach to existing release (or create one)
+      # Node is only needed at build time for the mcpb packer; end users never
+      # need it. The .mcpb is packed here (after PyPI publish) so it never lands
+      # in the dist/ that the publish job uploads to PyPI.
+      - name: Set up Node (for the mcpb packer)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build the Desktop extension (.mcpb)
+        run: bash scripts/build-extension.sh
+
+      # Attach both a versioned file (canonical, immutable per release) and a
+      # stable unversioned copy, so /releases/latest/download/laserfiche-mcp.mcpb
+      # is a permanent one-click download that always points at the newest release.
+      - name: Name the .mcpb (versioned + stable copy)
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cp dist/laserfiche-mcp.mcpb "dist/laserfiche-mcp-${version}.mcpb"
+
+      - name: Attach wheel + sdist + .mcpb to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
