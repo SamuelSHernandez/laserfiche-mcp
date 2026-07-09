@@ -33,6 +33,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# OAuth Resource Server mode for the --http transport (per-user token
+# verification). Optional: `pip install 'laserfiche-mcp[oauth]'`. Only needed
+# when LF_HTTP_OAUTH_ISSUER is configured.
+oauth = [
+    "pyjwt[crypto]>=2.9.0,<3",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -40,6 +46,9 @@ dev = [
     "pytest-httpx>=0.30.0",
     "ruff>=0.5.0",
     "mypy>=1.10.0",
+    # OAuth extra is exercised by the test suite, so CI (uv sync --extra dev)
+    # must have it available.
+    "pyjwt[crypto]>=2.9.0,<3",
 ]
 
 [project.scripts]

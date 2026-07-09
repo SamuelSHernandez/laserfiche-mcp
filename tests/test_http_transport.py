@@ -99,7 +99,9 @@ def test_build_http_app_warns_when_exposed_without_token(
     with caplog.at_level(logging.WARNING, logger="laserfiche_mcp"):
         http_transport.build_http_app(settings)
 
-    assert any("WITHOUT" in rec.message and "0.0.0.0" in rec.message for rec in caplog.records)
+    assert any(
+        "NO authentication" in rec.message and "0.0.0.0" in rec.message for rec in caplog.records
+    )
 
 
 def test_build_http_app_no_warning_on_loopback(
@@ -112,7 +114,7 @@ def test_build_http_app_no_warning_on_loopback(
     with caplog.at_level(logging.WARNING, logger="laserfiche_mcp"):
         http_transport.build_http_app(settings)
 
-    assert not any("WITHOUT" in rec.message for rec in caplog.records)
+    assert not any("NO authentication" in rec.message for rec in caplog.records)
 
 
 def test_build_http_app_no_warning_when_exposed_with_token(
@@ -125,4 +127,61 @@ def test_build_http_app_no_warning_when_exposed_with_token(
     with caplog.at_level(logging.WARNING, logger="laserfiche_mcp"):
         http_transport.build_http_app(settings)
 
-    assert not any("WITHOUT" in rec.message for rec in caplog.records)
+    assert not any("NO authentication" in rec.message for rec in caplog.records)
+
+
+# --- build_http_app: OAuth mode ----------------------------------------------
+
+
+def test_build_http_app_oauth_sets_auth_and_verifier(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://lf.example.com/mcp")
+    settings = Settings()  # type: ignore[call-arg]
+
+    http_transport.build_http_app(settings)
+
+    from laserfiche_mcp import _app
+    from laserfiche_mcp.oauth import JwtTokenVerifier
+
+    assert _app.mcp.settings.auth is not None
+    assert str(_app.mcp.settings.auth.issuer_url).rstrip("/") == "https://idp.example.com"
+    assert isinstance(_app.mcp._token_verifier, JwtTokenVerifier)
+
+    # Reset shared singleton so later tests aren't affected.
+    _app.mcp.settings.auth = None
+    _app.mcp._token_verifier = None
+
+
+def test_build_http_app_oauth_takes_precedence_over_static_token(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://lf.example.com/mcp")
+    monkeypatch.setenv("LF_HTTP_AUTH_TOKEN", "static-token-ignored")
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.oauth_enabled is True
+
+    http_transport.build_http_app(settings)
+
+    from laserfiche_mcp import _app
+
+    # OAuth wins: FastMCP auth is configured (not the static-token middleware path).
+    assert _app.mcp.settings.auth is not None
+    _app.mcp.settings.auth = None
+    _app.mcp._token_verifier = None
+
+
+def test_build_http_app_static_token_clears_fastmcp_auth(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_HTTP_AUTH_TOKEN", "tok")
+    monkeypatch.delenv("LF_HTTP_OAUTH_ISSUER", raising=False)
+    settings = Settings()  # type: ignore[call-arg]
+
+    http_transport.build_http_app(settings)
+
+    from laserfiche_mcp import _app
+
+    assert _app.mcp.settings.auth is None

@@ -83,30 +83,67 @@ def build_http_app(settings: Settings) -> Starlette:
     mcp.settings.port = settings.http_port
     mcp.settings.streamable_http_path = settings.http_path
 
-    token = settings.http_auth_token.get_secret_value() if settings.http_auth_token else None
-
-    if not is_loopback(settings.http_host) and not token:
-        logger.warning(
-            "laserfiche-mcp is binding to %s (not loopback) WITHOUT "
-            "LF_HTTP_AUTH_TOKEN. The repository bridge is reachable by anything "
-            "that can route to this host and requires no authentication. Set "
-            "LF_HTTP_AUTH_TOKEN and terminate TLS at a reverse proxy before "
-            "exposing this to a network.",
-            settings.http_host,
-        )
+    # Auth precedence: OAuth (per-user) > static bearer token > none.
+    if settings.oauth_enabled:
+        auth_mode = _configure_oauth(mcp, settings)
+    elif settings.http_auth_token is not None:
+        token = settings.http_auth_token.get_secret_value()
+        mcp.settings.auth = None  # ensure FastMCP's own auth wiring stays off
+        app = mcp.streamable_http_app()
+        app.add_middleware(_build_auth_middleware(token))
+        _log_serving(settings, "static bearer token")
+        return app
+    else:
+        auth_mode = "none"
+        mcp.settings.auth = None
+        if not is_loopback(settings.http_host):
+            logger.warning(
+                "laserfiche-mcp is binding to %s (not loopback) with NO "
+                "authentication (no LF_HTTP_OAUTH_ISSUER, no LF_HTTP_AUTH_TOKEN). "
+                "The repository bridge is reachable by anything that can route to "
+                "this host. Configure OAuth (or at least LF_HTTP_AUTH_TOKEN) and "
+                "terminate TLS at a reverse proxy before exposing it to a network.",
+                settings.http_host,
+            )
 
     app = mcp.streamable_http_app()
-    if token:
-        app.add_middleware(_build_auth_middleware(token))
+    _log_serving(settings, auth_mode)
+    return app
 
+
+def _configure_oauth(mcp: object, settings: Settings) -> str:
+    """Attach the OAuth Resource Server verifier + metadata to the FastMCP app.
+
+    FastMCP reads ``settings.auth`` and ``_token_verifier`` when it builds the
+    Streamable HTTP app, so injecting them here (rather than at construction)
+    lets the shared singleton stay auth-free until --http with OAuth is used.
+    """
+    from mcp.server.auth.settings import AuthSettings
+
+    from .oauth import build_token_verifier
+
+    verifier = build_token_verifier(settings)
+    # AuthSettings coerces str -> AnyHttpUrl at runtime; the ignores are just for
+    # the annotated-URL parameter types.
+    mcp.settings.auth = AuthSettings(  # type: ignore[attr-defined]
+        issuer_url=str(settings.http_oauth_issuer),  # type: ignore[arg-type]
+        resource_server_url=str(settings.http_public_url),  # type: ignore[arg-type]
+        required_scopes=settings.oauth_required_scopes or None,
+    )
+    # Both must be set together — FastMCP only validates this pairing at
+    # construction, which we bypass by injecting post-hoc.
+    mcp._token_verifier = verifier  # type: ignore[attr-defined]
+    return f"OAuth (issuer {settings.http_oauth_issuer})"
+
+
+def _log_serving(settings: Settings, auth_mode: str) -> None:
     logger.info(
         "laserfiche-mcp Streamable HTTP on http://%s:%d%s (auth: %s)",
         settings.http_host,
         settings.http_port,
         settings.http_path,
-        "bearer token" if token else "none",
+        auth_mode,
     )
-    return app
 
 
 def run_http(settings: Settings) -> None:  # pragma: no cover - blocking I/O

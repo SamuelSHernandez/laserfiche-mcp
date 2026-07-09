@@ -200,7 +200,13 @@ Configuration (all optional, `LF_*` env like everything else):
 | `LF_HTTP_HOST` | `127.0.0.1` | Bind interface. Loopback by default — not reachable off the machine. |
 | `LF_HTTP_PORT` | `8000` | Listen port. |
 | `LF_HTTP_PATH` | `/mcp` | Endpoint path; clients connect to `http(s)://host:port/mcp`. |
-| `LF_HTTP_AUTH_TOKEN` | *(unset)* | Static bearer token required on every request. |
+| `LF_HTTP_AUTH_TOKEN` | *(unset)* | Static shared bearer token. Simplest auth; ignored when OAuth is on. |
+| `LF_HTTP_OAUTH_ISSUER` | *(unset)* | Turns on **per-user OAuth** — verifies each caller's token against this authorization server. |
+
+The `--http` server chooses its auth by precedence: **OAuth** (if
+`LF_HTTP_OAUTH_ISSUER` is set) → **static token** (if `LF_HTTP_AUTH_TOKEN`) →
+**none** (loopback only). OAuth is the multi-user path for claude.ai / ChatGPT;
+see [Per-user OAuth](#per-user-oauth) below.
 
 Verify locally with the Inspector (point it at the URL, not the command):
 
@@ -208,6 +214,31 @@ Verify locally with the Inspector (point it at the URL, not the command):
 laserfiche-mcp --http &
 npx @modelcontextprotocol/inspector   # then connect to http://127.0.0.1:8000/mcp
 ```
+
+### Per-user OAuth
+
+For a multi-user connector, run the server as an **OAuth 2.1 Resource Server** —
+each user signs in through your existing identity provider (LFDS, Microsoft
+Entra, Okta, Auth0, Google) and the server verifies their token:
+
+```bash
+pip install 'laserfiche-mcp[oauth]'
+
+LF_HTTP_OAUTH_ISSUER="https://login.microsoftonline.com/<tenant>/v2.0" \
+LF_HTTP_PUBLIC_URL="https://lf.example.com/mcp" \
+LF_HTTP_OAUTH_AUDIENCE="api://laserfiche-mcp" \
+LF_HTTP_OAUTH_REQUIRED_SCOPES="laserfiche.read" \
+  laserfiche-mcp --http --host 0.0.0.0
+```
+
+The server then serves protected-resource metadata (RFC 9728), so claude.ai /
+ChatGPT discover your authorization server, run the `authorization_code` + PKCE
+flow, and present a bearer token that this server verifies (signature via JWKS,
+plus `aud` / `iss` / `exp` / scopes). This is authentication **at the edge** —
+verified requests still reach Laserfiche via the shared service account, so the
+Laserfiche audit trail shows that account, not the end user. Full details,
+including IdP registration and the security checklist, are in
+[docs/remote-http.md](docs/remote-http.md).
 
 ### Connecting a web client
 
@@ -217,17 +248,15 @@ means putting this server behind a reverse proxy (or a tunnel like `cloudflared`
 connector in the client's settings.
 
 > [!WARNING]
-> **Read this before exposing `--http` to a network.** This server speaks plain
-> HTTP with an optional static token — it is *not* a hardened public endpoint.
-> - Keep `LF_HTTP_HOST` on loopback unless you have a reason not to; binding to a
->   routable interface **without** `LF_HTTP_AUTH_TOKEN` logs a warning because it
->   leaves your repository reachable unauthenticated.
-> - Terminate **TLS at a reverse proxy** in front of this server.
+> **Read this before exposing `--http` to a network.**
+> - Configure auth: OAuth (`LF_HTTP_OAUTH_ISSUER`) for multi-user, or at least a
+>   long random `LF_HTTP_AUTH_TOKEN`. Binding off-loopback with neither logs a
+>   warning and leaves your repository reachable unauthenticated.
+> - Terminate **TLS at a reverse proxy** in front of this server (it speaks plain HTTP).
 > - Your Laserfiche server is self-hosted behind a firewall; a public connector
 >   needs a deliberate **network path in** to it (VPN / DMZ / tunnel).
-> - Per-user **OAuth** is not built in yet — the static bearer token is a single
->   shared secret. See [docs/remote-http.md](docs/remote-http.md) for the full
->   deployment and security checklist.
+> - See [docs/remote-http.md](docs/remote-http.md) for the full deployment and
+>   security checklist.
 
 ## Tools
 

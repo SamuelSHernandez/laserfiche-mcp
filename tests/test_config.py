@@ -145,3 +145,64 @@ def test_http_port_out_of_range_rejected(
     monkeypatch.setenv("LF_HTTP_PORT", "70000")
     with pytest.raises(ValueError):
         Settings()  # type: ignore[call-arg]
+
+
+# --- OAuth Resource Server -----------------------------------------------------
+
+
+def test_oauth_disabled_by_default(lf_env: dict[str, str]) -> None:
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.oauth_enabled is False
+    assert settings.http_oauth_issuer is None
+    assert settings.oauth_effective_audience is None
+
+
+def test_oauth_requires_public_url(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://idp.example.com")
+    with pytest.raises(ValueError, match="LF_HTTP_PUBLIC_URL"):
+        Settings()  # type: ignore[call-arg]
+
+
+def test_oauth_enabled_with_issuer_and_public_url(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://lf.example.com/mcp")
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.oauth_enabled is True
+    # Audience defaults to the public URL when not set explicitly.
+    assert settings.oauth_effective_audience == "https://lf.example.com/mcp"
+    assert settings.oauth_algorithms == ["RS256"]
+    assert settings.oauth_required_scopes == []
+
+
+def test_oauth_explicit_audience_and_scopes(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://lf.example.com/mcp")
+    monkeypatch.setenv("LF_HTTP_OAUTH_AUDIENCE", "api://laserfiche")
+    monkeypatch.setenv("LF_HTTP_OAUTH_REQUIRED_SCOPES", "laserfiche.read, laserfiche.write")
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.oauth_effective_audience == "api://laserfiche"
+    assert settings.oauth_required_scopes == ["laserfiche.read", "laserfiche.write"]
+
+
+def test_oauth_rejects_symmetric_algorithm(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://lf.example.com/mcp")
+    monkeypatch.setenv("LF_HTTP_OAUTH_ALGORITHMS", "HS256")
+    with pytest.raises(ValueError, match="asymmetric"):
+        Settings()  # type: ignore[call-arg]
+
+
+def test_oauth_rejects_none_algorithm(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://lf.example.com/mcp")
+    monkeypatch.setenv("LF_HTTP_OAUTH_ALGORITHMS", "none")
+    with pytest.raises(ValueError, match="asymmetric"):
+        Settings()  # type: ignore[call-arg]
