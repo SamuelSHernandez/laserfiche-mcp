@@ -34,3 +34,7 @@ htmlcov/
 .idea/
 *.swp
 .DS_Store
+
+# Local agent config (private; not for a public repo)
+CLAUDE.md
+.claude/
