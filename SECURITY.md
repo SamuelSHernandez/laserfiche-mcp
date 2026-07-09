@@ -6,10 +6,13 @@ Only the latest minor release receives security fixes.
 
 | Version  | Supported          |
 | -------- | ------------------ |
-| 2.0.x    | :white_check_mark: |
-| 1.5.x    | :x: (superseded by 2.0; upgrade for the v2 error envelope and the cached name pre-flight) |
-| < 1.5    | :x:                |
+| 2.2.x    | :white_check_mark: |
+| < 2.2    | :x: (superseded; upgrade to the latest release) |
 | 0.1.x    | :x: (yanked from PyPI) |
+
+> For **what Claude sees and where document content goes**, see
+> [docs/data-handling.md](docs/data-handling.md). This file is about reporting
+> vulnerabilities in the software itself.
 
 ## Reporting a vulnerability
 
