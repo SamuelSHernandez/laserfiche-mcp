@@ -95,7 +95,7 @@ jobs:
       # need it. Packed in this job (not the build job), so it never lands in the
       # dist/ that the publish job uploads to PyPI.
       - name: Set up Node (for the mcpb packer)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
