@@ -207,6 +207,8 @@ async def validate_required_fields(
     operation: str,
     entry_id: int,
     caller_fields: dict[str, list[Any]] | None,
+    *,
+    template_name: str | None = None,
 ) -> dict[str, Any] | None:
     """Return a ``mode: error`` response if repo-required fields are missing.
 
@@ -215,6 +217,14 @@ async def validate_required_fields(
     ``LF_VALIDATE_REQUIRED_FIELDS`` is false. Falls back to None on any
     validation-read failure so the real PUT still runs and the server's
     own error path is what surfaces.
+
+    When ``template_name`` is given, the check is scoped to that
+    template's own field set (via ``templateFieldNames``/``fieldNames``
+    on the cached template definition) instead of walking every
+    repo-wide required field — a field required by some *other* template
+    must never block this one. Fields that carry a ``defaultValue`` are
+    also skipped: the server fills those in itself, so their absence
+    from ``caller_fields``/the entry isn't actually missing data.
     """
     settings = get_settings()
     if not settings.validate_required_fields:
@@ -226,8 +236,25 @@ async def validate_required_fields(
     except LaserficheError:
         return None  # let the actual call surface the error
 
+    template_field_names: list[str] | None = None
+    if template_name:
+        try:
+            template_defs = await client.cached_template_definitions()
+        except Exception:  # noqa: BLE001 — scoping lookup is best-effort
+            template_defs = None
+        if template_defs is not None:
+            tpl = template_defs.get(template_name)
+            if tpl is not None:
+                template_field_names = (
+                    tpl.get("templateFieldNames") or tpl.get("fieldNames") or []
+                )
+
     required_names: list[dict[str, Any]] = [
-        fd for fd in defs_by_name.values() if fd.get("isRequired")
+        fd
+        for fd in defs_by_name.values()
+        if fd.get("isRequired")
+        and not fd.get("defaultValue")
+        and (template_field_names is None or fd.get("name") in template_field_names)
     ]
     if not required_names:
         return None

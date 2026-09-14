@@ -90,6 +90,7 @@ async def assign_template(
         "assign_template",
         entry_id,
         fields,
+        template_name=template_name,
     )
     if validation_error is not None:
         return validation_error
