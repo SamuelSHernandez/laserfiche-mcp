@@ -219,6 +219,79 @@ async def test_delete_entry_force_large_delete_overrides_cap(
     assert result["mode"] == "executed"
 
 
+# --- child-count probe failure: fail CLOSED, not open -----------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_preview_flags_child_count_probe_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """If the child-count probe errors, the preview must surface that —
+    not silently report the folder as having 0/known children."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    cap = settings.delete_folder_max_descendants
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Big", "entryType": "Folder", "fullPath": "\\Big"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=(
+            f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/children?%24top={cap + 1}&%24skip=0"
+        ),
+        status_code=500,
+    )
+    preview = await server.delete_entry(100)
+    assert preview["mode"] == "preview"
+    assert preview["immediate_child_count"] is None
+    assert preview["exceeds_batch_cap"] is False
+    assert preview["child_count_probe_failed"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_execute_blocked_when_child_count_probe_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A probe failure must FAIL CLOSED at execute time: refuse the delete
+    outright, and force_large_delete=true must NOT bypass this — there is
+    no real count for the LLM to be confirming against, unlike the
+    exceeds_batch_cap path where the count is known."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    cap = settings.delete_folder_max_descendants
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Big", "entryType": "Folder", "fullPath": "\\Big"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=(
+            f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/children?%24top={cap + 1}&%24skip=0"
+        ),
+        status_code=500,
+        is_reusable=True,
+    )
+    preview = await server.delete_entry(100)
+
+    blocked = await server.delete_entry(
+        100,
+        confirmation_token=preview["confirmation_token"],
+        force_large_delete=True,
+    )
+    assert blocked["mode"] == "error"
+    assert blocked["error"] == "child_count_probe_failed"
+    assert not [r for r in httpx_mock.get_requests() if r.method == "DELETE"]
+
+
 # --- audit-reason requirement -----------------------------------------------
 
 
