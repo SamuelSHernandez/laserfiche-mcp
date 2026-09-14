@@ -78,6 +78,63 @@ PyPI, so this line of work ships as `2.3.0`.
   `LF_LEGACY_TOOL_NAMES=true` to keep registering them — this was
   previously the default and remains fully supported.
 
+### Fixed
+
+- **`assign_template` required-field preflight scoped to the target
+  template.** It was walking every repo-wide `isRequired` field instead
+  of intersecting with the fields the target template actually declares,
+  and never skipped fields carrying a `defaultValue` — both false
+  positives blocked template assigns the server itself would have
+  accepted. Now scoped via the same `templateFieldNames` lookup
+  `get_template_fields` uses, and defaulted fields are skipped.
+- **`delete_pages` confirmation token bound to page count.** The token
+  bound `page_range` but not the document's page count at preview time,
+  so replaying a token after the document was renumbered by an earlier
+  delete could delete the wrong pages. `page_count` is now part of the
+  token's parameter binding.
+- **`import_document` local source path fencing.** The tool would read
+  any local file path the MCP process could access — destination writes
+  were already fenced (`LF_WRITE_PATHS_ALLOW`/`DENY`), the source side
+  wasn't. New `LF_IMPORT_SOURCE_DIRS` (comma-separated allowed
+  directories, symlinks resolved before comparison) fences it; unset
+  preserves current behavior.
+- **Extracted document text marked as untrusted content.** `get_document_text`,
+  `get_document_edoc(mode="text")`, and `search_content`'s excerpts now
+  frame the returned text as untrusted external content pulled from a
+  document body, not instructions — guards against a document
+  engineered with prompt-injection-style text being read as directives.
+- **`LF_WRITE_TOOLS_ALLOWED` name matching accepts either naming
+  scheme.** It only matched a tool's legacy name, so configuring it with
+  the v2 names this README recommends silently registered zero write
+  tools. Now matches legacy or v2 name; a configured name matching
+  neither is logged as a startup warning instead of failing silently.
+- **Folder-delete safety cap fails closed on probe error.** If the
+  child-count probe backing `LF_DELETE_FOLDER_MAX_DESCENDANTS` errored
+  out, `delete_entry` proceeded as if the folder were empty/safe. It now
+  refuses the delete outright (`child_count_probe_failed`) — and
+  `force_large_delete` cannot bypass this, since there's no real count
+  to be confirming against.
+- **Unrecognized `LF_*` env vars now produce a startup warning.**
+  `Settings` uses `extra="ignore"`, so a typo like `LF_WRITE_PATHS_ALLOW`
+  misspelled silently produced unfenced writes with no diagnostic
+  anywhere. `laserfiche-mcp diagnose` also reports them in a new
+  `Config sanity:` section.
+- **`import_document` multistatus partial failures surfaced.** A 2xx
+  response can still carry a per-operation failure (entry created, but
+  e.g. `setFields` didn't apply) buried in the response body. The tool
+  now detects this and returns `mode: "partial"` plus `partial_errors`
+  instead of looking identical to a clean import.
+- Stale doc references: the `claude mcp add` example in
+  `docs/getting-started.md` put `-e` flags after `--`, routing them to
+  `uvx` instead of `claude mcp add` (broken exactly as written);
+  `manifest.json` listed three tool names
+  (`laserfiche_search`, `laserfiche_search_natural`,
+  `laserfiche_document_edoc_get`) that don't match any registered tool;
+  `SECURITY.md`'s supported-version table said `2.2.x`.
+- The MCP `instructions` field now describes the preview-then-confirm
+  token contract destructive tools use, so a calling model doesn't have
+  to discover it by trial and error.
+
 ### Changed
 
 - **Tool catalog trimmed ~40%** (docstrings and parameter descriptions) —

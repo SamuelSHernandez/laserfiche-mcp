@@ -10,6 +10,7 @@ from pydantic import Field
 
 from .. import _app, permissions
 from .._app import get_settings
+from ..client import extract_multistatus_exceptions
 from ..errors import LaserficheError, classify_lf_error, local_error
 from ._helpers import (
     ToolAbortedError,
@@ -339,7 +340,12 @@ async def import_document(
     apply metadata on import.
 
     Returns the server's import payload (``entryCreate.entryId`` = new
-    document). Pre-server errors: ``path_not_allowed`` (destination),
+    document). A 2xx response can still be a PARTIAL success — the entry
+    was created but a sub-operation (setTemplate/setFields/setTags/
+    setLinks) failed; when that happens the response carries
+    ``mode: "partial"`` and ``partial_errors`` (list of
+    ``{"operation", "exceptions"}``) instead of looking identical to a
+    clean import. Pre-server errors: ``path_not_allowed`` (destination),
     ``source_path_not_allowed`` (LF_IMPORT_SOURCE_DIRS), ``file_not_found``,
     ``size_exceeds_cap`` (LF_IMPORT_MAX_BYTES, default 25 MB; API caps at
     100 MB). Server slugs: ``not_found``, ``required_field_missing``,
@@ -411,4 +417,27 @@ async def import_document(
             exc,
             extra={"parent_id": parent_id, "name": name, "file_path": file_path},
         )
+
+    partial_errors = extract_multistatus_exceptions(raw)
+    if partial_errors:
+        # HTTP 2xx doesn't mean fully successful here: the entry itself was
+        # created, but a sub-operation (setTemplate/setFields/setTags/
+        # setLinks/...) reported its own failure in the multistatus body.
+        # Surface that distinctly rather than returning it identically to
+        # a clean import — the caller needs to know to retry the specific
+        # failed piece (assign_template / set_fields / set_tags / set_links)
+        # against the new entry.
+        return {
+            **raw,
+            "mode": "partial",
+            "operation": "import_document",
+            "partial_errors": partial_errors,
+            "warning": (
+                "The document was imported (the entry exists), but one or "
+                "more metadata operations reported a failure — see "
+                "partial_errors. Retry the failed piece directly (e.g. "
+                "assign_template, set_fields, set_tags, set_links) against "
+                "the new entry's ID."
+            ),
+        }
     return raw

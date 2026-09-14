@@ -129,6 +129,46 @@ async def test_import_document_happy_path_with_metadata(
     assert result.get("entryCreate", {}).get("entryId") == 500
 
 
+@pytest.mark.asyncio
+async def test_import_document_surfaces_partial_multistatus_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    """A 2xx response carrying a per-operation `exceptions` entry (entry
+    created, but e.g. setFields failed) must NOT look identical to a
+    clean import — mode: "partial" and partial_errors must surface it."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    f = tmp_path / "doc.txt"
+    f.write_bytes(b"hello")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/Entries/100/doc.txt?autoRename=false",
+        status_code=201,
+        json={
+            "entryCreate": {"entryId": 500},
+            "setFields": {"exceptions": [{"message": "Field 'Status' is invalid."}]},
+        },
+    )
+    result = await server.import_document(
+        100,
+        "doc.txt",
+        str(f),
+        fields={"Status": ["Bogus"]},
+    )
+    assert result["mode"] == "partial"
+    assert result["entryCreate"]["entryId"] == 500
+    assert result["partial_errors"] == [
+        {"operation": "setFields", "exceptions": [{"message": "Field 'Status' is invalid."}]}
+    ]
+
+
 # --- LF_IMPORT_SOURCE_DIRS local source fencing -------------------------------
 
 

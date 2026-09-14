@@ -7,7 +7,7 @@ import json as _json
 import pytest
 from pytest_httpx import HTTPXMock
 
-from laserfiche_mcp.client import LaserficheError
+from laserfiche_mcp.client import LaserficheError, extract_multistatus_exceptions
 from laserfiche_mcp.config import Settings
 from tests.client.conftest import _build_client
 from tests.conftest import _BASE
@@ -155,6 +155,47 @@ async def test_import_document_posts_multipart(
     # The file part appears with its filename.
     assert b"Foo.pdf" in raw
     assert b"%PDF-1.4 fake" in raw
+
+
+# --- extract_multistatus_exceptions -----------------------------------------
+
+
+def test_extract_multistatus_exceptions_empty_on_clean_success() -> None:
+    payload = {"entryCreate": {"entryId": 42}}
+    assert extract_multistatus_exceptions(payload) == []
+
+
+def test_extract_multistatus_exceptions_finds_a_failed_suboperation() -> None:
+    """A 2xx CreateEntryResult can still carry a per-operation failure —
+    the entry was created but e.g. setFields didn't apply."""
+    payload = {
+        "entryCreate": {"entryId": 42},
+        "setFields": {"exceptions": [{"message": "Field 'Status' is invalid."}]},
+    }
+    found = extract_multistatus_exceptions(payload)
+    assert len(found) == 1
+    assert found[0]["operation"] == "setFields"
+    assert found[0]["exceptions"] == [{"message": "Field 'Status' is invalid."}]
+
+
+def test_extract_multistatus_exceptions_handles_singular_exception_key() -> None:
+    payload = {"setTags": {"exception": {"message": "Tag not defined."}}}
+    found = extract_multistatus_exceptions(payload)
+    assert found == [{"operation": "setTags", "exceptions": {"message": "Tag not defined."}}]
+
+
+def test_extract_multistatus_exceptions_collects_multiple_failures() -> None:
+    payload = {
+        "entryCreate": {"entryId": 42},
+        "setFields": {"exceptions": ["bad field"]},
+        "setTags": {"exceptions": ["bad tag"]},
+    }
+    found = extract_multistatus_exceptions(payload)
+    assert {f["operation"] for f in found} == {"setFields", "setTags"}
+
+
+def test_extract_multistatus_exceptions_ignores_non_dict_payload() -> None:
+    assert extract_multistatus_exceptions([]) == []  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
