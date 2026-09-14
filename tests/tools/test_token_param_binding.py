@@ -90,6 +90,50 @@ async def test_delete_pages_token_cannot_widen_the_page_range(
 
 
 @pytest.mark.asyncio
+async def test_delete_pages_token_invalidated_by_renumbering(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A token previewed against a 10-page document must not execute
+    against the SAME page_range string once the document has been
+    renumbered (e.g. by another delete_pages call in between) — page
+    ranges are positional, so "pages 8-10" means something different
+    once the document shrinks to 5 pages. Binding page_count into the
+    token forces a fresh preview instead of silently deleting the wrong
+    pages."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document", "pageCount": 10},
+    )
+
+    preview = await server.delete_pages(42, "8-10")
+    assert preview["mode"] == "preview"
+    assert preview["page_count"] == 10
+
+    # Document has since been renumbered (another delete shrank it to 5
+    # pages) — same page_range string, different underlying pages.
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doc", "entryType": "Document", "pageCount": 5},
+    )
+
+    result = await server.delete_pages(
+        42,
+        "8-10",
+        confirmation_token=preview["confirmation_token"],
+    )
+
+    assert result["mode"] == "error"
+    assert result["error"] == "invalid_confirmation_token"
+    assert "page_count" in result["reason"]
+    assert not [r for r in httpx_mock.get_requests() if r.method == "DELETE"]
+
+
+@pytest.mark.asyncio
 async def test_rename_token_cannot_swap_the_new_name(
     monkeypatch: pytest.MonkeyPatch,
     httpx_mock: HTTPXMock,

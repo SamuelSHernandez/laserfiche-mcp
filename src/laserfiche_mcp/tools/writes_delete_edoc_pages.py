@@ -182,12 +182,22 @@ async def delete_pages(
     if perm_err:
         return perm_err
     current_name = entry_name(entry)
+    current_page_count = entry.get("pageCount") or entry.get("PageCount")
 
     if confirmation_token is None:
-        # Bind the page_range into the token: the user confirms deleting
-        # THESE pages, so an execute call with a different range must fail.
+        # Bind the page_range AND the page_count observed right now into
+        # the token: the user confirms deleting THESE pages from a
+        # document with THIS many pages. Binding page_range alone isn't
+        # enough — page ranges are positional, so if the document is
+        # renumbered by another delete between preview and execute (pages
+        # shift), the same page_range string now refers to different
+        # pages. Binding page_count forces a fresh preview whenever the
+        # document's pagination has changed underneath a pending token.
         token = confirmation.create_token(
-            "delete_pages", entry_id, current_name, params={"page_range": page_range}
+            "delete_pages",
+            entry_id,
+            current_name,
+            params={"page_range": page_range, "page_count": current_page_count},
         )
         return {
             "mode": "preview",
@@ -195,7 +205,7 @@ async def delete_pages(
             "entry_id": entry_id,
             "entry_name": current_name,
             "full_path": entry.get("fullPath") or entry.get("FullPath"),
-            "page_count": entry.get("pageCount") or entry.get("PageCount"),
+            "page_count": current_page_count,
             "page_range": page_range,
             "warning": (
                 f"This will permanently delete pages matching {page_range!r} "
@@ -215,7 +225,7 @@ async def delete_pages(
         "delete_pages",
         entry_id,
         current_name,
-        params={"page_range": page_range},
+        params={"page_range": page_range, "page_count": current_page_count},
     )
     if not ok:
         return invalid_token_response("delete_pages", entry_id, reason)
