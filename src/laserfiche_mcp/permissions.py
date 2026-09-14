@@ -31,6 +31,7 @@ Page range syntax (for delete_pages):
 
 from __future__ import annotations
 
+import os
 import re
 
 _PAGE_RANGE_RE = re.compile(r"^[1-9]\d*(-[1-9]\d*)?(,[1-9]\d*(-[1-9]\d*)?)*$")
@@ -42,7 +43,7 @@ def _normalize(p: str) -> str:
     return p.replace("/", "\\").lower().rstrip("\\")
 
 
-def _has_traversal_segment(path: str) -> bool:
+def has_traversal_segment(path: str) -> bool:
     """True if any segment of ``path`` is exactly ``..`` after normalization."""
     normalized = path.replace("/", "\\")
     return any(seg == ".." for seg in normalized.split("\\"))
@@ -92,7 +93,7 @@ def path_allowed(
     if path is None:
         return True, None
 
-    if _has_traversal_segment(path):
+    if has_traversal_segment(path):
         return False, (
             f"Path {path!r} contains a '..' traversal segment. Paths with "
             "'..' are rejected unconditionally; use the entry's fully "
@@ -116,11 +117,58 @@ def path_allowed(
     return True, None
 
 
+def local_source_path_allowed(
+    file_path: str,
+    allow_csv: str | None,
+) -> tuple[bool, str | None]:
+    """Check a local filesystem source path against an allowed-directory list.
+
+    Mirrors ``path_allowed`` but fences the *source* side of
+    ``import_document`` (the local file the MCP process reads) rather
+    than the repository destination. Returns ``(ok, reason)``.
+
+    Behavior:
+        * ``allow_csv`` unset/empty -> always OK. Fencing is opt-in so
+          existing single-user/single-machine deployments keep working
+          unchanged until they set ``LF_IMPORT_SOURCE_DIRS``.
+        * Otherwise ``file_path`` must resolve (symlinks included, via
+          ``os.path.realpath``) to a path equal to, or nested under, one
+          of the configured directories. Resolving symlinks stops a
+          symlink planted inside an allowed directory from pointing
+          a read outside of it.
+        * Comparison uses ``os.path.normcase`` so it's case-insensitive
+          on case-insensitive filesystems (Windows) and case-sensitive
+          elsewhere, matching platform path semantics.
+    """
+    allow = _parse_csv(allow_csv)
+    if not allow:
+        return True, None
+
+    resolved = os.path.normcase(os.path.realpath(file_path))
+    for raw_dir in allow:
+        allowed_dir = os.path.normcase(os.path.realpath(raw_dir))
+        if resolved == allowed_dir or resolved.startswith(allowed_dir + os.sep):
+            return True, None
+
+    return False, (
+        f"File path {file_path!r} resolves outside the allowed import "
+        f"source directories (LF_IMPORT_SOURCE_DIRS={allow})."
+    )
+
+
 def tool_allowed(
-    tool_name: str,
+    tool_name: str | tuple[str, ...],
     allowed_csv: str | None,
 ) -> tuple[bool, str | None]:
     """Check ``tool_name`` against a comma-separated allowlist.
+
+    ``tool_name`` may be a single name or a tuple of equivalent names for
+    the same tool (e.g. ``(legacy_name, v2_name)``) — the tool passes if
+    ANY of them appears in the allowlist, so an operator who configures
+    ``LF_WRITE_TOOLS_ALLOWED`` with the README-recommended v2 names
+    (``laserfiche_template_assign``) gets the same result as one who uses
+    the legacy names (``assign_template``); a deployment mixing both
+    naming schemes across entries also works.
 
     Returns ``(ok, reason)``. When ``allowed_csv`` is None or empty, all
     tools pass (no allowlist configured).
@@ -128,10 +176,11 @@ def tool_allowed(
     allowed = _parse_csv(allowed_csv)
     if not allowed:
         return True, None
-    if tool_name not in allowed:
+    names = (tool_name,) if isinstance(tool_name, str) else tool_name
+    if not any(n in allowed for n in names):
+        shown = repr(names[0]) if len(names) == 1 else " / ".join(repr(n) for n in names)
         return False, (
-            f"Tool {tool_name!r} is not in the configured allowlist "
-            f"(LF_WRITE_TOOLS_ALLOWED={allowed})."
+            f"Tool {shown} is not in the configured allowlist (LF_WRITE_TOOLS_ALLOWED={allowed})."
         )
     return True, None
 

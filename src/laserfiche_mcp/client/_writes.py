@@ -11,6 +11,32 @@ from ..errors import LaserficheError
 from ._core import _CoreClient
 
 
+def extract_multistatus_exceptions(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect per-operation failures from a ``CreateEntryResult``-shaped body.
+
+    ``import_document`` (POST .../{newEntryName}) can return HTTP 2xx while
+    the response body still reports a sub-operation failure: the entry
+    itself was created, but e.g. ``setFields``/``setTags``/``setLinks``/
+    ``setTemplate`` didn't apply. Each sub-operation's result object carries
+    its own ``exceptions`` (or singular ``exception``) key when that piece
+    failed — the top-level HTTP status doesn't reflect it at all.
+
+    Returns a list of ``{"operation": <top-level key>, "exceptions": <value>}``
+    entries, one per sub-operation that reported a failure; empty when the
+    body has no such markers (the ordinary, fully-successful case).
+    """
+    found: list[dict[str, Any]] = []
+    if not isinstance(payload, dict):
+        return found
+    for key, value in payload.items():
+        if not isinstance(value, dict):
+            continue
+        exc = value.get("exceptions") or value.get("exception")
+        if exc:
+            found.append({"operation": key, "exceptions": exc})
+    return found
+
+
 class _WritesMixin(_CoreClient):
     """Endpoints that mutate state — gated behind ``LF_READ_ONLY`` at the tool layer."""
 
@@ -155,6 +181,10 @@ class _WritesMixin(_CoreClient):
         optional ``request`` (JSON metadata). The server may return a
         ``CreateEntryResult`` with per-operation statuses — partial
         success is possible (entry created even if e.g. setLinks failed).
+        This method returns the raw body as-is (2xx is 2xx); it's the
+        caller's job to run it through :func:`extract_multistatus_exceptions`
+        and decide how to surface a partial result — see
+        ``tools.writes_create_copy_import.import_document``.
         """
         if self._http is None:
             raise RuntimeError("LaserficheClient must be used as an async context manager.")

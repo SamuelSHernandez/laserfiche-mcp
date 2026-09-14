@@ -26,8 +26,67 @@ import httpx
 from pydantic import SecretStr
 
 from .config import ApiVersion, AuthMode, Settings
+from .errors import LaserficheError
 
 logger = logging.getLogger("laserfiche_mcp.auth")
+
+
+async def _post_token(
+    client: httpx.AsyncClient,
+    url: str,
+    data: dict[str, str],
+    *,
+    grant: str,
+    default_expires_in: float = 900.0,
+) -> tuple[str, float]:
+    """POST a token request and return ``(access_token, expires_in)``.
+
+    Every failure mode is normalized to :class:`LaserficheError`. Without
+    this, a slow or unreachable token endpoint raised a bare
+    ``httpx.TimeoutException`` / ``HTTPStatusError`` / ``KeyError`` out of
+    ``AuthStrategy.apply``, which is called *inside* every tool's
+    ``try: ... except LaserficheError`` block. Those escaped the structured
+    error contract entirely and surfaced to the model as an empty
+    ``Error executing tool <name>:`` with nothing actionable in it.
+    """
+    try:
+        resp = await client.post(
+            url,
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    except httpx.TimeoutException as exc:
+        raise LaserficheError(
+            f"Timed out contacting the Laserfiche token endpoint during the "
+            f"{grant} grant: {exc!r}. The server may be cold-starting; retry, "
+            f"or raise LF_REQUEST_TIMEOUT_SECONDS."
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise LaserficheError(
+            f"Could not reach the Laserfiche token endpoint for the "
+            f"{grant} grant: {exc!r}. Check LF_REPO_API_URL and network "
+            f"reachability."
+        ) from exc
+
+    if resp.status_code >= 400:
+        try:
+            detail: object = resp.json()
+        except ValueError:
+            detail = resp.text
+        raise LaserficheError(
+            f"Laserfiche token endpoint rejected the {grant} grant ({resp.status_code}): {detail}",
+            status_code=resp.status_code,
+            detail=detail,
+        )
+
+    try:
+        payload = resp.json()
+        return payload["access_token"], float(payload.get("expires_in", default_expires_in))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise LaserficheError(
+            f"Laserfiche token endpoint returned an unexpected payload for "
+            f"the {grant} grant (no usable access_token): {exc!r}"
+        ) from exc
 
 
 class AuthStrategy(ABC):
@@ -86,20 +145,19 @@ class PasswordGrantStrategy(AuthStrategy):
             verify=self._verify_ssl,
             timeout=self._timeout_seconds,
         ) as client:
-            resp = await client.post(
+            token, expires_in = await _post_token(
+                client,
                 self._token_url,
-                data={
+                {
                     "grant_type": "password",
                     "username": self._username,
                     "password": self._password.get_secret_value(),
                 },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                grant="password",
             )
-            resp.raise_for_status()
-            payload = resp.json()
-            self._access_token = payload["access_token"]
+            self._access_token = token
             # Default 900s if expires_in is absent.
-            self._expires_at = time.time() + payload.get("expires_in", 900)
+            self._expires_at = time.time() + expires_in
 
 
 class OAuthClientCredentialsStrategy(AuthStrategy):
@@ -151,11 +209,15 @@ class OAuthClientCredentialsStrategy(AuthStrategy):
             }
             if self._scope:
                 data["scope"] = self._scope
-            resp = await client.post(self._token_url, data=data)
-            resp.raise_for_status()
-            payload = resp.json()
-            self._access_token = payload["access_token"]
-            self._expires_at = time.time() + payload.get("expires_in", 3600)
+            token, expires_in = await _post_token(
+                client,
+                self._token_url,
+                data,
+                grant="client_credentials",
+                default_expires_in=3600.0,
+            )
+            self._access_token = token
+            self._expires_at = time.time() + expires_in
 
 
 def build_auth_strategy(settings: Settings) -> AuthStrategy:

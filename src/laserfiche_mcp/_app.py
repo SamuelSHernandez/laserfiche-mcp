@@ -58,12 +58,20 @@ mcp = FastMCP(
     "laserfiche-mcp",
     instructions=(
         "Tools for searching and reading documents in a Laserfiche repository. "
-        "Use search_entries when the user describes what they're looking for in "
-        "natural language; use list_folder when they reference a known location; "
-        "use get_entry or get_field_values once you have an entry ID. "
-        "Most workflows are: (1) locate an entry via search/path/folder, "
-        "(2) call get_entry for metadata or get_field_values for template data, "
-        "(3) optionally call get_document_text for the document body."
+        "Use search_content whenever the question is about what documents SAY — "
+        "it returns the matched passages (page + excerpt) from the OCR index, "
+        "usually answering without downloading anything. Use search_natural to "
+        "author a query when you need the server's templates and field names; "
+        "list_folder for a known location; get_entry / get_field_values once "
+        "you have an entry ID. To read more of a specific document, prefer "
+        "get_document_edoc(mode='text', pages=...) — never mode='bytes' for "
+        "anything large. Destructive write tools (delete_entry, delete_edoc, "
+        "delete_pages, and similar) use a two-step preview-then-confirm "
+        "contract: call once without confirmation_token to get back a preview "
+        "plus a short-lived signed token, surface that preview to the user, "
+        "then call again with the same arguments and confirmation_token to "
+        "execute — a call with a different argument than the preview, or an "
+        "expired/reused token, is rejected."
     ),
     lifespan=_lifespan,
 )

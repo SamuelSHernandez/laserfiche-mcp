@@ -8,9 +8,10 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from .. import _app
+from .. import _app, permissions
 from .._app import get_settings
-from ..errors import LaserficheError, classify_lf_error
+from ..client import extract_multistatus_exceptions
+from ..errors import LaserficheError, classify_lf_error, local_error
 from ._helpers import (
     ToolAbortedError,
     check_write_for_parent,
@@ -90,35 +91,12 @@ async def create_folder(
 ) -> dict[str, Any]:
     """Create a new folder as a child of ``parent_id``.
 
-    Args:
-        parent_id: Integer entry ID of the destination folder. Root is
-            typically ID 1. Resolve a path to an ID with
-            ``get_entry_by_path`` first if you only have a path string.
-        name: New folder name. Backslashes are not allowed in entry
-            names; pick something path-safe.
-        template_name: Optional template to assign on creation. Use
-            ``list_template_definitions`` to discover names.
-        fields: Optional initial template-field values. Same shape as
-            other field-writing tools: ``{"Status": ["Active"]}``. If
-            the template (or repository-wide required fields) demand
-            values you don't supply, the server will reject.
-        auto_rename: When true, the server appends a numeric suffix if
-            ``name`` already exists in the parent. When false (default),
-            a collision returns an error.
+    Optional ``template_name``/``fields`` apply metadata on creation;
+    ``auto_rename`` resolves name collisions with a numeric suffix.
 
-    Returns: The server's entry payload for the new folder on success —
-    ``id``, ``name``, ``parentId``, ``fullPath``, ``templateName``,
-    ``creationTime``, ``creator``.
-
-    Pre-server errors (returned before the API call):
-        - ``path_not_allowed`` — parent's path falls outside
-          ``LF_WRITE_PATHS_ALLOW`` / inside ``LF_WRITE_PATHS_DENY``.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "parent_id": <int>, "name": <str>, ...}``. Common slugs:
-    ``not_found`` (parent doesn't exist), ``required_field_missing``
-    (template you're assigning has required fields you didn't supply),
-    ``auth_failed``.
+    Returns the new folder's entry payload. Pre-server error:
+    ``path_not_allowed``. Server slugs: ``not_found``,
+    ``required_field_missing``, ``auth_failed``.
     """
     require_writes_enabled()
     name_err = validate_name("create_folder", name, extra={"parent_id": parent_id})
@@ -194,35 +172,13 @@ async def copy_entry(
 ) -> dict[str, Any]:
     """Copy an existing entry into a new location with a new name.
 
-    Works for documents and folders (folders copy with their entire
-    subtree — large copies can take minutes). The copy is server-side,
-    so no bytes flow through the MCP. Original entry is unchanged.
+    Server-side copy of documents or folders (subtree included; large
+    copies take minutes). **Async**: returns ``{"token"}`` immediately —
+    pass it to ``wait_for_task`` for the new ``entryId``. The source is
+    unchanged and not path-fenced; the destination is.
 
-    **Async**: returns immediately with an ``operation_token``. Poll
-    completion with ``get_task_status`` or block with ``wait_for_task``
-    — the final ``entryId`` for the new copy is in the task payload's
-    ``entryId`` field once status is ``Completed``.
-
-    Args:
-        source_id: Integer entry ID of the entry to copy.
-        parent_id: Integer entry ID of the destination folder.
-        name: New name for the copy. Must be path-safe (no backslashes).
-        auto_rename: When true, server appends a numeric suffix if
-            ``name`` collides in the destination. Default false.
-
-    Returns: ``{"token": <operation_token>}`` on success. Pass that
-    token to ``wait_for_task(token)`` to get the actual copy result
-    once it finishes.
-
-    Pre-server errors (returned before the API call):
-        - ``path_not_allowed`` — destination parent's path falls
-          outside the allow list. (The source's path isn't fenced —
-          this is a copy, not a move; the source is unchanged.)
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "source_id": <int>, "parent_id": <int>, "name": <str>, ...}``.
-    Common slugs: ``not_found`` (source or parent doesn't exist),
-    ``auth_failed``.
+    Pre-server error: ``path_not_allowed`` (destination). Server slugs:
+    ``not_found``, ``auth_failed``.
     """
     require_writes_enabled()
     name_err = validate_name(
@@ -255,28 +211,26 @@ async def copy_entry(
 def _read_import_file(file_path: str, max_bytes: int) -> tuple[bytes, dict[str, Any] | None]:
     """Read the file, returning ``(bytes, None)`` or ``(b"", error_response)``."""
     if not os.path.isfile(file_path):
-        return b"", {
-            "mode": "error",
-            "operation": "import_document",
-            "error": "file_not_found",
-            "file_path": file_path,
-            "message": f"No file at {file_path!r}.",
-        }
+        return b"", local_error(
+            "import_document",
+            "file_not_found",
+            file_path=file_path,
+            message=f"No file at {file_path!r}.",
+        )
 
     size = os.path.getsize(file_path)
     if size > max_bytes:
-        return b"", {
-            "mode": "error",
-            "operation": "import_document",
-            "error": "size_exceeds_cap",
-            "file_path": file_path,
-            "byte_size": size,
-            "max_bytes": max_bytes,
-            "message": (
+        return b"", local_error(
+            "import_document",
+            "size_exceeds_cap",
+            file_path=file_path,
+            byte_size=size,
+            max_bytes=max_bytes,
+            message=(
                 f"File is {size} bytes, which exceeds the {max_bytes}-byte cap. "
                 "Raise LF_IMPORT_MAX_BYTES if you really need this file."
             ),
-        }
+        )
 
     with open(file_path, "rb") as fh:
         return fh.read(), None
@@ -325,7 +279,9 @@ async def import_document(
                 "Absolute or working-directory-relative path to the local "
                 "file. Must exist and be readable by the MCP process. "
                 "Path is interpreted on the MCP server's filesystem — "
-                "typically the same machine as Claude Desktop/Code."
+                "typically the same machine as Claude Desktop/Code. When "
+                "LF_IMPORT_SOURCE_DIRS is configured, the path must resolve "
+                "inside one of those directories."
             ),
             examples=["/tmp/uploads/invoice.pdf", "C:\\Users\\me\\Documents\\report.pdf"],
             min_length=1,
@@ -379,45 +335,21 @@ async def import_document(
 ) -> dict[str, Any]:
     """Upload a local file as a new document into a Laserfiche folder.
 
-    The file is read from the local filesystem **as seen by the MCP
-    server process** — typically the same machine that runs Claude
-    Desktop/Code. The server reads, then POSTs the bytes as a multipart
-    upload to the Laserfiche Repository API.
+    ``file_path`` is read from the MCP server process's filesystem, then
+    POSTed as multipart. Optional ``template_name``/``fields``/``tags``
+    apply metadata on import.
 
-    Args:
-        parent_id: Integer entry ID of the destination folder.
-        name: Filename to use inside Laserfiche (extension matters for
-            content-type sniffing). Backslashes are not allowed.
-        file_path: Absolute or working-directory-relative path to the
-            local file. Must exist and be readable by the MCP process.
-        template_name: Optional template to assign on import.
-        fields: Optional template-field values to set on import. Same
-            shape as other field-writing tools.
-        tags: Optional list of tag names to attach. Tags must already
-            exist as definitions (see ``list_tag_definitions``).
-        content_type: Override the auto-detected MIME type if needed
-            (e.g. for unusual file extensions). The client sniffs from
-            ``name`` if omitted.
-        auto_rename: When true, server appends a numeric suffix if
-            ``name`` collides in the destination.
-
-    Returns: Server's import payload on success — ``operations``
-    (with ``entryCreate.entryId`` for the new document) and
-    ``documentLink`` (the API URL of the new entry).
-
-    Pre-server errors (returned before the API call):
-        - ``path_not_allowed`` — parent's path outside the allow list.
-        - ``file_not_found`` — ``file_path`` doesn't resolve to a real
-          file on the MCP server's filesystem.
-        - ``size_exceeds_cap`` — file is larger than ``LF_IMPORT_MAX_BYTES``
-          (default 25 MB). The API caps at 100 MB; raise the env var to
-          import files between those sizes.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "parent_id": <int>, "name": <str>, "file_path": <str>, ...}``.
-    Common slugs: ``not_found`` (parent doesn't exist),
-    ``required_field_missing`` (template demanded fields you didn't
-    supply), ``auth_failed``.
+    Returns the server's import payload (``entryCreate.entryId`` = new
+    document). A 2xx response can still be a PARTIAL success — the entry
+    was created but a sub-operation (setTemplate/setFields/setTags/
+    setLinks) failed; when that happens the response carries
+    ``mode: "partial"`` and ``partial_errors`` (list of
+    ``{"operation", "exceptions"}``) instead of looking identical to a
+    clean import. Pre-server errors: ``path_not_allowed`` (destination),
+    ``source_path_not_allowed`` (LF_IMPORT_SOURCE_DIRS), ``file_not_found``,
+    ``size_exceeds_cap`` (LF_IMPORT_MAX_BYTES, default 25 MB; API caps at
+    100 MB). Server slugs: ``not_found``, ``required_field_missing``,
+    ``auth_failed``.
     """
     require_writes_enabled()
     name_err = validate_name("import_document", name, extra={"parent_id": parent_id})
@@ -449,6 +381,17 @@ async def import_document(
             return tag_err
 
     settings = get_settings()
+    source_ok, source_reason = permissions.local_source_path_allowed(
+        file_path, settings.import_source_dirs
+    )
+    if not source_ok:
+        return local_error(
+            "import_document",
+            "source_path_not_allowed",
+            file_path=file_path,
+            reason=source_reason,
+        )
+
     file_bytes, file_err = _read_import_file(file_path, settings.import_max_bytes)
     if file_err is not None:
         return file_err
@@ -474,4 +417,27 @@ async def import_document(
             exc,
             extra={"parent_id": parent_id, "name": name, "file_path": file_path},
         )
+
+    partial_errors = extract_multistatus_exceptions(raw)
+    if partial_errors:
+        # HTTP 2xx doesn't mean fully successful here: the entry itself was
+        # created, but a sub-operation (setTemplate/setFields/setTags/
+        # setLinks/...) reported its own failure in the multistatus body.
+        # Surface that distinctly rather than returning it identically to
+        # a clean import — the caller needs to know to retry the specific
+        # failed piece (assign_template / set_fields / set_tags / set_links)
+        # against the new entry.
+        return {
+            **raw,
+            "mode": "partial",
+            "operation": "import_document",
+            "partial_errors": partial_errors,
+            "warning": (
+                "The document was imported (the entry exists), but one or "
+                "more metadata operations reported a failure — see "
+                "partial_errors. Retry the failed piece directly (e.g. "
+                "assign_template, set_fields, set_tags, set_links) against "
+                "the new entry's ID."
+            ),
+        }
     return raw

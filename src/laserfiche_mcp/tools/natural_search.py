@@ -267,15 +267,8 @@ async def search_natural(
     question: Annotated[
         str,
         Field(
-            description=(
-                "The user's natural-language search question. Used by Mode A "
-                "to extract keywords for candidate queries and surfaced in "
-                "Mode B responses for correlation."
-            ),
-            examples=[
-                "find the latest invoice from Acme",
-                "what onboarding docs do we have for Smith?",
-            ],
+            description="The user's natural-language search question.",
+            examples=["find the latest invoice from Acme"],
         ),
     ],
     lf_query: Annotated[
@@ -287,7 +280,11 @@ async def search_natural(
                 "(Mode A): grammar reference, sampled templates, candidate "
                 "queries to refine."
             ),
-            examples=['{LF:Name="*Acme*"}', '{[Invoice]:[Vendor]="Acme*"}'],
+            examples=[
+                '{LF:Name="*Acme*"}',
+                '{LF:Basic~="unpaid balance",option="D"}',
+                '{[Invoice]:[Vendor]="Acme*"}',
+            ],
         ),
     ] = None,
     folder_path: Annotated[
@@ -307,10 +304,7 @@ async def search_natural(
         int,
         Field(
             default=50,
-            description=(
-                "Page size. Clamped to LF_MAX_PAGE_SIZE (default 100) — some "
-                "self-hosted SimpleSearches implementations 400 on larger $top."
-            ),
+            description="Page size, clamped to LF_MAX_PAGE_SIZE (default 100).",
             ge=1,
             le=500,
         ),
@@ -321,63 +315,30 @@ async def search_natural(
         Field(
             default=True,
             description=(
-                "When True (default), Mode B attempts a wildcard-wrap repair "
-                "if the server 400s on a Name=value clause with no wildcards. "
-                "Set False for exact-match queries that should NOT be relaxed."
+                "Allow the wildcard-wrap repair on 400 (default). Set False "
+                "for exact-match queries that must not be relaxed."
             ),
         ),
     ] = True,
 ) -> dict[str, Any]:
-    """Two-mode search: guidance first, then execution with automatic repair.
+    """Two-mode search: get query-authoring guidance, then execute with auto-repair.
 
-    Most Laserfiche servers reject malformed query syntax with a generic HTTP
-    400. This tool gives the host LLM a structured way to author a working
-    query without trial-and-error against the user.
+    Use when you need to author a Laserfiche query and don't know the
+    server's templates or field names. (For content questions, prefer
+    ``search_content``; for a query you can already write, ``search_entries``.)
 
-    **Mode A — ``lf_query`` omitted**
-        Returns ``mode="guidance"`` with:
-          * ``grammar`` — the Laserfiche search syntax reference this server
-            understands, with examples.
-          * ``discovered_templates`` — template names and field names sampled
-            from ``folder_path`` (or the repository root). Use these to
-            author template-field queries like
-            ``{[Personnel]:[Last Name]="Smith"}``.
-          * ``candidate_queries`` — up to 3 starter queries built from the
-            question's keywords. Pick one or refine it, then call again with
-            ``lf_query``.
-          * ``follow_up`` — the exact follow-up call shape.
+    **Mode A** (``lf_query`` omitted): returns ``mode="guidance"`` with the
+    search ``grammar``, ``discovered_templates`` (names + field names sampled
+    from ``folder_path`` or the root), and up to 3 ``candidate_queries``.
+    Pick or refine one, then call again with ``lf_query``.
 
-    **Mode B — ``lf_query`` provided**
-        Executes the query and returns ``mode="results"`` (or
-        ``mode="error"`` with structured detail). On HTTP 400, up to two
-        automatic repairs are attempted:
-
-          1. Escape unescaped ``"`` characters inside ``="..."`` value spans.
-          2. Wrap ``Name="value"`` values in ``*`` wildcards (only when
-             ``fuzzy=True`` and the value has no wildcard).
-
-        Each attempt is recorded in ``attempts`` on the error response.
-
-    **Pagination**
-        ``max_results`` is clamped to ``LF_MAX_PAGE_SIZE`` (default 100).
-        Some self-hosted SimpleSearches implementations 400 on larger
-        ``$top`` values, so the cap is lower than the list-folder ceiling.
-        When ``next_link`` is null but the result count hit the effective
-        cap, ``pagination_unknown=true`` is surfaced — there may be more
-        results, the server just didn't say.
-
-    **What this tool does NOT do**
-        It does not silently fall back to folder traversal. If both repairs
-        still 400, you get a structured error so the user knows search failed
-        and the host LLM can author a fresh query.
-
-    **On failure**
-        Mode B returns ``{mode: "error", attempts: [...]}`` with the full
-        repair history visible — each attempt records the query, the repair
-        tag applied, the HTTP status, and the server's error body, enough
-        context for the LLM to write a different query. Other failures
-        (auth, rate limit, network) come back via the generic error
-        contract; see docs/error-contract.md.
+    **Mode B** (``lf_query`` given): executes it. On HTTP 400 it retries with
+    up to two automatic repairs (escape inner quotes; wildcard-wrap bare
+    ``Name=`` values when ``fuzzy=True``), then returns ``mode="error"`` with
+    every ``attempts`` entry (query, repair, status, server body) so you can
+    author a fresh query. Success returns ``mode="results"``;
+    ``pagination_unknown=true`` means the server hit the cap without saying
+    whether more exist.
     """
     effective_max = clamp_search_page_size(max_results)
     client = _app.get_client()

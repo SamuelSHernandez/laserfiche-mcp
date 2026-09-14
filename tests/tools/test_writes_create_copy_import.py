@@ -129,6 +129,140 @@ async def test_import_document_happy_path_with_metadata(
     assert result.get("entryCreate", {}).get("entryId") == 500
 
 
+@pytest.mark.asyncio
+async def test_import_document_surfaces_partial_multistatus_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    """A 2xx response carrying a per-operation `exceptions` entry (entry
+    created, but e.g. setFields failed) must NOT look identical to a
+    clean import — mode: "partial" and partial_errors must surface it."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    f = tmp_path / "doc.txt"
+    f.write_bytes(b"hello")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/Entries/100/doc.txt?autoRename=false",
+        status_code=201,
+        json={
+            "entryCreate": {"entryId": 500},
+            "setFields": {"exceptions": [{"message": "Field 'Status' is invalid."}]},
+        },
+    )
+    result = await server.import_document(
+        100,
+        "doc.txt",
+        str(f),
+        fields={"Status": ["Bogus"]},
+    )
+    assert result["mode"] == "partial"
+    assert result["entryCreate"]["entryId"] == 500
+    assert result["partial_errors"] == [
+        {"operation": "setFields", "exceptions": [{"message": "Field 'Status' is invalid."}]}
+    ]
+
+
+# --- LF_IMPORT_SOURCE_DIRS local source fencing -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_import_document_source_fence_blocks_outside_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    """When LF_IMPORT_SOURCE_DIRS is set, a file outside it is refused
+    before the file is even read — and before any HTTP call is made."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    monkeypatch.setattr(settings, "import_source_dirs", str(allowed_dir))
+
+    outside = tmp_path / "outside" / "doc.txt"
+    outside.parent.mkdir()
+    outside.write_bytes(b"hello")
+
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    result = await server.import_document(100, "doc.txt", str(outside))
+    assert result["mode"] == "error"
+    assert result["error"] == "source_path_not_allowed"
+    assert not httpx_mock.get_requests(method="POST")
+
+
+@pytest.mark.asyncio
+async def test_import_document_source_fence_allows_inside_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    """A file inside an allowed LF_IMPORT_SOURCE_DIRS entry still imports."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    monkeypatch.setattr(settings, "import_source_dirs", str(allowed_dir))
+
+    f = allowed_dir / "doc.txt"
+    f.write_bytes(b"hello")
+
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/Entries/100/doc.txt?autoRename=false",
+        status_code=201,
+        json={"entryCreate": {"entryId": 500}},
+    )
+    result = await server.import_document(100, "doc.txt", str(f))
+    assert result.get("entryCreate", {}).get("entryId") == 500
+
+
+@pytest.mark.asyncio
+async def test_import_document_source_fence_unset_preserves_current_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    """LF_IMPORT_SOURCE_DIRS unset (default): any readable path is accepted,
+    matching pre-fencing behavior."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    f = tmp_path / "anywhere" / "doc.txt"
+    f.parent.mkdir()
+    f.write_bytes(b"hello")
+
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/Entries/100/doc.txt?autoRename=false",
+        status_code=201,
+        json={"entryCreate": {"entryId": 500}},
+    )
+    result = await server.import_document(100, "doc.txt", str(f))
+    assert result.get("entryCreate", {}).get("entryId") == 500
+
+
 # --- path-fence on parent ---------------------------------------------------
 
 

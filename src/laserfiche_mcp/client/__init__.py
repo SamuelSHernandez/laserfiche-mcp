@@ -27,6 +27,11 @@ v1 (older self-hosted builds — current default):
   DELETE Entries/{id}/edoc                                     — delete edoc
   DELETE Entries/{id}/pages?pageRange=...                      — delete pages
   POST   SimpleSearches                                        — simple search
+  POST   Searches                                              — async search (context hits)
+  GET    Searches/{token}                                      — async search status
+  GET    Searches/{token}/Results                              — async search results
+  GET    Searches/{token}/Results/{row}/ContextHits            — matched passages
+  DELETE Searches/{token}                                      — release search token
   GET    FieldDefinitions, TagDefinitions, TemplateDefinitions, LinkDefinitions, AuditReasons
   GET    Tasks/{operationToken}                                — async op status
   (no endpoint)                                                — extracted text
@@ -37,6 +42,11 @@ v2 (newer self-hosted builds):
   GET  Entries/{id}/Folder/Children                          — list folder
   GET  Entries/{id}/Fields                                   — field values
   POST SimpleSearches                                        — simple search
+  POST Searches/SearchAsync                                  — async search (context hits)
+  GET  Tasks?taskIds={taskId}                                — async search status
+  GET  Searches/{taskId}/Results                             — async search results
+  GET  Searches/{taskId}/Results/{row}/ContextHits           — matched passages
+  DELETE Tasks?taskIds={taskId}                              — release search token
   POST Entries/{id}/Export {"part": "Edoc"}                  — raw edoc bytes
   POST Entries/{id}/Export {"part": "Text"}                  — extracted text
 
@@ -46,9 +56,9 @@ NOT a GET with a query string. Version is selected by ``Settings.api_version``
 
 This module is a package: the 40-method ``LaserficheClient`` class is
 composed from a ``_CoreClient`` base (transport, retry, request helpers)
-plus three resource mixins (``_EntriesMixin``, ``_DefinitionsMixin``,
-``_WritesMixin``). Each lives in its own file so individual concerns
-stay under ~250 lines without sacrificing the single-class public API.
+plus four resource mixins (``_EntriesMixin``, ``_DefinitionsMixin``,
+``_SearchMixin``, ``_WritesMixin``). Each lives in its own file so individual
+concerns stay under ~250 lines without sacrificing the single-class public API.
 """
 
 from __future__ import annotations
@@ -57,10 +67,11 @@ from ..errors import LaserficheError
 from ._core import build_repo_path
 from ._definitions import _DefinitionsMixin
 from ._entries import _EntriesMixin
-from ._writes import _WritesMixin
+from ._search import _SearchMixin
+from ._writes import _WritesMixin, extract_multistatus_exceptions
 
 
-class LaserficheClient(_EntriesMixin, _DefinitionsMixin, _WritesMixin):
+class LaserficheClient(_EntriesMixin, _DefinitionsMixin, _SearchMixin, _WritesMixin):
     """Async client for the self-hosted Repository API (v1 or v2).
 
     Use as an async context manager so the underlying ``httpx.AsyncClient``
@@ -75,4 +86,9 @@ class LaserficheClient(_EntriesMixin, _DefinitionsMixin, _WritesMixin):
     """
 
 
-__all__ = ["LaserficheClient", "LaserficheError", "build_repo_path"]
+__all__ = [
+    "LaserficheClient",
+    "LaserficheError",
+    "build_repo_path",
+    "extract_multistatus_exceptions",
+]

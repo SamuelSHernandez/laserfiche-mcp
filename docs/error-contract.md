@@ -85,7 +85,9 @@ non-2xx response. Direct unit tests cover every slug.
 Some tools have additional `mode: "error"` shapes that fire **before**
 hitting the server — these are local guards, not classified by the
 generic mapper. They still carry the same envelope (`kind`, `error`,
-`request_id`, ...):
+`request_id`, ...). `get_document_edoc` failures additionally preserve
+the mode the caller asked for as `requested_mode` (`mode` itself is the
+literal `"error"`, like every other failure):
 
 | Subkind                       | Tool(s)                                                            | When                                                                                   | Kind                    |
 | ----------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | ----------------------- |
@@ -93,7 +95,7 @@ generic mapper. They still carry the same envelope (`kind`, `error`,
 | `path_traversal_blocked`      | every write tool                                                   | Path contains a `..` segment. Rejected regardless of allow/deny config.                | `permission_denied`     |
 | `exceeds_batch_cap`           | `delete_entry`                                                     | Folder has more immediate children than `LF_DELETE_FOLDER_MAX_DESCENDANTS`. Pass `force_large_delete=true` to override. | `invalid_input`         |
 | `audit_reason_required`       | `delete_entry`                                                     | `LF_REQUIRE_AUDIT_REASON=true` and the caller didn't supply `audit_reason_id`.        | `invalid_input`         |
-| `invalid_confirmation_token`  | `rename_entry`, `move_entry`, `delete_entry`, `delete_edoc`, `delete_pages` | Token is expired, malformed, or bound to a different `(operation, entry_id, entry_name)` tuple. | `invalid_input`         |
+| `invalid_confirmation_token`  | `rename_entry`, `move_entry`, `delete_entry`, `delete_edoc`, `delete_pages` | Token is expired, malformed, bound to a different `(operation, entry_id, entry_name)` tuple, bound to different operation parameters than the execute call supplies (`page_range` for `delete_pages`, `new_name` for `rename_entry`, `new_parent_id` + `new_name` for `move_entry` — the reason names the drifted parameter), or minted by a prior server instance (the signing key is per-process unless `LF_CONFIRMATION_SECRET` is set). | `invalid_input`         |
 | `missing_required_fields`     | `assign_template`                                                  | `LF_VALIDATE_REQUIRED_FIELDS=true` and one or more `isRequired` fields are unset and not supplied via `fields=`. Response includes `missing` (names) and `field_details` (full metadata). | `invalid_input`         |
 | `tool_not_allowed`            | every write tool                                                   | Tool name isn't in `LF_WRITE_TOOLS_ALLOWED`. (Belt-and-suspenders to the registration-time gate.) | `permission_denied`     |
 | `page_range_required`         | `delete_pages`                                                     | Empty `page_range` (the API treats empty as "delete all pages" — too easy to fat-finger). | `invalid_input`         |
@@ -108,7 +110,25 @@ generic mapper. They still carry the same envelope (`kind`, `error`,
 | `size_exceeds_cap`            | `import_document`, `get_document_edoc`                             | Payload exceeds `LF_IMPORT_MAX_BYTES` / `LF_EDOC_MAX_BYTES`.                          | `invalid_input`         |
 | `expected_folder_got_document`| `create_folder`, `import_document`, `copy_entry` (when targeting a parent) | The parent_id resolved to a document, not a folder.                          | `invalid_input`         |
 | `bad_query_syntax`            | `search_natural`                                                   | The two automatic repairs (quote-escape, name wildcarding) didn't produce a query the server would accept. Response surfaces every attempt. | `invalid_input`         |
+| `invalid_page_spec` / `pages_out_of_range` / `pages_not_applicable` | `get_document_edoc(mode="text")` | The `pages` selection is malformed, entirely past the end of the document, or applied to an unpaginated format. | `invalid_input`         |
+| `pdf_encrypted` / `pdf_open_failed` / `extraction_failed` | `get_document_edoc(mode="text")` | The PDF is password-protected, unparseable, or a local scratch-file failure interrupted extraction. | `invalid_input`         |
+| `unsupported_format`          | `get_document_edoc(mode="text")`                                   | No extractor for this format (typically a scanned image with no text layer). `hint` routes to `search_content`, which reads the OCR index. | `invalid_input`         |
+| `legacy_office_format`        | `get_document_edoc(mode="text")`                                   | Binary .doc/.xls/.ppt need an external converter; message names the path. | `invalid_input`         |
+| `not_a_zip` / `malformed_docx` / `xlsx_open_failed` / `msg_open_failed` | `get_document_edoc(mode="text")` | The file claims an OOXML/mail format but cannot be parsed. | `invalid_input`         |
+| `backend_unavailable`         | `get_document_edoc(mode="text")`                                   | The format needs the `laserfiche-mcp[office]` extra (openpyxl / extract-msg); message carries the install command. | `invalid_input`         |
+| `async_search_unavailable`    | `search_content`                                                   | This build has no async `/Searches` endpoints, so context hits are impossible. Response carries a `hint` pointing at `search_entries`, which queries the same full-text index without excerpts. | `upstream_unavailable`  |
+| `search_timeout`              | `search_content`                                                   | Search was still running at `LF_SEARCH_TIMEOUT_SECONDS`. The token is released before returning. Response carries `percent_complete`. | `upstream_unavailable`  |
+| `search_failed`               | `search_content`                                                   | Server put the search into a `Failed` / `Canceled` state. `server_errors` carries the server's own error list. | `upstream_unavailable`  |
 | `endpoint_disabled`           | reads against builds that disable specific endpoints               | Endpoint returned an explicit "not available" response (see `list_repositories` for the `mode: "fallback"` variant). | `upstream_unavailable`  |
+
+## `user_hint`
+
+Errors whose `kind` is `permission_denied` or `upstream_unavailable` can
+only be fixed by whoever operates the connection, not by the person in
+the chat. Those responses carry an extra `user_hint` field — a sentence
+the assistant can relay verbatim ("ask whoever set up this connection;
+give them request_id ...") so a non-technical user gets an actionable
+next step instead of a paraphrased env-var name.
 
 ## Special: `list_repositories` fallback
 

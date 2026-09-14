@@ -32,6 +32,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from ..observability import get_request_id_or_new
 from ._registry import register
 from .writes_delete_edoc_pages import delete_edoc, delete_pages
 from .writes_delete_entry import delete_entry
@@ -98,6 +99,7 @@ def _reject_token_on_preview(operation: str, token: str | None) -> dict[str, Any
         "operation": operation,
         "kind": "invalid_input",
         "error": "preview_does_not_accept_token",
+        "request_id": get_request_id_or_new(),
         "reason": (
             f"{operation} is the preview-only variant; it does not accept "
             "a confirmation_token. Call the *_execute variant with the "
@@ -121,6 +123,7 @@ def _require_token_on_execute(operation: str, token: str | None) -> dict[str, An
         "operation": operation,
         "kind": "invalid_input",
         "error": "execute_requires_token",
+        "request_id": get_request_id_or_new(),
         "reason": (
             f"{operation} is the execute-only variant; it requires a "
             "confirmation_token obtained from the matching *_preview "

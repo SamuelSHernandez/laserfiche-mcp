@@ -97,6 +97,25 @@ _SUBKIND_TO_KIND: dict[str, str] = {
     "size_exceeds_cap": "invalid_input",
     "expected_folder_got_document": "invalid_input",
     "bad_query_syntax": "invalid_input",
+    "invalid_page_spec": "invalid_input",
+    "pages_out_of_range": "invalid_input",
+    "pages_not_applicable": "invalid_input",
+    # Extraction failures from get_document_edoc(mode="text"): the request
+    # is fine but this document cannot be extracted as asked — the caller
+    # should change approach (mode="bytes", search_content), which is the
+    # "fix and re-call" semantics of invalid_input.
+    "unsupported_format": "invalid_input",
+    "legacy_office_format": "invalid_input",
+    "pdf_encrypted": "invalid_input",
+    "pdf_open_failed": "invalid_input",
+    "pdf_extraction_failed": "invalid_input",
+    "not_a_zip": "invalid_input",
+    "malformed_docx": "invalid_input",
+    "xlsx_open_failed": "invalid_input",
+    "msg_open_failed": "invalid_input",
+    "extraction_failed": "invalid_input",
+    "backend_unavailable": "invalid_input",
+    "pypdf_unavailable": "invalid_input",
     # upstream_unavailable
     "server_error": "upstream_unavailable",
     "method_not_allowed": "upstream_unavailable",
@@ -228,6 +247,43 @@ def classify_lf_error(
         out["entry_id"] = entry_id
     if extra:
         out.update(extra)
+
+    # The `reason` strings above speak installer ("check LF_USERNAME") —
+    # useless to the person actually in the chat, who typically didn't set
+    # this server up. For failures only an operator can fix, add a sentence
+    # the assistant can relay verbatim to a non-technical user.
+    if out["kind"] in ("permission_denied", "upstream_unavailable"):
+        out["user_hint"] = (
+            "This needs whoever set up the Laserfiche connection. Give them "
+            f"this request id: {out['request_id']}."
+        )
+    return out
+
+
+def local_error(
+    operation: str,
+    subkind: str,
+    *,
+    reason: str | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Structured error for pre-server local guards (no HTTP involved).
+
+    Carries the same envelope fields the error contract promises for
+    every ``mode: "error"`` response — ``kind`` (derived from the
+    subkind) and ``request_id`` — so local guards and server-classified
+    errors are indistinguishable to a caller branching on the contract.
+    """
+    out: dict[str, Any] = {
+        "mode": "error",
+        "operation": operation,
+        "kind": kind_for_subkind(subkind),
+        "error": subkind,
+        "request_id": get_request_id_or_new(),
+    }
+    if reason is not None:
+        out["reason"] = reason
+    out.update(fields)
     return out
 
 

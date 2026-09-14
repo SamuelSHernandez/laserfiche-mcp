@@ -104,34 +104,14 @@ async def merge_fields(
 ) -> dict[str, Any]:
     """Update specific fields on an entry, preserving the rest.
 
-    **The right default for "set field X to Y" intents.** This GET-then-PUT
-    helper reads the entry's current field values, layers ``updates`` on
-    top, and PUTs the union — fields not mentioned in ``updates`` keep
-    their existing values. Use ``set_fields`` only when you specifically
-    want overwrite-everything-else semantics.
+    **The right default for "set field X to Y".** Reads current values,
+    layers ``updates`` on top, PUTs the union — unmentioned fields keep
+    their values. An empty list clears one field. Use ``set_fields`` only
+    for overwrite-everything semantics.
 
-    Args:
-        entry_id: Integer entry ID to update.
-        updates: Mapping of field name → list of values. Single-value
-            fields take a one-item list; multi-value fields take many.
-            Example: ``{"Last Name": ["Smith"], "Hire Year": ["2025"]}``.
-            Pass an empty list (``"Note": []``) to clear a specific
-            field while leaving others alone.
-
-    Returns: ``{"mode": "executed", "operation": "merge_fields",
-    "entry_id": <int>, "fields_updated": [...], "fields_preserved": [...],
-    "result": <server response>}``. The ``fields_updated`` and
-    ``fields_preserved`` arrays make it easy to confirm exactly what
-    changed.
-
-    Pre-server errors (returned before the API call):
-        - ``path_not_allowed`` — entry's path falls outside the
-          ``LF_WRITE_PATHS_ALLOW`` / inside ``LF_WRITE_PATHS_DENY``.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "entry_id": <int>, ...}``. Common slugs: ``not_found``,
-    ``required_field_missing`` (clearing a required field),
-    ``auth_failed``.
+    Returns ``{"mode": "executed", "fields_updated", "fields_preserved"}``.
+    Errors: ``path_not_allowed``, ``not_found``,
+    ``required_field_missing`` (clearing a required field), ``auth_failed``.
     """
     require_writes_enabled()
     try:

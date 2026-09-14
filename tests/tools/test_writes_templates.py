@@ -50,7 +50,16 @@ async def test_assign_template_blocks_when_required_field_missing(
     httpx_mock: HTTPXMock,
     patched_client: LaserficheClient,
 ) -> None:
-    """Validator returns mode:error when a repo-wide required field is unset."""
+    """Validator returns mode:error only for a required field that (a)
+    actually belongs to the target template's own field set and (b) has no
+    ``defaultValue`` the server would fill in itself.
+
+    ``Type of Document`` carries a ``defaultValue`` so it must NOT be
+    reported missing even though it's required and unset. ``Other Field``
+    is required repo-wide but belongs to a *different* template, so it
+    must also be excluded. Only ``Last Name`` — required, no default,
+    and a member of ``Personnel``'s own field set — should be flagged.
+    """
     monkeypatch.setattr(server._get_settings(), "read_only", False)
     httpx_mock.add_response(
         method="GET",
@@ -61,6 +70,21 @@ async def test_assign_template_blocks_when_required_field_missing(
             "entryType": "Document",
             "fullPath": "\\Doc",
         },
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
+        json={
+            "value": [
+                {
+                    "id": 1,
+                    "name": "Personnel",
+                    "templateFieldNames": ["Type of Document", "Last Name"],
+                },
+            ]
+        },
+        is_reusable=True,
     )
     httpx_mock.add_response(
         method="GET",
@@ -77,7 +101,14 @@ async def test_assign_template_blocks_when_required_field_missing(
                 {
                     "name": "Last Name",
                     "fieldType": "String",
-                    "isRequired": False,
+                    "isRequired": True,
+                    "listValues": [],
+                    "defaultValue": None,
+                },
+                {
+                    "name": "Other Field",
+                    "fieldType": "String",
+                    "isRequired": True,
                     "listValues": [],
                     "defaultValue": None,
                 },
@@ -94,8 +125,7 @@ async def test_assign_template_blocks_when_required_field_missing(
 
     assert result["mode"] == "error"
     assert result["error"] == "missing_required_fields"
-    assert result["missing"] == ["Type of Document"]
-    assert result["field_details"][0]["list_values"] == ["Digital", "Original"]
+    assert result["missing"] == ["Last Name"]
 
 
 @pytest.mark.asyncio
@@ -144,6 +174,15 @@ async def test_assign_template_validation_passes_when_required_field_already_set
     )
     httpx_mock.add_response(
         method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
+        json={
+            "value": [
+                {"id": 1, "name": "T", "templateFieldNames": ["Type of Document"]},
+            ]
+        },
+    )
+    httpx_mock.add_response(
+        method="GET",
         url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
         json={
             "value": [
@@ -187,6 +226,19 @@ async def test_assign_template_validation_accepts_required_field_via_caller_fiel
         method="GET",
         url=f"{_BASE}/Entries/42",
         json={"id": 42, "name": "Doc", "entryType": "Document", "fullPath": "\\Doc"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
+        json={
+            "value": [
+                {
+                    "id": 1,
+                    "name": "T",
+                    "templateFieldNames": ["Type of Document", "Doc Classification"],
+                },
+            ]
+        },
     )
     httpx_mock.add_response(
         method="GET",
@@ -239,6 +291,15 @@ async def test_assign_template_validation_flags_only_unsupplied_missing(
         method="GET",
         url=f"{_BASE}/Entries/42",
         json={"id": 42, "name": "Doc", "entryType": "Document", "fullPath": "\\Doc"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
+        json={
+            "value": [
+                {"id": 1, "name": "T", "templateFieldNames": ["A", "B"]},
+            ]
+        },
     )
     httpx_mock.add_response(
         method="GET",

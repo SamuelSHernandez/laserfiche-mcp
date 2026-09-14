@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .. import _app, confirmation
-from ..errors import LaserficheError, classify_lf_error, invalid_token_response
+from ..errors import LaserficheError, classify_lf_error, invalid_token_response, local_error
 from ._helpers import (
     ToolAbortedError,
     check_write_permission,
@@ -47,42 +47,18 @@ async def delete_edoc(
 ) -> dict[str, Any]:
     """Wipe a document's binary content while keeping the entry metadata.
 
-    **Two-step: preview, then execute with token.** The entry, its
-    template, its field values, its links and tags — all survive. Only
-    the underlying file (the "edoc" — electronic document) is removed.
-    Useful for retention scenarios where you must purge content but
-    preserve the metadata audit trail.
+    **Two-step: preview, then execute with token.** Entry, template,
+    fields, links and tags all survive; only the file is removed
+    (retention purges). Irreversible. Use ``delete_entry`` to remove the
+    entry itself.
 
-    Irreversible without a Laserfiche backup. Use ``delete_entry`` if
-    you actually want the entry gone.
+    Step 1: call without ``confirmation_token`` -> preview with
+    ``full_path``, ``page_count``, ``extension`` and a 5-minute token —
+    surface to the user. Step 2: re-call with the token.
 
-    **Step 1 — preview**
-        Call with ``confirmation_token=None``. Response includes the
-        entry's full path, ``page_count``, ``extension``, and an
-        HMAC-signed ``confirmation_token`` (5-minute TTL). Surface to
-        the user.
-
-    **Step 2 — execute**
-        Re-call with the token. Returns ``{"mode": "executed", "result":
-        ...}``.
-
-    Args:
-        entry_id: Integer entry ID of an electronic document.
-        confirmation_token: From the preview. HMAC-signed, 5-minute TTL.
-
-    Returns: On preview, ``{"mode": "preview", "confirmation_token": <str>,
-    "full_path": <str>, "page_count": <int>, ...}``.
-    On execute, ``{"mode": "executed", "entry_id": <int>, "entry_name":
-    <str>, "result": <server response>}``.
-
-    Pre-server errors (returned before the API call):
-        - ``path_not_allowed`` — entry outside the allow list.
-        - ``invalid_confirmation_token`` — token expired or tampered.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "entry_id": <int>, ...}``. Common slugs: ``not_found`` (entry is a
-    folder, or has no edoc), ``method_not_allowed`` (server build doesn't
-    expose this endpoint), ``auth_failed``.
+    Pre-server errors: ``path_not_allowed``, ``invalid_confirmation_token``.
+    Server slugs: ``not_found`` (folder or no edoc), ``method_not_allowed``,
+    ``auth_failed``.
     """
     require_writes_enabled()
     try:
@@ -168,63 +144,32 @@ async def delete_pages(
 ) -> dict[str, Any]:
     """Delete specific pages from a paginated document. **Two-step: preview, then execute.**
 
-    Only valid on documents that the Laserfiche server treats as
-    paginated (PDFs, TIFFs, scanned images). Plain-text files and Office
-    documents have ``page_count: 0`` and will fail server-side with
-    "Entry does not contain any pages" — use ``delete_edoc`` to wipe the
-    whole file instead.
+    Only for paginated documents (PDF/TIFF/scans); non-paginated entries
+    fail server-side — use ``delete_edoc`` for those. Irreversible, and
+    pages renumber after deletion.
 
-    Irreversible without a backup. Pages are renumbered after deletion,
-    so a subsequent delete_pages("1-3") on the same document targets
-    different physical pages than before.
+    Step 1: call without ``confirmation_token`` -> preview with
+    ``page_count``, the ``page_range``, and a 5-minute token. Step 2:
+    re-call with the same ``page_range`` plus the token.
 
-    **Step 1 — preview**
-        Call with ``confirmation_token=None``. Response includes
-        ``page_count`` (server-reported, may be null on v1), the
-        ``page_range`` you'll be deleting, and an HMAC-signed token.
+    ``page_range`` is required and non-empty (e.g. ``"1-3,5"``) — empty
+    means "all pages" upstream, so it is refused; pass an explicit range.
 
-    **Step 2 — execute**
-        Re-call with the same ``page_range`` plus the token.
-
-    Args:
-        entry_id: Integer entry ID of a paginated document.
-        page_range: Page-range expression. REQUIRED and non-empty.
-            Examples: ``"1,2,3"`` (individual pages), ``"1-3,5"``
-            (range + single), ``"2-7,10-12"`` (two ranges). The
-            Laserfiche API treats empty as "delete all pages", so this
-            tool refuses empty values to remove that footgun. If you
-            genuinely want to delete every page, pass an explicit wide
-            range like ``"1-9999"``.
-        confirmation_token: From the preview. HMAC-signed, 5-minute TTL.
-
-    Returns: On preview, ``{"mode": "preview", "confirmation_token": <str>,
-    "page_count": <int>, "page_range": <str>, ...}``.
-    On execute, ``{"mode": "executed", "entry_id": <int>, "page_range":
-    <str>, "result": <server response>}``.
-
-    Pre-server errors (returned before the API call):
-        - ``page_range_required`` — ``page_range`` was empty/whitespace.
-        - ``path_not_allowed`` — entry outside the allow list.
-        - ``invalid_confirmation_token`` — token expired or tampered.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "entry_id": <int>, "page_range": <str>, ...}``. Common slugs:
-    ``not_found`` (entry doesn't exist or has no pages — common for
-    non-paginated documents), ``method_not_allowed`` (server build
-    doesn't expose this endpoint), ``auth_failed``.
+    Pre-server errors: ``page_range_required``, ``invalid_page_range``,
+    ``path_not_allowed``, ``invalid_confirmation_token``. Server slugs:
+    ``not_found``, ``method_not_allowed``, ``auth_failed``.
     """
     require_writes_enabled()
     if not page_range or not page_range.strip():
-        return {
-            "mode": "error",
-            "operation": "delete_pages",
-            "error": "page_range_required",
-            "message": (
+        return local_error(
+            "delete_pages",
+            "page_range_required",
+            message=(
                 "page_range must be non-empty. The API would treat empty as "
                 "'delete all pages' — too easy to fat-finger. Pass an "
                 "explicit range like '1-9999' if you intended to delete all."
             ),
-        }
+        )
     range_err = validate_page_range_input("delete_pages", entry_id, page_range)
     if range_err is not None:
         return range_err
@@ -237,16 +182,30 @@ async def delete_pages(
     if perm_err:
         return perm_err
     current_name = entry_name(entry)
+    current_page_count = entry.get("pageCount") or entry.get("PageCount")
 
     if confirmation_token is None:
-        token = confirmation.create_token("delete_pages", entry_id, current_name)
+        # Bind the page_range AND the page_count observed right now into
+        # the token: the user confirms deleting THESE pages from a
+        # document with THIS many pages. Binding page_range alone isn't
+        # enough — page ranges are positional, so if the document is
+        # renumbered by another delete between preview and execute (pages
+        # shift), the same page_range string now refers to different
+        # pages. Binding page_count forces a fresh preview whenever the
+        # document's pagination has changed underneath a pending token.
+        token = confirmation.create_token(
+            "delete_pages",
+            entry_id,
+            current_name,
+            params={"page_range": page_range, "page_count": current_page_count},
+        )
         return {
             "mode": "preview",
             "operation": "delete_pages",
             "entry_id": entry_id,
             "entry_name": current_name,
             "full_path": entry.get("fullPath") or entry.get("FullPath"),
-            "page_count": entry.get("pageCount") or entry.get("PageCount"),
+            "page_count": current_page_count,
             "page_range": page_range,
             "warning": (
                 f"This will permanently delete pages matching {page_range!r} "
@@ -266,6 +225,7 @@ async def delete_pages(
         "delete_pages",
         entry_id,
         current_name,
+        params={"page_range": page_range, "page_count": current_page_count},
     )
     if not ok:
         return invalid_token_response("delete_pages", entry_id, reason)

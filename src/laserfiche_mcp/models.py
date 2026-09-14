@@ -141,6 +141,133 @@ class SearchResults(BaseModel):
         )
 
 
+# --- content search (async /Searches flow) -----------------------------------
+
+
+class ContextHit(BaseModel):
+    """One matched passage inside a document's indexed (often OCR'd) text.
+
+    Only the asynchronous ``/Searches`` flow produces these — ``SimpleSearches``
+    tells you an entry matched, not where.
+    """
+
+    page: int | None = Field(
+        default=None,
+        description="1-based page the match sits on. Null for non-paginated hits.",
+    )
+    text: str = Field(description="Text surrounding the match, as indexed.")
+    match: str | None = Field(
+        default=None,
+        description="The exact substring that matched, sliced out of `text`.",
+    )
+    hit_type: str | None = Field(
+        default=None,
+        description="Where the match came from: PageContent, Field, Annotation, ...",
+    )
+    field_name: str | None = Field(
+        default=None,
+        description="Template field the match came from, when hit_type is a field hit.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any], *, context_chars: int) -> ContextHit:
+        """Build a hit from a ``SearchContextHit`` payload.
+
+        The server locates the match within ``context`` via
+        ``highlight1Offset`` / ``highlight1Length``. We slice that span out
+        into ``match`` rather than wrapping it in markers, so the surrounding
+        text stays byte-identical to what is stored in the index.
+
+        ``context`` is then trimmed to ``context_chars`` *centered on the
+        match*, so a server that returns a whole page still costs a
+        predictable number of tokens without cutting the match itself off.
+        """
+        context = str(_pick(raw, "context", "Context", default="") or "")
+        offset = _pick(raw, "highlight1Offset", "Highlight1Offset", default=0) or 0
+        length = _pick(raw, "highlight1Length", "Highlight1Length", default=0) or 0
+
+        match: str | None = None
+        if isinstance(offset, int) and isinstance(length, int) and length > 0:
+            candidate = context[offset : offset + length]
+            match = candidate or None
+
+        page_raw = _pick(raw, "pageNumber", "PageNumber")
+        # Field and annotation hits report page 0 — that's "not on a page",
+        # not "page zero", so don't surface it as a page number.
+        page = page_raw if isinstance(page_raw, int) and page_raw > 0 else None
+
+        field_name = _pick(raw, "fieldName", "FieldName") or None
+
+        return cls(
+            page=page,
+            text=_center_trim(context, offset, length, context_chars),
+            match=match,
+            hit_type=_pick(raw, "hitType", "HitType"),
+            field_name=field_name,
+        )
+
+
+def _center_trim(text: str, offset: int, length: int, limit: int) -> str:
+    """Trim ``text`` to ``limit`` chars, keeping the highlighted span inside.
+
+    Ellipses mark where text was removed so the model can tell a trimmed
+    excerpt from a complete one. If the span itself is longer than ``limit``,
+    the span wins — truncating the match would defeat the point.
+    """
+    if len(text) <= limit:
+        return text
+
+    if not isinstance(offset, int) or not isinstance(length, int) or length <= 0:
+        return text[:limit].rstrip() + "…"
+
+    # Center the window on the match, then clamp it into range.
+    slack = max(0, limit - length)
+    start = max(0, offset - slack // 2)
+    end = min(len(text), start + limit)
+    start = max(0, end - limit)
+
+    excerpt = text[start:end].strip()
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(text) else ""
+    return f"{prefix}{excerpt}{suffix}"
+
+
+class ContentSearchResult(BaseModel):
+    """One matching entry plus the passages that matched inside it."""
+
+    entry_id: int
+    name: str
+    entry_type: EntryType
+    full_path: str | None = None
+    row_number: int | None = Field(
+        default=None,
+        description="1-based position in the full result set; the key context hits are fetched by.",
+    )
+    hits: list[ContextHit] = Field(default_factory=list)
+    hit_count: int | None = Field(
+        default=None,
+        description="Total passages that matched in this entry, before `hits` was truncated.",
+    )
+    hits_truncated: bool = False
+    hits_error: str | None = Field(
+        default=None,
+        description="Set when this row's context hits could not be fetched; "
+        "the entry still matched.",
+    )
+
+    @classmethod
+    def from_api(cls, raw: dict[str, Any]) -> ContentSearchResult:
+        summary = EntrySummary.from_api(raw)
+        row = _pick(raw, "rowNumber", "RowNumber")
+        return cls(
+            entry_id=summary.id,
+            name=summary.name,
+            entry_type=summary.entry_type,
+            full_path=summary.full_path,
+            row_number=row if isinstance(row, int) else None,
+        )
+
+
 # --- search_natural ----------------------------------------------------------
 
 

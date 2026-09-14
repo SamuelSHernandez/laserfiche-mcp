@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from laserfiche_mcp.config import ApiVersion, AuthMode, DeploymentMode, Settings
+from laserfiche_mcp.config import ApiVersion, AuthMode, DeploymentMode, Settings, unknown_env_keys
 
 
 def test_loads_password_self_hosted(lf_env: dict[str, str]) -> None:
@@ -206,3 +206,37 @@ def test_oauth_rejects_none_algorithm(
     monkeypatch.setenv("LF_HTTP_OAUTH_ALGORITHMS", "none")
     with pytest.raises(ValueError, match="asymmetric"):
         Settings()  # type: ignore[call-arg]
+
+
+# --- unknown_env_keys (typo detection for LF_* env vars) --------------------
+
+
+def test_unknown_env_keys_empty_when_all_recognized() -> None:
+    env = {"LF_READ_ONLY": "true", "LF_WRITE_PATHS_ALLOW": "\\Imports", "PATH": "/usr/bin"}
+    assert unknown_env_keys(env) == []
+
+
+def test_unknown_env_keys_flags_typo() -> None:
+    """A typo like LF_WRITE_PATHS_ALLOW -> LF_WRITE_PATH_ALLOW must be
+    flagged — Settings.extra='ignore' would otherwise drop it silently,
+    leaving writes unfenced with no diagnostic anywhere."""
+    env = {"LF_WRITE_PATH_ALLOW": "\\Imports"}  # missing the 'S' in PATHS
+    assert unknown_env_keys(env) == ["LF_WRITE_PATH_ALLOW"]
+
+
+def test_unknown_env_keys_ignores_non_lf_vars() -> None:
+    env = {"PATH": "/usr/bin", "HOME": "/home/x", "SOME_OTHER_LF_LOOKALIKE": "x"}
+    assert unknown_env_keys(env) == []
+
+
+def test_unknown_env_keys_is_case_insensitive() -> None:
+    """pydantic-settings matches env var names case-insensitively by
+    default; the typo-detector must not flag correctly-named vars just
+    because of casing."""
+    env = {"lf_read_only": "true"}
+    assert unknown_env_keys(env) == []
+
+
+def test_unknown_env_keys_defaults_to_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LF_TOTALLY_MADE_UP_KEY", "x")
+    assert "LF_TOTALLY_MADE_UP_KEY" in unknown_env_keys()

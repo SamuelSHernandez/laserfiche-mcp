@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "laserfiche-mcp",
   "display_name": "Laserfiche Assistant",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Search and read documents in a self-hosted Laserfiche repository from Claude \u2014 no terminal or JSON editing required.",
   "long_description": "Connects Claude to a self-hosted Laserfiche Repository API Server. Fill in your repository URL and service-account credentials in the settings form below and click Save \u2014 Claude can then search the repository, list folders, look up entries, read template field values, and extract document text. Ships read-only by default; the write surface stays disabled unless you turn off Read-only mode. Community project, not affiliated with Laserfiche.",
   "author": {
@@ -43,11 +43,11 @@
   },
   "tools": [
     {
-      "name": "laserfiche_search",
+      "name": "laserfiche_entry_search",
       "description": "Search the repository with native Laserfiche syntax"
     },
     {
-      "name": "laserfiche_search_natural",
+      "name": "laserfiche_entry_search_natural",
       "description": "Guided natural-language search (templates first, then executes)"
     },
     {
@@ -67,8 +67,16 @@
       "description": "Read all template field values on an entry"
     },
     {
-      "name": "laserfiche_document_edoc_get",
+      "name": "laserfiche_document_get_edoc",
       "description": "Read document metadata, bytes, or extracted text"
+    },
+    {
+      "name": "laserfiche_document_find_duplicates",
+      "description": "Find byte-identical documents in a folder tree"
+    },
+    {
+      "name": "laserfiche_entry_compare",
+      "description": "Diff two entries' metadata and field values"
     }
   ],
   "user_config": {

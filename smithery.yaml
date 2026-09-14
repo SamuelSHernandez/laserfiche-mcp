@@ -91,13 +91,34 @@ configSchema:
       description: "Dedicated page-size cap for search_natural. Some self-hosted SimpleSearches implementations reject $top above an internal limit."
     LF_EDOC_MAX_BYTES:
       type: integer
-      default: 26214400
+      default: 25000000
       description: "Cap on get_document_edoc downloads in bytes/text modes (default 25 MB)."
     LF_LOG_LEVEL:
       type: string
       enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
       default: INFO
       description: "Python logging verbosity."
+    LF_LOG_FORMAT:
+      type: string
+      enum: [text, json]
+      default: text
+      description: "Log line format: human-readable 'text', or 'json' (one JSON object per line, for log pipelines)."
+    LF_LEGACY_TOOL_NAMES:
+      type: boolean
+      default: true
+      description: "Also register the v1.x verb-first tool aliases (get_entry, set_fields, ...) alongside the laserfiche_* names. Set false to roughly halve the tool catalog the model pays for on every request (the v3.0 behavior, available today)."
+    LF_SEARCH_TIMEOUT_SECONDS:
+      type: number
+      default: 60
+      description: "How long search_content waits for an async search before abandoning it and releasing the search token."
+    LF_SEARCH_POLL_INTERVAL_SECONDS:
+      type: number
+      default: 1
+      description: "Delay between search_content status polls; backs off toward 2s on long searches."
+    LF_SEARCH_CONTEXT_HITS_MAX:
+      type: integer
+      default: 10
+      description: "Hard cap on matched passages returned per entry by search_content, regardless of the caller-requested hits_per_entry."
     LF_VALIDATE_NAMES:
       type: boolean
       default: true
@@ -124,11 +145,15 @@ configSchema:
       type: boolean
       default: false
       description: "When true, delete_entry refuses without an audit_reason_id. Use get_audit_reasons to enumerate valid IDs."
+    LF_CONFIRMATION_SECRET:
+      type: string
+      format: password
+      description: "Optional secret for signing destructive-operation confirmation tokens. Unset: a random per-process key (restarts invalidate pending tokens — safer single-instance default). Set to keep tokens valid across restarts and across instances sharing the secret. Treat like a password."
     LF_VALIDATE_REQUIRED_FIELDS:
       type: boolean
       default: true
       description: "Validate repository-wide required fields client-side before assign_template PUTs."
     LF_IMPORT_MAX_BYTES:
       type: integer
-      default: 26214400
+      default: 25000000
       description: "Client-side cap on import_document payload size (default 25 MB)."

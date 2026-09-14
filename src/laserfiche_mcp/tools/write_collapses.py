@@ -35,6 +35,7 @@ from pydantic import Field
 
 from .. import _app
 from ..errors import LaserficheError, classify_lf_error
+from ..observability import get_request_id_or_new
 from ._helpers import (
     ToolAbortedError,
     check_write_for_entry,
@@ -61,6 +62,7 @@ def _invalid_input(operation: str, error: str, reason: str, **extras: Any) -> di
         "kind": "invalid_input",
         "error": error,
         "reason": reason,
+        "request_id": get_request_id_or_new(),
     }
     payload.update({k: v for k, v in extras.items() if v is not None})
     return payload
@@ -105,33 +107,12 @@ async def field_update(
 ) -> dict[str, Any]:
     """Update field values on an entry. Default merges; ``mode="replace"`` overwrites.
 
-    The single field-write tool you should reach for. Wraps the two
-    underlying paths:
+    ``mode="merge"`` (default, safer) leaves unmentioned fields alone;
+    ``mode="replace"`` clears them. ``updates`` maps field name -> list of
+    values; an empty list clears that field in both modes.
 
-    * ``mode="merge"`` (default, **safer**): leaves fields not mentioned
-      in ``updates`` alone. Equivalent to ``merge_fields``. Right for
-      "set field X to Y" intents.
-    * ``mode="replace"``: clears any field not in ``updates``. Equivalent
-      to ``set_fields``. Only use when you specifically want
-      delete-everything-else semantics (e.g. wiping a stale template
-      snapshot before re-applying).
-
-    Args:
-        entry_id: Integer entry ID.
-        updates: Mapping of field name → list of values. Single-value
-            fields take a one-item list; multi-value fields take many.
-            Example: ``{"Last Name": ["Smith"], "Hire Date": ["2024-01-15"]}``.
-            Pass an empty list (``"Note": []``) to clear that specific
-            field — works in both modes.
-        mode: ``"merge"`` (default) or ``"replace"``. Any other value
-            returns ``invalid_mode``.
-
-    Returns: On merge, ``{"mode": "executed", "operation": "merge_fields",
-    "fields_updated": [...], "fields_preserved": [...], "result": ...}``.
-    On replace, the server's raw updated field listing.
-
-    On failure: same shapes as ``merge_fields`` / ``set_fields`` (kind +
-    error subkind structured response).
+    Returns the ``merge_fields``/``set_fields`` shapes respectively; same
+    error contract.
     """
     if mode == "merge":
         return await merge_fields(entry_id=entry_id, updates=updates)
@@ -462,26 +443,9 @@ async def task_wait_or_poll(
 ) -> dict[str, Any]:
     """Check or wait on an async operation. ``timeout_seconds=0`` returns immediately.
 
-    Wraps the two underlying tools:
-
-    * ``timeout_seconds=0`` → ``get_task_status``. Returns the current
-      payload without waiting. Right for "is this done yet?" polling
-      loops written by the caller.
-    * ``timeout_seconds>0`` (default 60) → ``wait_for_task``. Polls at
-      ``poll_interval_seconds`` until terminal or until the deadline.
-
-    Args:
-        operation_token: Token from the originating async tool.
-        timeout_seconds: ``0`` for single-poll; ``>0`` for blocking wait.
-            Bounded above by what your MCP client tolerates as a tool
-            call duration.
-        poll_interval_seconds: Delay between status checks when waiting.
-            Bounded below at 0.1s. Ignored when ``timeout_seconds=0``.
-
-    Returns: Same payload as ``get_task_status`` / ``wait_for_task``.
-    The wait variant adds ``timed_out: bool`` for deadline misses.
-
-    On failure: same shapes as the underlying tools.
+    ``0`` = single poll (``get_task_status`` semantics); ``>0`` (default 60)
+    = block until terminal or deadline (``wait_for_task`` semantics, adds
+    ``timed_out``). Same payloads and errors as the underlying tools.
     """
     if timeout_seconds <= 0:
         return await get_task_status(operation_token=operation_token)

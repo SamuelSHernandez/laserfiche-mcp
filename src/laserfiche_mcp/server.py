@@ -23,6 +23,9 @@ The job of *this* file is:
 
 from __future__ import annotations
 
+import logging
+import os
+
 from . import permissions
 from ._app import (
     clamp_max_results,
@@ -45,8 +48,11 @@ from .observability import tool_logger
 # Import every tool module so each ``@register`` fires and the registry
 # is populated before _register_read_tools() runs below.
 from .tools import (  # noqa: F401
+    compare,
+    content_search,
     definitions,
     documents,
+    duplicates,
     natural_search,
     preview_execute_splits,
     reads,
@@ -62,6 +68,8 @@ from .tools import (  # noqa: F401
 from .tools._registry import ToolSpec, all_tools, v2_rename_map, writes
 from .tools._registry import reads as _read_specs
 
+logger = logging.getLogger("laserfiche_mcp")
+
 # Back-compat re-exports for tests and external callers that import these
 # helpers directly. New code should import from ``_app`` / ``tools._support``.
 _get_settings = get_settings
@@ -71,11 +79,31 @@ _clamp_max_results = clamp_max_results
 _clamp_search_page_size = clamp_search_page_size
 
 
-def _register_one(spec: ToolSpec) -> None:
-    """Register a single tool under both its legacy and v2 names.
+def _legacy_names_enabled() -> bool:
+    """Whether the v1.x verb-first aliases are registered alongside v2 names.
 
-    Both registrations point at the same function — the v2 name is the
-    recommended path, the legacy name is a deprecation shim through v2.x.
+    Read straight from the environment (not Settings) because read tools
+    register at module import, before configuration is validated.
+
+    Defaults to **false** as of v2.3.0 — the catalog was registering both
+    naming schemes for every tool (~104 entries), roughly doubling the
+    per-session context cost for no benefit to new users. Existing users
+    relying on the legacy verb-first names (``assign_template`` etc.)
+    must now opt in with ``LF_LEGACY_TOOL_NAMES=true``; see CHANGELOG.md.
+    """
+    return os.environ.get("LF_LEGACY_TOOL_NAMES", "false").strip().lower() not in (
+        "false",
+        "0",
+        "no",
+    )
+
+
+def _register_one(spec: ToolSpec) -> None:
+    """Register a single tool under its v2 name, plus the legacy alias.
+
+    The v2 name is the recommended path; the legacy name is a deprecation
+    shim through v2.x, registered only when ``LF_LEGACY_TOOL_NAMES=true``
+    (opt-in as of v2.3.0 — see ``_legacy_names_enabled``).
 
     The function is wrapped with ``tool_logger`` so every call (regardless
     of which name the agent used) emits one structured log event with a
@@ -84,7 +112,8 @@ def _register_one(spec: ToolSpec) -> None:
     same wrapped function under both names gives one log line per call.
     """
     wrapped = tool_logger(spec.fn)
-    mcp.tool(name=spec.legacy_name)(wrapped)
+    if _legacy_names_enabled():
+        mcp.tool(name=spec.legacy_name)(wrapped)
     mcp.tool(name=spec.v2_name)(wrapped)
 
 
@@ -106,13 +135,33 @@ def _register_write_tools() -> None:
     Also honors ``LF_WRITE_TOOLS_ALLOWED`` — if set, only tools named
     in that comma-separated env var are registered. Lets operators
     ship a metadata-only or create-only deployment.
+
+    A tool matches the allowlist if EITHER its legacy name (e.g.
+    ``assign_template``) or its v2 name (e.g.
+    ``laserfiche_template_assign``) appears in it — the README documents
+    both naming schemes, and a deployment configured with the v2 names
+    must not silently register zero write tools. Any configured name
+    that matches neither naming scheme for any write tool is logged as a
+    warning (likely a typo) rather than silently allowing nothing.
     """
     settings = get_settings()
     if settings.read_only:
         return
     allowed = permissions.parse_tool_allowlist(settings.write_tools_allowed)
-    for spec in writes():
-        if allowed is not None and spec.legacy_name not in allowed:
+    write_specs = writes()
+    if allowed is not None:
+        known_names = {n for s in write_specs for n in (s.legacy_name, s.v2_name)}
+        unknown = sorted(allowed - known_names)
+        if unknown:
+            logger.warning(
+                "LF_WRITE_TOOLS_ALLOWED contains name(s) that match no "
+                "write tool (checked against both legacy and v2 names): "
+                "%s. These will register nothing. Known write-tool names: %s",
+                ", ".join(unknown),
+                ", ".join(sorted(known_names)),
+            )
+    for spec in write_specs:
+        if allowed is not None and not ({spec.legacy_name, spec.v2_name} & allowed):
             continue
         _register_one(spec)
 

@@ -151,3 +151,47 @@ def test_grammar_reference_has_required_examples() -> None:
     assert "LF:LookIn=" in LF_GRAMMAR_REFERENCE
     assert "(AND)" in LF_GRAMMAR_REFERENCE
     assert "(OR)" in LF_GRAMMAR_REFERENCE
+
+
+def test_grammar_reference_teaches_full_text_content_search() -> None:
+    """Without LF:Basic the model cannot express "documents that mention X" at all.
+
+    Name= only matches filenames, so a repository whose value is in its OCR'd
+    text is unreachable — the gap a user reported against v2.1.0.
+    """
+    assert "LF:Basic" in LF_GRAMMAR_REFERENCE
+    assert "~=" in LF_GRAMMAR_REFERENCE
+    # The option letters are the part that is impossible to guess.
+    for letter, meaning in [
+        ("D =", "document text"),
+        ("F =", "field values"),
+        ("A =", "annotation text"),
+        ("N =", "entry name"),
+    ]:
+        assert letter in LF_GRAMMAR_REFERENCE
+        assert meaning in LF_GRAMMAR_REFERENCE
+    assert "OCR" in LF_GRAMMAR_REFERENCE
+
+
+# --- repair must not corrupt clauses carrying trailing arguments -------------
+
+
+def test_escape_quotes_leaves_option_argument_intact() -> None:
+    """A comma ends a value span, same as } & |.
+
+    ``{LF:Basic~="x",option="D"}`` is valid syntax. If the comma reads as
+    content, the closing quote gets escaped and the repair pass turns a
+    working query into a broken one.
+    """
+    query = '{LF:Basic~="unpaid balance",option="DFANLT"}'
+    assert repair_escape_quotes(query) is None
+
+
+def test_escape_quotes_still_escapes_internal_quote_before_a_comma() -> None:
+    query = '{LF:Basic~="say "hi" now",option="D"}'
+    assert repair_escape_quotes(query) == '{LF:Basic~="say \\"hi\\" now",option="D"}'
+
+
+def test_wildcard_wrap_leaves_basic_clauses_alone() -> None:
+    """Only Name= clauses get wildcard-wrapped; LF:Basic has its own L/T options."""
+    assert repair_wildcard_name('{LF:Basic~="quarterly report",option="D"}') is None

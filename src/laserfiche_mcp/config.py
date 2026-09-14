@@ -9,6 +9,7 @@ Self-hosted is the v1 focus; cloud config is reserved for v2.
 
 from __future__ import annotations
 
+import os
 from enum import Enum
 
 from pydantic import Field, HttpUrl, SecretStr, model_validator
@@ -134,6 +135,16 @@ class Settings(BaseSettings):
         "scope-limited deployments — e.g. 'merge_fields,merge_tags,"
         "assign_template' for a metadata-only setup.",
     )
+    confirmation_secret: SecretStr | None = Field(
+        default=None,
+        description="Optional secret the destructive-operation confirmation "
+        "tokens are signed with. When set, the HMAC key is derived from it, "
+        "so tokens stay valid across server restarts and across instances "
+        "sharing the secret (the stateless/multi-instance deployment shape). "
+        "When unset (default), a random per-process key is used and a "
+        "restart invalidates pending tokens — the safer single-instance "
+        "default. Treat the secret like a password.",
+    )
     require_audit_reason: bool = Field(
         default=False,
         description="When true, delete_entry refuses to execute without an "
@@ -185,6 +196,28 @@ class Settings(BaseSettings):
         "Some self-hosted servers reject SimpleSearches $top values above "
         "their internal limit; this defaults lower than max_results_ceiling.",
     )
+    search_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="How long search_content waits for an async search to "
+        "finish before giving up and releasing the token. Full-text searches "
+        "over large repositories are the slow case this exists for.",
+    )
+    search_poll_interval_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        description="Delay between status polls while an async search runs. "
+        "Lower values return sooner on fast searches at the cost of more "
+        "requests; the interval backs off toward 2s on long searches.",
+    )
+    search_context_hits_max: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Hard cap on context-hit passages returned per matching "
+        "entry, regardless of the caller-requested value. Keeps a document "
+        "with hundreds of matches from swamping the response.",
+    )
     edoc_max_bytes: int = Field(
         default=25_000_000,
         ge=1,
@@ -199,6 +232,18 @@ class Settings(BaseSettings):
         "The API itself enforces a 100 MB cap; this client-side cap defaults "
         "lower to keep upload latency predictable. Override per-call by "
         "raising this env var.",
+    )
+    import_source_dirs: str | None = Field(
+        default=None,
+        description="Comma-separated local filesystem directories; when set, "
+        "import_document refuses to read a source file_path that doesn't "
+        "resolve (symlinks included) to one of these directories or a "
+        "descendant of one. Mirrors LF_WRITE_PATHS_ALLOW but fences the "
+        "LOCAL source side of an import instead of the repository "
+        "destination. When unset (default), import_document will read any "
+        "local path the MCP process has filesystem access to — set this in "
+        "shared or multi-tenant deployments to restrict which directories "
+        "can be sourced from.",
     )
     log_level: str = Field(
         default="INFO",
@@ -402,3 +447,32 @@ class Settings(BaseSettings):
             return []
         raw = self.http_oauth_required_scopes.replace(",", " ")
         return [s.strip() for s in raw.split() if s.strip()]
+
+
+def known_env_keys() -> set[str]:
+    """Every ``LF_*`` environment variable name ``Settings`` recognizes.
+
+    Derived from the model's field names (``env_prefix="LF_"``), not
+    hand-maintained, so it can't drift when a field is added or renamed.
+    """
+    return {f"LF_{name.upper()}" for name in Settings.model_fields}
+
+
+def unknown_env_keys(environ: dict[str, str] | None = None) -> list[str]:
+    """Return ``LF_*`` env var names set in the process that match no
+    ``Settings`` field.
+
+    ``Settings`` uses ``extra="ignore"``, so a typo like
+    ``LF_WRITE_PATHS_ALLOW`` -> ``LF_WRITE_PATH_ALLOW`` is silently
+    dropped instead of erroring — the fence it was meant to configure
+    just never applies, with no diagnostic. This doesn't hard-fail
+    (some ``LF_*`` vars in the environment may genuinely belong to
+    something else), but callers should log whatever comes back so a
+    typo doesn't go unnoticed. Matching is case-insensitive, matching
+    pydantic-settings' default env-var matching. Pass ``environ`` (e.g.
+    a test's own dict) to check something other than the real
+    ``os.environ``.
+    """
+    env = environ if environ is not None else os.environ
+    known = known_env_keys()
+    return sorted(key for key in env if key.upper().startswith("LF_") and key.upper() not in known)

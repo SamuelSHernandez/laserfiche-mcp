@@ -56,41 +56,15 @@ async def assign_template(
 ) -> dict[str, Any]:
     """Assign a template to an entry, optionally with initial field values.
 
-    Use to attach a template (e.g. "Personnel Document", "Service Record")
-    so the entry exposes that template's fields. Existing independent
-    fields on the entry are unchanged. Fields common to the previously
-    and newly assigned templates retain their values.
+    Existing independent fields are unchanged; fields shared with the
+    previous template keep their values. Templates often declare required
+    fields — use ``get_template_fields`` first to build ``fields``.
 
-    Args:
-        entry_id: Integer entry ID to template.
-        template_name: Exact name of the template. Case-sensitive on most
-            builds. Use ``list_template_definitions`` to discover what's
-            available.
-        fields: Optional initial field values to set in the same call.
-            Mapping of field name → list of values (one item for
-            single-value fields, many for multi-value). Often required
-            because templates declare required fields — the validator
-            below will tell you which.
-
-    Returns: The server's updated entry on success, showing the new
-    ``templateName`` and ``templateFieldNames``.
-
-    Pre-server errors (returned before the API call):
-        - ``path_not_allowed`` — entry outside the allow list.
-        - ``missing_required_fields`` — repository-wide required fields
-          (``isRequired=true``, regardless of template membership) aren't
-          set on the entry and weren't supplied in ``fields``. The
-          response includes ``missing`` (names) and ``field_details``
-          (with ``field_type``, ``list_values``, ``default_value``) so
-          you can ask the user for valid values, or pick a default,
-          then retry. Disable this check with
-          ``LF_VALIDATE_REQUIRED_FIELDS=false``.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "entry_id": <int>, "template_name": <str>, ...}``. Common slugs:
-    ``required_field_missing`` (server-side equivalent if the validator
-    is disabled), ``not_found`` (entry or template doesn't exist),
-    ``auth_failed``.
+    Returns the updated entry. Pre-server errors: ``path_not_allowed``;
+    ``missing_required_fields`` lists ``missing`` and ``field_details`` so
+    you can ask the user for values and retry (disable the check with
+    LF_VALIDATE_REQUIRED_FIELDS=false). Server slugs:
+    ``required_field_missing``, ``not_found``, ``auth_failed``.
     """
     require_writes_enabled()
     try:
@@ -116,6 +90,7 @@ async def assign_template(
         "assign_template",
         entry_id,
         fields,
+        template_name=template_name,
     )
     if validation_error is not None:
         return validation_error

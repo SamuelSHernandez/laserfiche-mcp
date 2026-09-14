@@ -15,7 +15,7 @@ from pydantic import Field
 from .. import _app, confirmation
 from .._app import get_settings
 from ..config import Settings
-from ..errors import LaserficheError, classify_lf_error, invalid_token_response
+from ..errors import LaserficheError, classify_lf_error, invalid_token_response, local_error
 from ._helpers import (
     ToolAbortedError,
     check_write_permission,
@@ -32,12 +32,16 @@ async def _probe_immediate_child_count(
     entry_id: int,
     entry_kind: str,
     cap: int,
-) -> tuple[int | None, bool]:
+) -> tuple[int | None, bool, bool]:
     """Probe a folder's child count up to ``cap + 1``.
 
-    Returns ``(child_count, exceeds_cap)``. On non-folders, returns
-    ``(None, False)``. On HTTP error, returns ``(None, False)`` — let the
-    actual delete surface the failure.
+    Returns ``(child_count, exceeds_cap, probe_failed)``. On non-folders,
+    returns ``(None, False, False)`` — the cap doesn't apply, and this
+    isn't a failure. On HTTP error, returns ``(None, False, True)``: the
+    safety cap exists to stop a huge/unbounded cascade delete, and an
+    error means we genuinely don't know the child count — treating that
+    as "0 children, safe to proceed" would defeat the cap's purpose, so
+    the caller must fail closed rather than let the delete through.
 
     LFRepositoryAPI v1's OData ``$count`` is page-bound when combined with
     ``$top`` (returns page size, not total), so we count by fetching
@@ -46,15 +50,15 @@ async def _probe_immediate_child_count(
     the exact count.
     """
     if entry_kind != "Folder":
-        return None, False
+        return None, False, False
     try:
         listing = await _app.get_client().list_folder(entry_id, max_results=cap + 1)
     except LaserficheError:
-        return None, False
+        return None, False, True
     items = listing.get("value") or []
     if len(items) > cap:
-        return None, True
-    return len(items), False
+        return None, True, False
+    return len(items), False, False
 
 
 def _delete_entry_preview(
@@ -64,6 +68,7 @@ def _delete_entry_preview(
     current_name: str,
     child_count: int | None,
     exceeds_cap: bool,
+    probe_failed: bool,
     settings: Settings,
 ) -> dict[str, Any]:
     """Build the ``mode: preview`` response for ``delete_entry``."""
@@ -75,13 +80,21 @@ def _delete_entry_preview(
         )
     else:
         descent = "."
-    cap_warning = (
-        f" Child count exceeds the configured cap "
-        f"({settings.delete_folder_max_descendants}); execute "
-        "will require force_large_delete=true."
-        if exceeds_cap
-        else ""
-    )
+    if probe_failed:
+        cap_warning = (
+            " The immediate-child-count probe failed, so the batch cap "
+            "could not be checked; execute will be refused "
+            "(child_count_probe_failed) until the probe succeeds — retry "
+            "this preview once the underlying error clears."
+        )
+    elif exceeds_cap:
+        cap_warning = (
+            f" Child count exceeds the configured cap "
+            f"({settings.delete_folder_max_descendants}); execute "
+            "will require force_large_delete=true."
+        )
+    else:
+        cap_warning = ""
 
     return {
         "mode": "preview",
@@ -92,6 +105,7 @@ def _delete_entry_preview(
         "full_path": entry.get("fullPath") or entry.get("FullPath"),
         "immediate_child_count": child_count,
         "exceeds_batch_cap": exceeds_cap,
+        "child_count_probe_failed": probe_failed,
         "batch_cap": settings.delete_folder_max_descendants,
         "audit_reason_required": settings.require_audit_reason,
         "warning": ("This will queue an irreversible delete of this entry" + descent + cap_warning),
@@ -116,40 +130,60 @@ def _delete_entry_check_caps(
     entry_id: int,
     child_count: int | None,
     exceeds_cap: bool,
+    probe_failed: bool,
     force_large_delete: bool,
     audit_reason_id: int | None,
     settings: Settings,
 ) -> dict[str, Any] | None:
     """Returns an error response if execute-leg policy checks fail, else None."""
+    if probe_failed:
+        # The immediate-child-count probe (which the batch cap depends on)
+        # errored out. Fail CLOSED: refuse the delete outright rather than
+        # treating an unknown count as "0 children, safe" — that would
+        # silently defeat LF_DELETE_FOLDER_MAX_DESCENDANTS on exactly the
+        # transient-error case it exists to guard against, and unlike the
+        # exceeds_batch_cap path, force_large_delete cannot bypass this:
+        # the LLM has no real count to be confirming against.
+        return local_error(
+            "delete_entry",
+            "child_count_probe_failed",
+            entry_id=entry_id,
+            reason=(
+                "Could not determine this folder's immediate child count "
+                "(the probe request failed), so the batch-delete safety "
+                "cap (LF_DELETE_FOLDER_MAX_DESCENDANTS) cannot be "
+                "verified. Refusing to proceed rather than assuming the "
+                "folder is small. Retry once the underlying error clears."
+            ),
+        )
+
     if exceeds_cap and not force_large_delete:
-        return {
-            "mode": "error",
-            "operation": "delete_entry",
-            "entry_id": entry_id,
-            "error": "exceeds_batch_cap",
-            "immediate_child_count": child_count,
-            "batch_cap": settings.delete_folder_max_descendants,
-            "reason": (
+        return local_error(
+            "delete_entry",
+            "exceeds_batch_cap",
+            entry_id=entry_id,
+            immediate_child_count=child_count,
+            batch_cap=settings.delete_folder_max_descendants,
+            reason=(
                 f"Folder has {child_count} immediate children, which "
                 f"exceeds the configured cap of "
                 f"{settings.delete_folder_max_descendants} "
                 "(LF_DELETE_FOLDER_MAX_DESCENDANTS). Pass "
                 "force_large_delete=true on this call to proceed."
             ),
-        }
+        )
 
     if settings.require_audit_reason and audit_reason_id is None:
-        return {
-            "mode": "error",
-            "operation": "delete_entry",
-            "entry_id": entry_id,
-            "error": "audit_reason_required",
-            "reason": (
+        return local_error(
+            "delete_entry",
+            "audit_reason_required",
+            entry_id=entry_id,
+            reason=(
                 "LF_REQUIRE_AUDIT_REASON=true; pass audit_reason_id (and "
                 "optionally a comment). Use get_audit_reasons to enumerate "
                 "valid IDs for the authenticated user."
             ),
-        }
+        )
     return None
 
 
@@ -205,75 +239,24 @@ async def delete_entry(
 ) -> dict[str, Any]:
     """Delete an entry. **Two-step: preview, then execute with token.**
 
-    Irreversible without a Laserfiche backup or recycle bin restore.
-    Folders cascade — the entire subtree (every document, every
-    subfolder) goes with them. The delete itself is async on the server,
-    so the execute call returns an ``operation_token`` you can pass to
-    ``wait_for_task`` for confirmation.
+    Irreversible; folders cascade to their entire subtree.
 
-    **Step 1 — preview**
-        Call with ``confirmation_token=None``. Response:
+    Step 1: call without ``confirmation_token`` -> ``mode="preview"`` with
+    ``entry_name``, ``full_path``, ``immediate_child_count``,
+    ``exceeds_batch_cap``, a 5-minute ``confirmation_token``, and warnings.
+    **Always surface the preview to the user before executing.**
 
-        ```json
-        {
-          "mode": "preview",
-          "operation": "delete_entry",
-          "entry_id": 84490,
-          "entry_name": "probe-2",
-          "entry_type": "Folder",
-          "full_path": "\\Sandbox\\probe-2",
-          "immediate_child_count": 2,
-          "exceeds_batch_cap": false,
-          "batch_cap": 10,
-          "audit_reason_required": false,
-          "warning": "...recursively delete its descendants (2 immediate children observed).",
-          "confirmation_token": "<opaque>",
-          "ttl_seconds": 300,
-          "next_step": "..."
-        }
-        ```
+    Step 2: re-call with the token. If the preview showed
+    ``exceeds_batch_cap=true``, also pass ``force_large_delete=true``; if
+    ``audit_reason_required=true``, supply ``audit_reason_id`` (from
+    ``get_audit_reasons``). Execute returns ``{"mode": "executed",
+    "operation_token"}`` — confirm completion via ``wait_for_task``.
 
-        Always surface to the user before passing the token back. The
-        ``immediate_child_count`` is an exact count when ≤ batch_cap; if
-        ``exceeds_batch_cap=true``, the exact count is unknown but
-        ``immediate_child_count`` will be null and the folder has at
-        least ``batch_cap + 1`` children.
-
-    **Step 2 — execute**
-        Re-call with the ``confirmation_token``. If the preview showed
-        ``exceeds_batch_cap=true``, also pass ``force_large_delete=true``
-        on the execute leg. If ``audit_reason_required=true``, supply
-        ``audit_reason_id`` from ``get_audit_reasons``.
-
-    Args:
-        entry_id: Integer entry ID to delete.
-        confirmation_token: From the preview response. HMAC-signed,
-            5-minute TTL.
-        audit_reason_id: Required when ``LF_REQUIRE_AUDIT_REASON=true``.
-            Use ``get_audit_reasons`` to enumerate valid IDs.
-        comment: Optional free-text comment recorded alongside the
-            audit reason.
-        force_large_delete: Required when the folder's child count
-            exceeds ``LF_DELETE_FOLDER_MAX_DESCENDANTS`` (default 50);
-            independent of the confirmation token, so the LLM has to
-            explicitly opt in to a large delete.
-
-    Returns on execute: ``{"mode": "executed", "operation_token":
-    "<uuid>", ...}``. Pass ``operation_token`` to ``wait_for_task`` to
-    confirm completion.
-
-    Pre-server errors (returned before the API call):
-        - ``path_not_allowed`` — entry outside the allow list.
-        - ``invalid_confirmation_token`` — token expired or tampered.
-        - ``exceeds_batch_cap`` — folder exceeds the cap and
-          ``force_large_delete`` wasn't passed. Response includes
-          ``immediate_child_count`` (when known) and ``batch_cap``.
-        - ``audit_reason_required`` — env demands an audit reason but
-          ``audit_reason_id`` wasn't supplied.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "entry_id": <int>, ...}``. Common slugs: ``not_found``,
-    ``auth_failed``.
+    Pre-server errors: ``path_not_allowed``, ``invalid_confirmation_token``
+    (expired/tampered — redo step 1), ``exceeds_batch_cap``,
+    ``child_count_probe_failed`` (the batch-cap probe errored — refused,
+    fail-closed, rather than assuming the folder is small; retry),
+    ``audit_reason_required``. Server slugs: ``not_found``, ``auth_failed``.
     """
     require_writes_enabled()
     try:
@@ -287,7 +270,7 @@ async def delete_entry(
     current_name = entry_name(entry)
     entry_kind = entry_type(entry)
     settings = get_settings()
-    child_count, exceeds_cap = await _probe_immediate_child_count(
+    child_count, exceeds_cap, probe_failed = await _probe_immediate_child_count(
         entry_id,
         entry_kind,
         settings.delete_folder_max_descendants,
@@ -301,6 +284,7 @@ async def delete_entry(
             current_name,
             child_count,
             exceeds_cap,
+            probe_failed,
             settings,
         )
 
@@ -314,7 +298,13 @@ async def delete_entry(
         return invalid_token_response("delete_entry", entry_id, reason)
 
     cap_err = _delete_entry_check_caps(
-        entry_id, child_count, exceeds_cap, force_large_delete, audit_reason_id, settings
+        entry_id,
+        child_count,
+        exceeds_cap,
+        probe_failed,
+        force_large_delete,
+        audit_reason_id,
+        settings,
     )
     if cap_err is not None:
         return cap_err
