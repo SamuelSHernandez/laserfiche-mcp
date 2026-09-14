@@ -245,9 +245,7 @@ async def validate_required_fields(
         if template_defs is not None:
             tpl = template_defs.get(template_name)
             if tpl is not None:
-                template_field_names = (
-                    tpl.get("templateFieldNames") or tpl.get("fieldNames") or []
-                )
+                template_field_names = tpl.get("templateFieldNames") or tpl.get("fieldNames") or []
 
     required_names: list[dict[str, Any]] = [
         fd
