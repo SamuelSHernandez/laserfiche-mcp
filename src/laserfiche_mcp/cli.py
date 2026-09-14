@@ -24,7 +24,7 @@ from . import __version__
 from ._app import get_settings
 from .auth import build_auth_strategy
 from .client import LaserficheClient
-from .config import Settings
+from .config import Settings, unknown_env_keys
 from .errors import LaserficheError
 from .observability import configure_logging
 
@@ -547,6 +547,7 @@ async def _run_diagnose(settings: Settings) -> int:
 
     _print_write_mode_report(settings)
     _print_observability_report(settings)
+    _print_unknown_env_keys_report()
 
     print()
     print(
@@ -571,6 +572,25 @@ def _print_observability_report(settings: Settings) -> None:
     line("Credential redaction", "enabled (observability.redact)")
 
 
+def _print_unknown_env_keys_report() -> None:
+    """Print the ``Config sanity:`` section — flags LF_* typos.
+
+    ``Settings`` silently ignores any env var that starts with ``LF_``
+    but matches no known field, so a typo like ``LF_WRITE_PATHS_ALLOW``
+    misspelled produces unfenced writes with no error anywhere else in
+    the startup path. This is the one place that names it explicitly.
+    """
+    print()
+    print("Config sanity:")
+    unknown = unknown_env_keys()
+    if not unknown:
+        print("  LF_* env var names             OK (all recognized)")
+    else:
+        print(f"  LF_* env var names             {len(unknown)} unrecognized — check for typos:")
+        for key in unknown:
+            print(f"    - {key}")
+
+
 # Where `laserfiche-mcp setup` writes its config, and where every later
 # invocation looks as a last resort. Home-anchored so a records manager can
 # run the CLI from any directory once setup has been completed.
@@ -591,6 +611,28 @@ def _load_user_env_if_unconfigured() -> None:
         from dotenv import load_dotenv  # noqa: PLC0415
 
         load_dotenv(USER_ENV_PATH, override=False)
+
+
+def _warn_on_unknown_env_keys() -> None:
+    """Log a warning for any ``LF_*`` env var that matches no ``Settings`` field.
+
+    ``Settings`` uses ``extra="ignore"``, so a typo (``LF_WRITE_PATHS_ALLOW``
+    -> ``LF_WRITE_PATH_ALLOW``) is silently dropped instead of erroring —
+    the fence it configured just never applies. Deliberately non-fatal
+    (some ``LF_*`` vars may genuinely belong to something else), but a
+    warning at startup beats an operator discovering the typo when a
+    write lands somewhere the fence should have blocked. Also surfaced by
+    ``laserfiche-mcp diagnose`` (see ``_run_diagnose``).
+    """
+    unknown = unknown_env_keys()
+    if unknown:
+        logger.warning(
+            "Environment variable(s) start with LF_ but match no known "
+            "setting, so they have NO EFFECT (Settings.extra='ignore'): "
+            "%s. Check for typos — run `laserfiche-mcp diagnose` or see "
+            ".env.example for the full list of recognized names.",
+            ", ".join(unknown),
+        )
 
 
 def _url_problem(url: str) -> str | None:
@@ -816,6 +858,8 @@ def main(register_writes: Callable[[], None]) -> None:
 
     log_level = _resolve_log_level(settings, args)
     configure_logging(level=log_level, format_=settings.log_format)
+
+    _warn_on_unknown_env_keys()
 
     command = getattr(args, "command", None)
 

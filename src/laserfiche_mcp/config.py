@@ -9,6 +9,7 @@ Self-hosted is the v1 focus; cloud config is reserved for v2.
 
 from __future__ import annotations
 
+import os
 from enum import Enum
 
 from pydantic import Field, HttpUrl, SecretStr, model_validator
@@ -446,3 +447,32 @@ class Settings(BaseSettings):
             return []
         raw = self.http_oauth_required_scopes.replace(",", " ")
         return [s.strip() for s in raw.split() if s.strip()]
+
+
+def known_env_keys() -> set[str]:
+    """Every ``LF_*`` environment variable name ``Settings`` recognizes.
+
+    Derived from the model's field names (``env_prefix="LF_"``), not
+    hand-maintained, so it can't drift when a field is added or renamed.
+    """
+    return {f"LF_{name.upper()}" for name in Settings.model_fields}
+
+
+def unknown_env_keys(environ: dict[str, str] | None = None) -> list[str]:
+    """Return ``LF_*`` env var names set in the process that match no
+    ``Settings`` field.
+
+    ``Settings`` uses ``extra="ignore"``, so a typo like
+    ``LF_WRITE_PATHS_ALLOW`` -> ``LF_WRITE_PATH_ALLOW`` is silently
+    dropped instead of erroring — the fence it was meant to configure
+    just never applies, with no diagnostic. This doesn't hard-fail
+    (some ``LF_*`` vars in the environment may genuinely belong to
+    something else), but callers should log whatever comes back so a
+    typo doesn't go unnoticed. Matching is case-insensitive, matching
+    pydantic-settings' default env-var matching. Pass ``environ`` (e.g.
+    a test's own dict) to check something other than the real
+    ``os.environ``.
+    """
+    env = environ if environ is not None else os.environ
+    known = known_env_keys()
+    return sorted(key for key in env if key.upper().startswith("LF_") and key.upper() not in known)

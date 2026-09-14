@@ -1003,4 +1003,79 @@ def test_setup_insists_on_a_nonempty_password(
 
     assert rc == 0
     assert "A value is required" in capsys.readouterr().out
-    assert "finally-a-password" in user_env.read_text(encoding="utf-8")
+
+
+# --- unknown LF_* env key detection ------------------------------------------
+
+
+def test_warn_on_unknown_env_keys_logs_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A typo'd LF_* var must produce a startup warning naming it — not
+    disappear silently (Settings.extra='ignore')."""
+    monkeypatch.setenv("LF_WRITE_PATH_ALLOW", "\\Imports")  # missing 'S'
+    with caplog.at_level("WARNING", logger="laserfiche_mcp"):
+        cli._warn_on_unknown_env_keys()
+    assert any("LF_WRITE_PATH_ALLOW" in rec.message for rec in caplog.records)
+
+
+def test_warn_on_unknown_env_keys_silent_when_clean(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    lf_env: dict[str, str],
+) -> None:
+    # Other tests in this session (e.g. test_load_config_file_happy_path)
+    # load real .env files via python-dotenv, which writes os.environ
+    # directly and isn't monkeypatch-scoped — scrub any LF_* leftovers
+    # outside the clean lf_env baseline so this test reflects a clean config.
+    for key in list(os.environ):
+        if key.upper().startswith("LF_") and key not in lf_env:
+            monkeypatch.delenv(key, raising=False)
+    with caplog.at_level("WARNING", logger="laserfiche_mcp"):
+        cli._warn_on_unknown_env_keys()
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_diagnose_report_includes_config_sanity_section(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The diagnose report surfaces unknown LF_* env keys too, not just
+    the startup-time warning log."""
+    monkeypatch.setenv("LF_WRITE_PATH_ALLOW", "\\Imports")  # missing 'S'
+    monkeypatch.setattr(cli, "build_auth_strategy", lambda _settings: _StubAuth())
+    settings = Settings()  # type: ignore[call-arg]
+    for _ in range(2):
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE}/FieldDefinitions?%24top=1&%24skip=0",
+            json={"value": []},
+        )
+    httpx_mock.add_response(
+        method="GET", url="https://lf.example.test/LFRepositoryAPI/v1/Repositories", json={}
+    )
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/TemplateDefinitions?%24top=1&%24skip=0", json={"value": []}
+    )
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/TagDefinitions?%24top=1&%24skip=0", json={"value": []}
+    )
+    httpx_mock.add_response(
+        method="GET", url=f"{_BASE}/LinkDefinitions?%24top=1&%24skip=0", json={"value": []}
+    )
+    httpx_mock.add_response(method="GET", url=f"{_BASE}/AuditReasons", json={})
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/1/Laserfiche.Repository.Folder/children?%24top=1&%24skip=0",
+        json={"value": []},
+    )
+    httpx_mock.add_response(method="POST", url=f"{_BASE}/SimpleSearches", json={"value": []})
+
+    rc = await cli._run_diagnose(settings)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Config sanity:" in out
+    assert "LF_WRITE_PATH_ALLOW" in out

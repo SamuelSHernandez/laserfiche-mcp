@@ -570,6 +570,7 @@ Common misconfigurations:
 | diagnose says UNREACHABLE | Wrong `LF_REPO_API_URL`, VPN down, self-signed cert | Fix the URL; for internal certs set `LF_VERIFY_SSL=false` (dev only) |
 | diagnose suggests the other version | `LF_API_VERSION` mismatch | Set the version it names |
 | HTTP 401, or LF error 9528 ("LFDS unreachable") | Bad credentials — 9528's wording is misleading | Re-run `laserfiche-mcp setup` or fix `LF_USERNAME`/`LF_PASSWORD` |
+| A fence/setting seems to have no effect | A typo'd `LF_*` variable name — `Settings` silently ignores unrecognized env vars | Check `laserfiche-mcp diagnose`'s `Config sanity:` section (or the startup log), which names any `LF_*` var that matches no known setting |
 
 ## Errors
 
