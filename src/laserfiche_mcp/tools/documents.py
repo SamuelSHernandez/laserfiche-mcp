@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import base64
 import io
+import shutil
+import tempfile
+from pathlib import Path as _Path
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from .. import _app
 from .._app import get_settings
-from ..errors import LaserficheError, classify_lf_error
+from ..errors import LaserficheError, classify_lf_error, kind_for_subkind
+from ..observability import get_request_id_or_new
+from ..ops.pages import parse_page_spec
 from ._registry import register
+
+__all__ = ["get_document_edoc", "get_document_text", "parse_page_spec"]
 
 
 @register(v2_name="laserfiche_document_get_text")
@@ -26,33 +33,16 @@ async def get_document_text(
         ),
     ] = 50_000,
 ) -> dict[str, Any]:
-    """Download a document's server-extracted text (v2-only).
+    """Download a document's server-extracted text (v2 servers only).
 
-    Use for "summarize this document", "what does this say", or any other
-    task that needs the readable contents of a document rather than the
-    raw binary. The text comes from Laserfiche's own extraction pipeline
-    (OCR for image documents, upstream extraction for office files), so
-    you get clean text without having to parse a PDF yourself.
+    Use for reading a document's contents: the text comes from Laserfiche's
+    own extraction pipeline (OCR for scans, upstream extraction for office
+    files). v1 servers have no endpoint for this — there, use
+    ``get_document_edoc(mode="text")`` instead.
 
-    **v1 servers do not expose this endpoint.** If your deployment is on
-    v1 (the default), this tool returns a structured error at the client
-    layer. Use ``get_document_edoc(entry_id, mode="text")`` instead — it
-    fetches the raw edoc and extracts text client-side (pypdf for PDFs,
-    direct decode for ``text/*`` MIME types).
-
-    Args:
-        entry_id: Integer entry ID of an electronic document (not a folder).
-        max_chars: Truncate the returned text after this many characters
-            (default 50,000). The response's ``truncated`` field signals
-            whether truncation occurred.
-
-    Returns: ``{"entry_id": <int>, "text": <str>, "char_count": <int>,
-    "truncated": <bool>}`` on success.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "entry_id": <int>, ...}``. Common slugs: ``not_found`` (entry is a
-    folder, or has no extracted text), ``method_not_allowed`` /
-    ``server_error`` (v1 server — fall back to ``get_document_edoc``).
+    Returns ``{"entry_id", "text", "char_count", "truncated"}``. On failure
+    returns ``{"mode": "error", "error": <slug>}`` (``not_found`` = folder or
+    no extracted text; ``method_not_allowed``/``server_error`` = v1 server).
     """
     try:
         content = await _app.get_client().export_entry(entry_id, part="Text")
@@ -71,7 +61,13 @@ async def get_document_text(
     }
 
 
-def _extract_pdf_text(content: bytes, char_limit: int) -> dict[str, Any]:
+def _extract_pdf_text(
+    content: bytes,
+    char_limit: int,
+    *,
+    page_spec: list[int] | None = None,
+    char_offset: int = 0,
+) -> dict[str, Any]:
     """Run pypdf over a PDF byte string.
 
     Returns a result dict on success or an error dict on extraction failure
@@ -109,44 +105,108 @@ def _extract_pdf_text(content: bytes, char_limit: int) -> dict[str, Any]:
         }
 
     pages_total = len(reader.pages)
+
+    if page_spec is None:
+        selected = list(range(pages_total))
+        out_of_range: list[int] = []
+    else:
+        selected = [i for i in page_spec if i < pages_total]
+        out_of_range = [i + 1 for i in page_spec if i >= pages_total]
+        if not selected:
+            return {
+                "error": "pages_out_of_range",
+                "message": (
+                    f"None of the requested pages exist — this document has "
+                    f"{pages_total} page(s), and {out_of_range} were requested."
+                ),
+            }
+
     chunks: list[str] = []
     pages_extracted = 0
-    for page in reader.pages:
+    for index in selected:
         try:
-            chunks.append(page.extract_text() or "")
+            chunks.append(reader.pages[index].extract_text() or "")
             pages_extracted += 1
         except Exception as exc:  # noqa: BLE001 — partial extraction is acceptable
             chunks.append(f"[page extraction failed: {type(exc).__name__}]")
 
     full = "\n".join(chunks)
-    truncated = len(full) > char_limit
-    if truncated:
-        full = full[:char_limit] + f"\n\n[truncated, {len(chunks)} pages total]"
+    total_chars = len(full)
 
-    return {
+    # char_offset windows into the *selected* pages, so it composes with
+    # `pages` rather than fighting it.
+    windowed = full[char_offset:] if char_offset else full
+    truncated = len(windowed) > char_limit
+    if truncated:
+        windowed = windowed[:char_limit]
+
+    next_offset = char_offset + len(windowed) if truncated else None
+
+    result: dict[str, Any] = {
         "ok": True,
-        "text": full,
+        "text": windowed,
         "pages_total": pages_total,
         "pages_extracted": pages_extracted,
         "truncated": truncated,
+        "char_offset": char_offset,
+        "chars_available": total_chars,
+        "next_char_offset": next_offset,
+    }
+    if page_spec is not None:
+        result["pages_selected"] = [i + 1 for i in selected]
+    if out_of_range:
+        result["pages_out_of_range"] = out_of_range
+    return result
+
+
+def _edoc_error(
+    entry_id: int,
+    requested_mode: str,
+    subkind: str,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Failure payload for get_document_edoc, per the error contract.
+
+    ``mode`` is always the literal ``"error"`` on failures — callers (and
+    ``tool_logger``) branch on it — and the mode the caller asked for is
+    preserved as ``requested_mode``.
+    """
+    return {
+        "mode": "error",
+        "operation": "get_document_edoc",
+        "kind": kind_for_subkind(subkind),
+        "error": subkind,
+        "request_id": get_request_id_or_new(),
+        "entry_id": entry_id,
+        "requested_mode": requested_mode,
+        **fields,
     }
 
 
 def _edoc_info_response(
     entry_id: int,
-    byte_size: int,
+    byte_size: int | None,
     content_type: str | None,
 ) -> dict[str, Any]:
-    """``mode='info'`` payload — metadata only, no bytes returned to the model."""
+    """``mode='info'`` payload — metadata only, nothing downloaded."""
     return {
         "entry_id": entry_id,
         "mode": "info",
         "byte_size": byte_size,
         "content_type": content_type,
         "hint": (
-            "Raw bytes were fetched but not returned to the model. "
-            "Use mode='bytes' for the base64 payload or mode='text' "
-            "for server-side extracted text."
+            "Headers only — the document body was never transferred. "
+            "Use mode='text' for extracted text (prefer this: it is far "
+            "cheaper in context than the raw file, and supports `pages` "
+            "and `char_offset` so you can read part of a long document). "
+            "mode='bytes' returns base64, which is expensive and usually "
+            "not what you want."
+            + (
+                ""
+                if byte_size is not None
+                else " byte_size is null because the server answered without "
+                "a Content-Length header."
+            )
         ),
     }
 
@@ -159,19 +219,19 @@ def _edoc_size_cap_response(
     content_type: str | None,
 ) -> dict[str, Any]:
     """Refused-by-size response shared by ``mode='bytes'`` and ``mode='text'``."""
-    return {
-        "entry_id": entry_id,
-        "mode": mode,
-        "error": "size_exceeds_cap",
-        "byte_size": byte_size,
-        "max_bytes": effective_cap,
-        "content_type": content_type,
-        "message": (
+    return _edoc_error(
+        entry_id,
+        mode,
+        "size_exceeds_cap",
+        byte_size=byte_size,
+        max_bytes=effective_cap,
+        content_type=content_type,
+        message=(
             f"Edoc is {byte_size} bytes, which exceeds the {effective_cap}-byte cap. "
             "Pass max_bytes=<larger value> or raise LF_EDOC_MAX_BYTES "
             "if you really need this document."
         ),
-    }
+    )
 
 
 def _edoc_bytes_response(
@@ -195,12 +255,20 @@ def _edoc_text_response(
     byte_size: int,
     content_type: str | None,
     text_char_limit: int,
+    *,
+    page_spec: list[int] | None = None,
+    char_offset: int = 0,
 ) -> dict[str, Any]:
     """Extract text from the edoc based on content-type."""
     ct_lower = (content_type or "").lower().split(";")[0].strip()
 
     if ct_lower == "application/pdf":
-        result = _extract_pdf_text(content, text_char_limit)
+        result = _extract_pdf_text(
+            content,
+            text_char_limit,
+            page_spec=page_spec,
+            char_offset=char_offset,
+        )
         base = {
             "entry_id": entry_id,
             "mode": "text",
@@ -208,48 +276,198 @@ def _edoc_text_response(
             "byte_size": byte_size,
         }
         if result.get("ok"):
-            return {
-                **base,
-                "text": result["text"],
-                "pages_total": result["pages_total"],
-                "pages_extracted": result["pages_extracted"],
-                "truncated": result["truncated"],
-            }
-        return {
-            **base,
-            "error": result.get("error", "pdf_extraction_failed"),
-            "message": result.get("message"),
-            "exception_class": result.get("exception_class"),
-            "hint": "Try mode='bytes' to retrieve the raw PDF for client-side handling.",
-        }
+            return {**base, **{k: v for k, v in result.items() if k != "ok"}}
+        return _edoc_error(
+            entry_id,
+            "text",
+            result.get("error", "pdf_extraction_failed"),
+            content_type=content_type,
+            byte_size=byte_size,
+            message=result.get("message"),
+            exception_class=result.get("exception_class"),
+            hint="Try mode='bytes' to retrieve the raw PDF for client-side handling.",
+        )
 
     if ct_lower.startswith("text/"):
+        if page_spec is not None:
+            return _edoc_error(
+                entry_id,
+                "text",
+                "pages_not_applicable",
+                content_type=content_type,
+                byte_size=byte_size,
+                message=(
+                    f"`pages` only applies to paginated documents; this entry is "
+                    f"{content_type!r}. Use `char_offset` to window into it instead."
+                ),
+            )
         text = content.decode("utf-8", errors="replace")
-        truncated = len(text) > text_char_limit
+        total_chars = len(text)
+        windowed = text[char_offset:] if char_offset else text
+        truncated = len(windowed) > text_char_limit
         if truncated:
-            text = text[:text_char_limit] + "\n\n[truncated]"
+            windowed = windowed[:text_char_limit]
         return {
             "entry_id": entry_id,
             "mode": "text",
             "content_type": content_type,
             "byte_size": byte_size,
-            "text": text,
+            "text": windowed,
             "truncated": truncated,
+            "char_offset": char_offset,
+            "chars_available": total_chars,
+            "next_char_offset": char_offset + len(windowed) if truncated else None,
         }
 
-    return {
+    raise AssertionError(
+        "unreachable: non-PDF, non-plain-text content (including text/html "
+        "and text/rtf) routes through _edoc_extract_via_ops"
+    )  # pragma: no cover
+
+
+async def _edoc_extract_via_ops(
+    client: Any,
+    entry_id: int,
+    content: bytes,
+    byte_size: int,
+    content_type: str | None,
+    text_char_limit: int,
+    *,
+    page_spec: list[int] | None,
+    char_offset: int,
+) -> dict[str, Any]:
+    """Extract text from a non-PDF, non-text edoc via ``ops/extract``.
+
+    Covers the office formats a real repository is full of — DOCX, PPTX,
+    XLSX, EML, HTML, RTF — using the same extractors the CLI's ``cat``
+    command uses. The entry name is fetched for extension-based format
+    detection, because self-hosted servers label most edocs
+    ``application/octet-stream``.
+    """
+    from ..ops import extract as ops_extract  # noqa: PLC0415 — optional-heavy import
+
+    base: dict[str, Any] = {
         "entry_id": entry_id,
         "mode": "text",
         "content_type": content_type,
         "byte_size": byte_size,
-        "error": "unsupported_content_type",
-        "message": (
-            f"Cannot extract text from content-type {content_type!r}. "
-            "Server-side text extraction is implemented only for "
-            "application/pdf and text/*. Use mode='bytes' to download "
-            "the file and handle it client-side."
-        ),
     }
+
+    name = ""
+    extension = ""
+    try:
+        entry = await client.get_entry(entry_id)
+        name = entry.get("name") or entry.get("Name") or ""
+        extension = str(entry.get("extension") or entry.get("Extension") or "")
+    except LaserficheError:
+        # Detection falls back to content-type alone; extraction may still work.
+        pass
+
+    # Laserfiche entry names frequently omit the extension — it lives in the
+    # entry's `extension` attribute instead. Fold it into the filename hint
+    # so format detection works on names like "Contract 2024" + ext "pdf".
+    if extension and not _Path(name).suffix:
+        name = f"{name or entry_id}.{extension.lstrip('.')}"
+
+    scratch = _Path(tempfile.mkdtemp(prefix="lf-edoc-"))
+    # Sanitized: entry names may contain characters (":", "?", ...) that are
+    # invalid in local file names on Windows.
+    target = scratch / ops_extract.sanitize_filename(name, fallback=f"{entry_id}.bin")
+    try:
+        target.write_bytes(content)
+        extracted = ops_extract.extract(target, content_type=content_type, filename=name or None)
+    except ops_extract.ExtractionError as exc:
+        hint = (
+            "For scanned images there is no text layer to extract — use "
+            "search_content, which reads Laserfiche's OCR index."
+            if exc.slug in ("unsupported_format",)
+            else "Use mode='bytes' for client-side handling if the raw file is needed."
+        )
+        return _edoc_error(
+            entry_id,
+            "text",
+            exc.slug,
+            content_type=content_type,
+            byte_size=byte_size,
+            message=exc.message,
+            hint=hint,
+        )
+    except (OSError, ValueError) as exc:
+        # A scratch-file failure (permissions, disk full, a path the OS
+        # rejects) — return the contract shape, never a raw exception.
+        return _edoc_error(
+            entry_id,
+            "text",
+            "extraction_failed",
+            content_type=content_type,
+            byte_size=byte_size,
+            message=f"Could not extract via a scratch file: {exc}",
+            hint="Use mode='bytes' for client-side handling if the raw file is needed.",
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    out_of_range: list[int] = []
+    if extracted.pages is not None:
+        pages_total = len(extracted.pages)
+        if page_spec is None:
+            selected = list(range(pages_total))
+        else:
+            selected = [i for i in page_spec if i < pages_total]
+            out_of_range = [i + 1 for i in page_spec if i >= pages_total]
+            if not selected:
+                return _edoc_error(
+                    entry_id,
+                    "text",
+                    "pages_out_of_range",
+                    content_type=content_type,
+                    byte_size=byte_size,
+                    message=(
+                        f"None of the requested pages exist — this document has "
+                        f"{pages_total} page(s), and {out_of_range} were requested."
+                    ),
+                )
+        full = "\n".join(extracted.pages[i] for i in selected)
+    else:
+        if page_spec is not None:
+            return _edoc_error(
+                entry_id,
+                "text",
+                "pages_not_applicable",
+                content_type=content_type,
+                byte_size=byte_size,
+                message=(
+                    f"`pages` only applies to paginated documents; this entry "
+                    f"extracts as one unit ({extracted.backend}). Use "
+                    "`char_offset` to window into it instead."
+                ),
+            )
+        full = extracted.text
+
+    total_chars = len(full)
+    windowed = full[char_offset:] if char_offset else full
+    truncated = len(windowed) > text_char_limit
+    if truncated:
+        windowed = windowed[:text_char_limit]
+
+    result: dict[str, Any] = {
+        **base,
+        "backend": extracted.backend,
+        "text": windowed,
+        "truncated": truncated,
+        "char_offset": char_offset,
+        "chars_available": total_chars,
+        "next_char_offset": char_offset + len(windowed) if truncated else None,
+    }
+    if extracted.pages is not None:
+        result["pages_total"] = len(extracted.pages)
+        if page_spec is not None:
+            result["pages_selected"] = [i + 1 for i in selected]
+    if out_of_range:
+        result["pages_out_of_range"] = out_of_range
+    if extracted.warnings:
+        result["warnings"] = extracted.warnings
+    return result
 
 
 @register(v2_name="laserfiche_document_get_edoc")
@@ -263,11 +481,9 @@ async def get_document_edoc(
         Field(
             default="info",
             description=(
-                "'info' (default): metadata only, no bytes returned. "
-                "'bytes': base64 payload, capped by max_bytes / LF_EDOC_MAX_BYTES. "
-                "'text': server-side extracted text — PDF via pypdf, text/* "
-                "decoded directly, other types return unsupported_content_type. "
-                "OCR is not attempted."
+                "'info' (default): headers only, nothing downloaded. "
+                "'text': extracted text (PDF, Office, mail, HTML, text/*) — "
+                "prefer this. 'bytes': base64, capped; avoid for anything large."
             ),
         ),
     ] = "info",
@@ -275,10 +491,7 @@ async def get_document_edoc(
         int | None,
         Field(
             default=None,
-            description=(
-                "Per-call override for LF_EDOC_MAX_BYTES (default 25 MB). "
-                "Only applies to mode='bytes' and 'text'."
-            ),
+            description="Per-call override of LF_EDOC_MAX_BYTES (25 MB) for mode='bytes'/'text'.",
             ge=1,
         ),
     ] = None,
@@ -290,68 +503,83 @@ async def get_document_edoc(
             ge=1,
         ),
     ] = 50_000,
+    pages: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "1-based page selection for mode='text' on PDFs, e.g. '3', "
+                "'4-9', '1,3,5-7'. Omit for all pages."
+            ),
+            examples=["4-9", "1,3,5-7"],
+        ),
+    ] = None,
+    char_offset: Annotated[
+        int,
+        Field(
+            default=0,
+            description=(
+                "Skip this many chars of extracted text (mode='text'); pass "
+                "back next_char_offset from the prior call to page through."
+            ),
+            ge=0,
+        ),
+    ] = 0,
 ) -> dict[str, Any]:
-    """Download or inspect a document's raw electronic file (edoc).
+    """Inspect (info), read as text, or download (bytes) a document's edoc.
 
-    The recommended path for reading document content on v1 servers
-    (``get_document_text`` has no endpoint to call there). Three modes
-    trade off cost vs. depth:
+    ``mode="info"`` (default) reads only the response headers — size and
+    content-type, no body transferred; safe on any size. ``byte_size`` is
+    null when the server omits Content-Length.
 
-    Args:
-        entry_id: Integer entry ID. Must point to an electronic document,
-            not a folder.
-        mode:
-            ``"info"`` *(default)* — fetches the edoc but returns only its
-            size and content-type, plus a hint. No bytes enter the model's
-            context. Cheapest; safe to call on anything as a first probe.
+    ``mode="text"`` — **prefer this for reading content.** Handles PDF,
+    DOCX, PPTX, XLSX, EML, HTML, RTF and ``text/*``; format is detected
+    from content-type and the entry's filename. OCR is not attempted — for
+    scans, use ``search_content``, which reads Laserfiche's OCR index.
+    Narrow long documents with ``pages`` and/or ``char_offset`` instead of
+    reading them whole; ``truncated``/``next_char_offset`` drive paging.
 
-            ``"bytes"`` — returns the edoc as base64-encoded bytes plus
-            content-type and size. Refused if the edoc exceeds
-            ``LF_EDOC_MAX_BYTES`` (default 25 MB) — see ``max_bytes``.
+    ``mode="bytes"`` — base64 payload. Avoid: it inflates the file ~4/3,
+    tokenizes terribly, and many hosts cap a tool result at 1 MB, so the
+    call often fails outright. Only for genuinely small files where the raw
+    bytes are the deliverable.
 
-            ``"text"`` — extracts readable text server-side:
-
-            - ``application/pdf`` → pypdf, page by page, truncated to
-              ``text_char_limit``. Response includes ``pages_total``,
-              ``pages_extracted``, ``truncated``.
-            - ``text/*`` → decoded directly as UTF-8 (replacement chars
-              on bad bytes).
-            - Anything else (.docx, .xlsx, images, etc.) → structured
-              error naming the content-type and suggesting ``mode="bytes"``
-              for client-side handling. OCR is not attempted.
-            - Encrypted or malformed PDFs → structured error with the
-              underlying exception class.
-        max_bytes: Per-call override for ``LF_EDOC_MAX_BYTES``. Use to
-            raise the cap for a specific large document without changing
-            the server-wide default.
-        text_char_limit: Truncate extracted text after this many
-            characters (default 50,000). Truncation is signalled by the
-            ``truncated`` field, NOT a marker in the text itself.
-
-    Returns: Always a dict. Shape depends on ``mode`` — see above.
-    On size-cap refusal, response contains ``error="size_exceeds_cap"``
-    plus ``byte_size`` and ``max_bytes`` so the LLM can decide whether
-    to raise the cap and retry.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "entry_id": <int>, ...}``. Common slugs: ``not_found`` (entry is a
-    folder, or has no edoc), ``auth_failed``.
+    ``bytes``/``text`` are refused above ``LF_EDOC_MAX_BYTES`` (default
+    25 MB); the ``size_exceeds_cap`` error carries ``byte_size`` and
+    ``max_bytes`` so you can decide whether to raise the cap and retry.
+    Other failure slugs: ``not_found`` (folder or no edoc), ``auth_failed``,
+    ``pdf_encrypted``, ``unsupported_format`` (scans — use search_content),
+    ``legacy_office_format``, ``pages_out_of_range``, ``invalid_page_spec``.
+    Failures always come back as ``mode="error"`` with the requested mode
+    preserved in ``requested_mode``.
     """
     settings = get_settings()
     effective_cap = max_bytes if max_bytes is not None else settings.edoc_max_bytes
 
+    client = _app.get_client()
+
+    # 'info' is a metadata probe — resolve it from response headers so callers
+    # can size a document without paying to transfer it.
+    if mode == "info":
+        try:
+            probe_size, probe_type = await client.export_entry_meta_only(entry_id, part="Edoc")
+        except LaserficheError as exc:
+            return classify_lf_error("get_document_edoc", exc, entry_id=entry_id)
+        return _edoc_info_response(entry_id, probe_size, probe_type)
+
+    if mode == "text":
+        page_spec, page_error = parse_page_spec(pages)
+        if page_error is not None:
+            return _edoc_error(entry_id, "text", "invalid_page_spec", message=page_error)
+    else:
+        page_spec = None
+
     try:
-        content, content_type = await _app.get_client().export_entry_with_meta(
-            entry_id,
-            part="Edoc",
-        )
+        content, content_type = await client.export_entry_with_meta(entry_id, part="Edoc")
     except LaserficheError as exc:
         return classify_lf_error("get_document_edoc", exc, entry_id=entry_id)
 
     byte_size = len(content)
-
-    if mode == "info":
-        return _edoc_info_response(entry_id, byte_size, content_type)
 
     if byte_size > effective_cap:
         return _edoc_size_cap_response(entry_id, mode, byte_size, effective_cap, content_type)
@@ -359,4 +587,33 @@ async def get_document_edoc(
     if mode == "bytes":
         return _edoc_bytes_response(entry_id, content, byte_size, content_type)
 
-    return _edoc_text_response(entry_id, content, byte_size, content_type, text_char_limit)
+    ct_lower = (content_type or "").lower().split(";")[0].strip()
+    # text/html and text/rtf carry markup, not readable text — they route
+    # through the ops extractors below so the model sees stripped text, not
+    # raw tags with script/style bodies. Other text/* decode directly.
+    if ct_lower == "application/pdf" or (
+        ct_lower.startswith("text/") and ct_lower not in ("text/html", "text/rtf")
+    ):
+        return _edoc_text_response(
+            entry_id,
+            content,
+            byte_size,
+            content_type,
+            text_char_limit,
+            page_spec=page_spec,
+            char_offset=char_offset,
+        )
+
+    # Everything else — office formats, mail, HTML, and the octet-stream
+    # labels self-hosted servers put on most edocs — goes through the same
+    # extractors the CLI uses.
+    return await _edoc_extract_via_ops(
+        client,
+        entry_id,
+        content,
+        byte_size,
+        content_type,
+        text_char_limit,
+        page_spec=page_spec,
+        char_offset=char_offset,
+    )

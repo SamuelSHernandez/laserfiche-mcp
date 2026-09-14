@@ -124,6 +124,7 @@ async def test_all_tools_registered() -> None:
         "search_entries",
         "search_by_name",
         "search_natural",
+        "search_content",
         "list_folder",
         "get_entry",
         "get_entry_by_path",
@@ -259,3 +260,38 @@ async def test_tool_allowlist_blocks_at_runtime(
     result = await server.delete_entry(42)
     assert result["mode"] == "error"
     assert result["error"] == "tool_not_allowed"
+
+
+# --- LF_LEGACY_TOOL_NAMES gate ------------------------------------------------
+
+
+def test_legacy_names_enabled_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LF_LEGACY_TOOL_NAMES", raising=False)
+    assert server._legacy_names_enabled() is True  # v2.x default: aliases stay
+    for off in ("false", "0", "no", "FALSE"):
+        monkeypatch.setenv("LF_LEGACY_TOOL_NAMES", off)
+        assert server._legacy_names_enabled() is False
+    monkeypatch.setenv("LF_LEGACY_TOOL_NAMES", "true")
+    assert server._legacy_names_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_gate_halves_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the gate off, only the laserfiche_* name is registered."""
+    from mcp.server.fastmcp import FastMCP
+
+    from laserfiche_mcp.tools._registry import all_tools
+
+    spec = all_tools()[0]
+
+    monkeypatch.setenv("LF_LEGACY_TOOL_NAMES", "false")
+    monkeypatch.setattr(server, "mcp", FastMCP("gate-test"))
+    server._register_one(spec)
+    names = {t.name for t in await server.mcp.list_tools()}
+    assert names == {spec.v2_name}
+
+    monkeypatch.setenv("LF_LEGACY_TOOL_NAMES", "true")
+    monkeypatch.setattr(server, "mcp", FastMCP("gate-test-2"))
+    server._register_one(spec)
+    names = {t.name for t in await server.mcp.list_tools()}
+    assert names == {spec.v2_name, spec.legacy_name}

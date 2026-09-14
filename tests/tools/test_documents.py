@@ -17,6 +17,7 @@ from pytest_httpx import HTTPXMock
 from laserfiche_mcp import server
 from laserfiche_mcp.client import LaserficheClient
 from laserfiche_mcp.config import Settings
+from laserfiche_mcp.tools.documents import parse_page_spec
 from tests.conftest import (
     _BASE,
     SAMPLE_ENCRYPTED_PDF_BYTES,
@@ -309,28 +310,146 @@ async def test_edoc_text_mode_normalizes_content_type_casing(
     assert SAMPLE_PDF_TEXT in result["text"]
 
 
+def _make_docx_bytes(paragraphs: list[str]) -> bytes:
+    """Build a minimal real .docx in memory — a docx IS a zip of XML."""
+    import io as _io
+    import zipfile
+
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    body = "".join(f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paragraphs)
+    buffer = _io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            f'<?xml version="1.0"?><w:document xmlns:w="{ns}"><w:body>{body}</w:body></w:document>',
+        )
+    return buffer.getvalue()
+
+
+_DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
 @pytest.mark.asyncio
-async def test_edoc_text_mode_rejects_non_pdf_non_text_content(
+async def test_edoc_text_mode_extracts_docx_via_ops(
     httpx_mock: HTTPXMock,
     patched_client: LaserficheClient,
 ) -> None:
-    """A docx/image edoc → structured error pointing at mode='bytes'."""
+    """A .docx edoc now extracts through ops/extract instead of dead-ending."""
     httpx_mock.add_response(
         method="GET",
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
-        content=b"PK\x03\x04 fake docx",
-        headers={
-            "content-type": (
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            ),
-        },
+        content=_make_docx_bytes(["Offer letter", "Start date: March 1"]),
+        headers={"content-type": _DOCX_CT},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "offer.docx", "entryType": "Document"},
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="text")
 
-    assert result["error"] == "unsupported_content_type"
-    assert "wordprocessingml" in (result["content_type"] or "")
-    assert "mode='bytes'" in result["message"]
+    assert result.get("error") is None
+    assert "Start date: March 1" in result["text"]
+    assert result["backend"] == "docx"
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_mode_survives_windows_hostile_entry_name(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """Laserfiche allows ':' and '?' in entry names; the extraction scratch
+    file on Windows does not. Previously this raised OSError out of the tool."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=_make_docx_bytes(["Body text"]),
+        headers={"content-type": _DOCX_CT},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Offer: final?.docx", "entryType": "Document"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert result.get("error") is None
+    assert "Body text" in result["text"]
+    assert result["backend"] == "docx"
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_mode_corrupt_docx_returns_extraction_slug(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=b"PK\x03\x04 not really a zip",
+        headers={"content-type": _DOCX_CT},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "broken.docx", "entryType": "Document"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert result["error"] == "not_a_zip"
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_mode_image_points_at_search_content(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """Scans have no text layer; the error must route to the OCR index."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=b"II*\x00",
+        headers={"content-type": "image/tiff"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "scan.tiff", "entryType": "Document"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert result["error"] == "unsupported_format"
+    assert "search_content" in result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_mode_octet_stream_pdf_detected_by_name(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """Self-hosted servers label most edocs octet-stream; the entry name
+    must carry the format decision. Previously this dead-ended."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=SAMPLE_PDF_BYTES,
+        headers={"content-type": "application/octet-stream"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "contract.pdf", "entryType": "Document"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert result.get("error") is None
+    assert SAMPLE_PDF_TEXT in result["text"]
+    assert result["backend"] == "pypdf"
 
 
 @pytest.mark.asyncio
@@ -386,3 +505,260 @@ async def test_edoc_text_mode_reports_when_pypdf_is_unavailable(
 
     assert result["error"] == "pypdf_unavailable"
     assert "pip install pypdf" in result["message"]
+
+
+# --- page selection + char_offset (token-reduction paths) --------------------
+
+
+def _multipage_pdf(page_count: int) -> bytes:
+    """Build an N-page PDF by repeating the committed single-page fixture.
+
+    Built at test time rather than committed as a second binary fixture —
+    pypdf is already a hard runtime dependency, so this costs nothing.
+    """
+    import io
+
+    import pypdf
+
+    writer = pypdf.PdfWriter()
+    source = pypdf.PdfReader(io.BytesIO(SAMPLE_PDF_BYTES))
+    for _ in range(page_count):
+        writer.add_page(source.pages[0])
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def _mock_pdf_edoc(httpx_mock: HTTPXMock, content: bytes, entry_id: int = 42) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/{entry_id}/Laserfiche.Repository.Document/edoc",
+        content=content,
+        headers={"content-type": "application/pdf"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("   ", None),
+        ("3", [2]),
+        ("4-9", [3, 4, 5, 6, 7, 8]),
+        ("1,3,5-7", [0, 2, 4, 5, 6]),
+        ("5-5", [4]),
+        # Duplicates collapse and order is normalized.
+        ("3,1,3", [0, 2]),
+        ("2-4,3-5", [1, 2, 3, 4]),
+    ],
+)
+def test_parse_page_spec_accepts_valid_forms(spec: str | None, expected: list[int] | None) -> None:
+    pages, error = parse_page_spec(spec)
+    assert error is None
+    assert pages == expected
+
+
+@pytest.mark.parametrize(
+    "spec",
+    ["0", "abc", "4-", "-9", "9-4", "1,,x", "1.5", "0-3"],
+)
+def test_parse_page_spec_rejects_malformed_specs(spec: str) -> None:
+    """A bad spec must be an error, never a silent full-document read."""
+    pages, error = parse_page_spec(spec)
+    assert pages is None
+    assert error is not None
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_pages_extracts_only_selected_pages(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    _mock_pdf_edoc(httpx_mock, _multipage_pdf(6))
+
+    result = await server.get_document_edoc(entry_id=42, mode="text", pages="2-3")
+
+    assert result["pages_total"] == 6
+    assert result["pages_extracted"] == 2
+    assert result["pages_selected"] == [2, 3]
+    # Two pages of the fixture text, not all six.
+    assert result["text"].count(SAMPLE_PDF_TEXT) == 2
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_without_pages_reads_every_page(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    _mock_pdf_edoc(httpx_mock, _multipage_pdf(4))
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert result["pages_extracted"] == 4
+    assert "pages_selected" not in result
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_reports_pages_past_end_of_document(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    _mock_pdf_edoc(httpx_mock, _multipage_pdf(3))
+
+    result = await server.get_document_edoc(entry_id=42, mode="text", pages="2,99")
+
+    assert result["pages_selected"] == [2]
+    assert result["pages_out_of_range"] == [99]
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_errors_when_no_requested_page_exists(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    _mock_pdf_edoc(httpx_mock, _multipage_pdf(2))
+
+    result = await server.get_document_edoc(entry_id=42, mode="text", pages="50-60")
+
+    assert result["error"] == "pages_out_of_range"
+    assert "2 page(s)" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_rejects_malformed_page_spec_before_downloading(
+    patched_client: LaserficheClient,
+) -> None:
+    """No httpx_mock response is registered — the guard must fire first."""
+    result = await server.get_document_edoc(entry_id=42, mode="text", pages="9-4")
+
+    assert result["error"] == "invalid_page_spec"
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_char_offset_pages_through_a_long_document(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """next_char_offset must hand back a cursor that resumes without gaps."""
+    _mock_pdf_edoc(httpx_mock, _multipage_pdf(4))
+    _mock_pdf_edoc(httpx_mock, _multipage_pdf(4))
+
+    first = await server.get_document_edoc(entry_id=42, mode="text", text_char_limit=20)
+
+    assert first["truncated"] is True
+    assert first["char_offset"] == 0
+    assert first["next_char_offset"] == 20
+    assert len(first["text"]) == 20
+
+    second = await server.get_document_edoc(
+        entry_id=42,
+        mode="text",
+        text_char_limit=20,
+        char_offset=first["next_char_offset"],
+    )
+
+    assert second["char_offset"] == 20
+    # The two windows are contiguous, so concatenating them reproduces a
+    # prefix of the whole extraction.
+    assert first["chars_available"] == second["chars_available"]
+    assert (first["text"] + second["text"])[:20] == first["text"]
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_final_window_reports_no_next_offset(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    _mock_pdf_edoc(httpx_mock, _multipage_pdf(1))
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert result["truncated"] is False
+    assert result["next_char_offset"] is None
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_pages_is_rejected_for_non_paginated_entries(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=b"plain text body",
+        headers={"content-type": "text/plain"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text", pages="1-2")
+
+    assert result["error"] == "pages_not_applicable"
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_char_offset_applies_to_plain_text_entries(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=b"abcdefghij",
+        headers={"content-type": "text/plain"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text", char_offset=4)
+
+    assert result["text"] == "efghij"
+    assert result["chars_available"] == 10
+    assert result["next_char_offset"] is None
+
+
+# --- mode='info' is a header probe, not a download ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_edoc_info_mode_reports_null_size_without_content_length(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A chunked response has no Content-Length; say so instead of guessing.
+
+    The old implementation buffered the whole body and reported len(bytes),
+    which meant probing a 400 MB edoc cost a 400 MB transfer.
+    """
+    from pytest_httpx import IteratorStream
+
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        stream=IteratorStream([b"%PDF-1.4 ", b"chunk two"]),
+        headers={"content-type": "application/pdf"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="info")
+
+    assert result["mode"] == "info"
+    assert result["byte_size"] is None
+    assert result["content_type"] == "application/pdf"
+    assert "Content-Length" in result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_edoc_info_mode_surfaces_http_errors_structurally(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """The streaming probe still has to produce the structured error contract."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/7/Laserfiche.Repository.Document/edoc",
+        status_code=404,
+        json={"title": "Entry not found"},
+    )
+
+    result = await server.get_document_edoc(entry_id=7, mode="info")
+
+    assert result["mode"] == "error"
+    assert result["error"] == "not_found"
+    assert result["entry_id"] == 7

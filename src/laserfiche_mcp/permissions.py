@@ -42,7 +42,7 @@ def _normalize(p: str) -> str:
     return p.replace("/", "\\").lower().rstrip("\\")
 
 
-def _has_traversal_segment(path: str) -> bool:
+def has_traversal_segment(path: str) -> bool:
     """True if any segment of ``path`` is exactly ``..`` after normalization."""
     normalized = path.replace("/", "\\")
     return any(seg == ".." for seg in normalized.split("\\"))
@@ -92,7 +92,7 @@ def path_allowed(
     if path is None:
         return True, None
 
-    if _has_traversal_segment(path):
+    if has_traversal_segment(path):
         return False, (
             f"Path {path!r} contains a '..' traversal segment. Paths with "
             "'..' are rejected unconditionally; use the entry's fully "

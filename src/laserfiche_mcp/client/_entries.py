@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from ..config import ApiVersion
@@ -145,6 +146,37 @@ class _EntriesMixin(_CoreClient):
         content, _ = await self.export_entry_with_meta(entry_id, part=part)
         return content
 
+    async def export_entry_meta_only(
+        self,
+        entry_id: int,
+        *,
+        part: str = "Edoc",
+    ) -> tuple[int | None, str | None]:
+        """Return ``(byte_size, content_type)`` without downloading the body.
+
+        Same v1/v2 routing as :meth:`export_entry_with_meta`. ``byte_size`` is
+        ``None`` if the server streams the response without a Content-Length
+        header — callers must handle that rather than assuming a number.
+        """
+        if self._api_version is ApiVersion.V1:
+            if part != "Edoc":
+                raise LaserficheError(
+                    f"Laserfiche API v1 has no endpoint for downloading "
+                    f"part={part!r}. Only 'Edoc' (raw electronic document "
+                    f"bytes) is supported on v1; set LF_API_VERSION=v2 if "
+                    f"your server supports it."
+                )
+            return await self._request_meta_only(
+                "GET",
+                self._repo_path(f"Entries/{entry_id}/Laserfiche.Repository.Document/edoc"),
+            )
+
+        return await self._request_meta_only(
+            "POST",
+            self._repo_path(f"Entries/{entry_id}/Export"),
+            json={"part": part},
+        )
+
     async def export_entry_with_meta(
         self,
         entry_id: int,
@@ -172,4 +204,44 @@ class _EntriesMixin(_CoreClient):
             "POST",
             self._repo_path(f"Entries/{entry_id}/Export"),
             json={"part": part},
+        )
+
+    async def export_entry_to_file(
+        self,
+        entry_id: int,
+        dest: Path,
+        *,
+        part: str = "Edoc",
+        max_bytes: int | None = None,
+    ) -> tuple[int, str | None, str]:
+        """Stream a document to ``dest``. Returns ``(bytes, content_type, sha256)``.
+
+        The large-document path. Unlike :meth:`export_entry_with_meta`, the body
+        is never held in memory, so repository-sized files (hundreds of MB) cost
+        one buffer to transfer.
+
+        Same v1/v2 routing as the other export methods; v1 only supports
+        ``part='Edoc'``.
+        """
+        if self._api_version is ApiVersion.V1:
+            if part != "Edoc":
+                raise LaserficheError(
+                    f"Laserfiche API v1 has no endpoint for downloading "
+                    f"part={part!r}. Only 'Edoc' (raw electronic document "
+                    f"bytes) is supported on v1; set LF_API_VERSION=v2 if "
+                    f"your server supports it."
+                )
+            return await self._request_stream_to_file(
+                "GET",
+                self._repo_path(f"Entries/{entry_id}/Laserfiche.Repository.Document/edoc"),
+                dest,
+                max_bytes=max_bytes,
+            )
+
+        return await self._request_stream_to_file(
+            "POST",
+            self._repo_path(f"Entries/{entry_id}/Export"),
+            dest,
+            json={"part": part},
+            max_bytes=max_bytes,
         )

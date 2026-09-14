@@ -17,7 +17,7 @@ from typing import Any
 
 from .. import _app, permissions
 from .._app import get_settings
-from ..errors import LaserficheError
+from ..errors import LaserficheError, local_error
 
 
 def validate_name(
@@ -30,13 +30,7 @@ def validate_name(
     ok, reason = permissions.name_allowed(name)
     if ok:
         return None
-    out: dict[str, Any] = {
-        "mode": "error",
-        "operation": operation,
-        "error": "invalid_name",
-        "reason": reason,
-        "name": name,
-    }
+    out = local_error(operation, "invalid_name", reason=reason, name=name)
     if extra:
         out.update(extra)
     return out
@@ -55,14 +49,13 @@ def validate_page_range_input(
     ok, reason = permissions.validate_page_range(range_str)
     if ok:
         return None
-    return {
-        "mode": "error",
-        "operation": operation,
-        "entry_id": entry_id,
-        "error": "invalid_page_range",
-        "reason": reason,
-        "page_range": range_str,
-    }
+    return local_error(
+        operation,
+        "invalid_page_range",
+        entry_id=entry_id,
+        reason=reason,
+        page_range=range_str,
+    )
 
 
 async def validate_field_names(
@@ -87,18 +80,17 @@ async def validate_field_names(
     if not unknown:
         return None
     valid_sample = sorted(defs.keys())[:20]
-    return {
-        "mode": "error",
-        "operation": operation,
-        "entry_id": entry_id,
-        "error": "invalid_field_name",
-        "reason": (
+    return local_error(
+        operation,
+        "invalid_field_name",
+        entry_id=entry_id,
+        reason=(
             f"Field name(s) {unknown!r} are not defined in this repository. "
             "Call list_field_definitions to see available fields."
         ),
-        "invalid_field_names": unknown,
-        "valid_field_names_sample": valid_sample,
-    }
+        invalid_field_names=unknown,
+        valid_field_names_sample=valid_sample,
+    )
 
 
 async def validate_template_name(
@@ -124,18 +116,17 @@ async def validate_template_name(
         return None
     if template_name in defs:
         return None
-    out: dict[str, Any] = {
-        "mode": "error",
-        "operation": operation,
-        "error": "invalid_template_name",
-        "reason": (
+    out = local_error(
+        operation,
+        "invalid_template_name",
+        reason=(
             f"Template {template_name!r} is not defined in this repository. "
             "Call list_template_definitions to see available templates. "
             "Match is case-sensitive."
         ),
-        "template_name": template_name,
-        "valid_template_names": sorted(defs.keys()),
-    }
+        template_name=template_name,
+        valid_template_names=sorted(defs.keys()),
+    )
     if entry_id is not None:
         out["entry_id"] = entry_id
     if extra:
@@ -165,18 +156,17 @@ async def validate_tag_names(
     unknown = [name for name in tag_names if name not in defs]
     if not unknown:
         return None
-    return {
-        "mode": "error",
-        "operation": operation,
-        "entry_id": entry_id,
-        "error": "invalid_tag_name",
-        "reason": (
+    return local_error(
+        operation,
+        "invalid_tag_name",
+        entry_id=entry_id,
+        reason=(
             f"Tag name(s) {unknown!r} are not defined in this repository. "
             "Call list_tag_definitions to see available tags."
         ),
-        "invalid_tag_names": unknown,
-        "valid_tag_names": sorted(defs.keys()),
-    }
+        invalid_tag_names=unknown,
+        valid_tag_names=sorted(defs.keys()),
+    )
 
 
 async def validate_link_types(
@@ -200,18 +190,17 @@ async def validate_link_types(
     unknown = [lid for lid in link_type_ids if lid not in defs]
     if not unknown:
         return None
-    return {
-        "mode": "error",
-        "operation": operation,
-        "entry_id": entry_id,
-        "error": "invalid_link_type",
-        "reason": (
+    return local_error(
+        operation,
+        "invalid_link_type",
+        entry_id=entry_id,
+        reason=(
             f"linkTypeId(s) {unknown!r} are not defined in this repository. "
             "Call list_link_definitions to see available link types."
         ),
-        "invalid_link_type_ids": unknown,
-        "valid_link_type_ids": sorted(defs.keys()),
-    }
+        invalid_link_type_ids=unknown,
+        valid_link_type_ids=sorted(defs.keys()),
+    )
 
 
 async def validate_required_fields(
@@ -256,13 +245,12 @@ async def validate_required_fields(
     if not missing:
         return None
 
-    return {
-        "mode": "error",
-        "operation": operation,
-        "entry_id": entry_id,
-        "error": "missing_required_fields",
-        "missing": [fd["name"] for fd in missing],
-        "field_details": [
+    return local_error(
+        operation,
+        "missing_required_fields",
+        entry_id=entry_id,
+        missing=[fd["name"] for fd in missing],
+        field_details=[
             {
                 "name": fd["name"],
                 "field_type": fd.get("fieldType"),
@@ -271,10 +259,10 @@ async def validate_required_fields(
             }
             for fd in missing
         ],
-        "next_step": (
+        next_step=(
             f"Call {operation} again with `fields=` including each of "
             f"these names. List fields offer constraint values via "
             f"list_values; date/text fields accept literal values. "
             f"Disable this check with LF_VALIDATE_REQUIRED_FIELDS=false."
         ),
-    }
+    )

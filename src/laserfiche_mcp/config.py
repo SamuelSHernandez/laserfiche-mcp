@@ -134,6 +134,16 @@ class Settings(BaseSettings):
         "scope-limited deployments — e.g. 'merge_fields,merge_tags,"
         "assign_template' for a metadata-only setup.",
     )
+    confirmation_secret: SecretStr | None = Field(
+        default=None,
+        description="Optional secret the destructive-operation confirmation "
+        "tokens are signed with. When set, the HMAC key is derived from it, "
+        "so tokens stay valid across server restarts and across instances "
+        "sharing the secret (the stateless/multi-instance deployment shape). "
+        "When unset (default), a random per-process key is used and a "
+        "restart invalidates pending tokens — the safer single-instance "
+        "default. Treat the secret like a password.",
+    )
     require_audit_reason: bool = Field(
         default=False,
         description="When true, delete_entry refuses to execute without an "
@@ -184,6 +194,28 @@ class Settings(BaseSettings):
         description="Hard cap on page size for search_natural specifically. "
         "Some self-hosted servers reject SimpleSearches $top values above "
         "their internal limit; this defaults lower than max_results_ceiling.",
+    )
+    search_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="How long search_content waits for an async search to "
+        "finish before giving up and releasing the token. Full-text searches "
+        "over large repositories are the slow case this exists for.",
+    )
+    search_poll_interval_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        description="Delay between status polls while an async search runs. "
+        "Lower values return sooner on fast searches at the cost of more "
+        "requests; the interval backs off toward 2s on long searches.",
+    )
+    search_context_hits_max: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Hard cap on context-hit passages returned per matching "
+        "entry, regardless of the caller-requested value. Keeps a document "
+        "with hundreds of matches from swamping the response.",
     )
     edoc_max_bytes: int = Field(
         default=25_000_000,

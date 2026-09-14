@@ -16,7 +16,7 @@ from typing import Any
 
 from .. import _app, permissions
 from .._app import get_settings
-from ..errors import LaserficheError, classify_lf_error
+from ..errors import LaserficheError, classify_lf_error, local_error
 
 
 class ToolAbortedError(Exception):
@@ -117,12 +117,7 @@ def check_write_permission(
 
     ok, reason = permissions.tool_allowed(operation, settings.write_tools_allowed)
     if not ok:
-        return {
-            "mode": "error",
-            "operation": operation,
-            "error": "tool_not_allowed",
-            "reason": reason,
-        }
+        return local_error(operation, "tool_not_allowed", reason=reason)
 
     ok, reason = permissions.path_allowed(
         path,
@@ -130,13 +125,16 @@ def check_write_permission(
         settings.write_paths_deny,
     )
     if not ok:
-        return {
-            "mode": "error",
-            "operation": operation,
-            "error": "path_not_allowed",
-            "reason": reason,
-            "path": path,
-        }
+        # A '..' segment gets its own slug — the error contract documents
+        # path_traversal_blocked as distinct from a fence refusal, and the
+        # distinction matters: traversal is rejected regardless of the
+        # allow/deny configuration.
+        subkind = (
+            "path_traversal_blocked"
+            if path is not None and permissions.has_traversal_segment(path)
+            else "path_not_allowed"
+        )
+        return local_error(operation, subkind, reason=reason, path=path)
 
     return None
 

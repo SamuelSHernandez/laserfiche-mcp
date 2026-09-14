@@ -8,7 +8,7 @@ from pydantic import Field
 
 from .. import _app
 from .._app import clamp_max_results, get_settings
-from ..errors import LaserficheError, classify_lf_error
+from ..errors import LaserficheError, classify_lf_error, local_error
 from ._registry import register
 
 # Shared field annotations for the four list_*_definitions tools so the
@@ -34,11 +34,7 @@ _DEF_SUMMARY_ONLY = Annotated[
     bool,
     Field(
         default=False,
-        description=(
-            "When True, return only {count, names} instead of the full "
-            "OData listing — useful for 'what's available?' lookups that "
-            "would otherwise return 30-50 KB of definition payload."
-        ),
+        description="When True, return only {count, names} instead of the full listing.",
     ),
 ]
 
@@ -47,23 +43,10 @@ _DEF_SUMMARY_ONLY = Annotated[
 async def list_repositories() -> dict[str, Any]:
     """List the repositories this account can reach on the server.
 
-    Useful for confirming which repository the server is pointed at and
-    for discovering alternate repositories the same account can access.
-
-    **Endpoint variability**: some self-hosted Laserfiche builds disable
-    the ``/Repositories`` endpoint entirely. When the call fails, this
-    tool does NOT raise — it returns the configured repo as a fallback
-    so downstream tools can still run. Branch on ``mode == "fallback"``
-    if you need to distinguish a partial answer from a full enumeration.
-
-    Returns: On a healthy build, the server's raw OData listing with
-    ``value``: ``[{repoId, displayName, ...}, ...]``. On endpoint
-    failure: ``{"mode": "fallback", "warning": <str>, "server_error":
-    <classified error>, "value": [{"repoId": "<LF_REPOSITORY_ID>",
-    "displayName": null, "is_configured": true}]}``.
-
-    On failure: this tool never raises and never returns ``mode:
-    "error"`` — see the fallback shape above.
+    Never raises and never returns ``mode: "error"`` — some builds disable
+    the ``/Repositories`` endpoint, in which case the configured repo comes
+    back as ``{"mode": "fallback", "warning", "value": [...]}`` so
+    downstream tools still run. Healthy builds return the raw OData listing.
     """
     try:
         raw = await _app.get_client().list_repositories()
@@ -110,28 +93,12 @@ async def list_field_definitions(
 ) -> dict[str, Any]:
     """List every field definition in the repository.
 
-    Use before authoring a field-based search query or preparing a field
-    update — the response tells you which fields exist, their types
-    (``String``, ``ShortInteger``, ``List``, ``Date``, ...), whether they
-    accept multi-value, whether they're required at the repository level,
-    and (for ``List`` fields) the allowed values.
+    Use before authoring a field query or field update — returns each
+    field's ``name``, ``fieldType``, ``isRequired``, ``isMultiValue``,
+    ``listValues``, etc. For the fields on one template,
+    ``get_template_fields`` is the direct route.
 
-    Independent fields and template-scoped fields are both returned.
-    Combine with ``list_template_definitions`` to see which fields belong
-    to which template.
-
-    Args:
-        max_results: Page size (default 25, capped by ``LF_MAX_RESULTS_CEILING``).
-        skip: 0-indexed offset for pagination through large repositories.
-        summary_only: If True, return only ``{count, names}`` instead of the
-            full OData listing.
-
-    Returns: Server's raw OData listing with ``value`` (list of field
-    definitions). Each item includes ``id``, ``name``, ``fieldType``,
-    ``isRequired``, ``isMultiValue``, ``listValues``, ``defaultValue``,
-    ``length``, ``constraint``.
-
-    On failure: returns ``{"mode": "error", "error": <slug>, ...}``.
+    On failure returns ``{"mode": "error", "error": <slug>}``.
     """
     try:
         raw = await _app.get_client().list_field_definitions(
@@ -154,21 +121,9 @@ async def list_tag_definitions(
 ) -> dict[str, Any]:
     """List every tag definition in the repository.
 
-    Use before calling ``set_tags`` / ``merge_tags`` to confirm a tag
-    exists — the server rejects tags that aren't defined here. Tags are
-    a flat namespace in Laserfiche, distinct from template fields.
-
-    Args:
-        max_results: Page size (default 25, capped by ``LF_MAX_RESULTS_CEILING``).
-        skip: 0-indexed offset for pagination.
-        summary_only: If True, return only ``{count, names}``.
-
-    Returns: Server's raw OData listing with ``value`` (list of tag
-    definitions). Each item has ``id``, ``name``, and ``isSecurityTag``.
-    Many repositories ship with no tags defined; an empty ``value`` is
-    normal.
-
-    On failure: returns ``{"mode": "error", "error": <slug>, ...}``.
+    Use before ``set_tags``/``merge_tags`` — undefined tags are rejected.
+    Each item has ``id``, ``name``, ``isSecurityTag``; an empty listing is
+    normal. On failure returns ``{"mode": "error", "error": <slug>}``.
     """
     try:
         raw = await _app.get_client().list_tag_definitions(
@@ -188,11 +143,7 @@ async def list_template_definitions(
         str | None,
         Field(
             default=None,
-            description=(
-                "If set, return only the template with this exact name. "
-                "Case-sensitive on most builds."
-            ),
-            examples=["Personnel Document", "Loan Application"],
+            description="Exact template name to filter to (case-sensitive on most builds).",
         ),
     ] = None,
     max_results: _DEF_MAX_RESULTS = None,
@@ -202,24 +153,10 @@ async def list_template_definitions(
 ) -> dict[str, Any]:
     """List template definitions in the repository.
 
-    Use to discover which templates exist before calling ``assign_template``.
-    Pass ``template_name`` to fetch a single template by name (the same
-    listing, filtered server-side).
-
-    Args:
-        template_name: If set, return only the template with this exact
-            name. Case-sensitive on most builds.
-        max_results: Page size (default 25, capped by ``LF_MAX_RESULTS_CEILING``).
-        skip: 0-indexed offset for pagination.
-        summary_only: If True, return only ``{count, names}``.
-
-    Returns: Server's raw OData listing with ``value``. Each item has
-    ``id``, ``name``, ``displayName``, ``description``, ``fieldCount``,
-    and ``color``. This response does NOT enumerate the fields ON the
-    template — use ``list_field_definitions`` to inspect those (they're
-    the ones with ``isRequired=true`` when scoped to the template).
-
-    On failure: returns ``{"mode": "error", "error": <slug>, ...}``.
+    Discover template names (each item: ``id``, ``name``, ``fieldCount``);
+    pass ``template_name`` to filter to one. Does NOT enumerate a
+    template's fields — use ``get_template_fields`` for that.
+    On failure returns ``{"mode": "error", "error": <slug>}``.
     """
     try:
         raw = await _app.get_client().list_template_definitions(
@@ -240,10 +177,9 @@ async def get_template_fields(
         str,
         Field(
             description=(
-                "Exact template name (case-sensitive on most builds). Use "
-                "list_template_definitions to discover available names."
+                "Exact template name (case-sensitive on most builds); discover "
+                "names with list_template_definitions."
             ),
-            examples=["Personnel Document", "Loan Application", "Invoice"],
         ),
     ],
     *,
@@ -251,39 +187,20 @@ async def get_template_fields(
         bool,
         Field(
             default=False,
-            description=(
-                "When True, return only fields where is_required is true — "
-                "useful for 'what's the minimum I have to supply?' workflows."
-            ),
+            description="Return only fields where is_required is true.",
         ),
     ] = False,
 ) -> dict[str, Any]:
-    """Return the fields belonging to a single template, with full field metadata.
+    """Return one template's fields with full metadata, in a single call.
 
-    Closes the most common pre-assign workflow gap: instead of fetching
-    ``list_template_definitions`` then ``list_field_definitions`` and
-    cross-referencing client-side, this returns the template's field
-    list directly with each field's type, constraints, and required
-    flag inlined. Use this BEFORE ``assign_template`` to construct the
-    ``fields`` argument.
+    Use before ``assign_template`` to construct its ``fields`` argument —
+    replaces the list-templates + list-fields + cross-reference chain.
 
-    Args:
-        template_name: Exact template name (case-sensitive on most
-            builds). Use ``list_template_definitions`` to discover
-            available names.
-        required_only: When ``True``, return only fields where
-            ``is_required`` is true. Useful for "what's the minimum I
-            have to supply?" workflows.
-
-    Returns: ``{"template_name": <str>, "template_id": <int>,
-    "field_count": <int>, "fields": [...]}`` where each field has
-    ``name``, ``field_type``, ``is_required``, ``is_multi_value``,
-    ``list_values``, ``default_value``, ``length``, ``constraint``.
-
-    On failure: returns ``{"mode": "error", "error": <slug>, ...}``.
-    Slugs: ``invalid_template_name`` when the template name doesn't
-    exist in the repository (with the list of valid names in the
-    response); ``server_error`` for upstream issues.
+    Returns ``{"template_name", "template_id", "field_count", "fields"}``;
+    each field has ``name``, ``field_type``, ``is_required``,
+    ``is_multi_value``, ``list_values``, ``default_value``, ``constraint``.
+    On failure returns ``{"mode": "error", "error": <slug>}`` —
+    ``invalid_template_name`` includes the list of valid names.
     """
     client = _app.get_client()
     try:
@@ -296,17 +213,16 @@ async def get_template_fields(
         )
     tpl = template_defs.get(template_name)
     if tpl is None:
-        return {
-            "mode": "error",
-            "operation": "get_template_fields",
-            "error": "invalid_template_name",
-            "template_name": template_name,
-            "reason": (
+        return local_error(
+            "get_template_fields",
+            "invalid_template_name",
+            template_name=template_name,
+            reason=(
                 f"Template {template_name!r} is not defined in this "
                 "repository. Match is case-sensitive."
             ),
-            "valid_template_names": sorted(template_defs.keys()),
-        }
+            valid_template_names=sorted(template_defs.keys()),
+        )
     template_field_names = tpl.get("templateFieldNames") or tpl.get("fieldNames") or []
     try:
         field_defs = await client.cached_field_definitions()
@@ -351,24 +267,11 @@ async def list_link_definitions(
     *,
     summary_only: _DEF_SUMMARY_ONLY = False,
 ) -> dict[str, Any]:
-    """List the entry-link type definitions available on this repository.
+    """List the entry-link type definitions on this repository.
 
-    Use before calling ``set_links`` — you need a ``linkTypeId`` from
-    this listing to construct a valid link. Each link type is directed:
-    it has a ``sourceLabel`` (how the relationship reads from the source
-    entry) and a ``targetLabel`` (how it reads from the target).
-
-    Args:
-        max_results: Page size (default 25).
-        skip: 0-indexed offset for pagination.
-        summary_only: If True, return only ``{count, names}``.
-
-    Returns: Server's raw OData listing with ``value``. Each item has
-    ``linkTypeId``, ``sourceLabel``, ``targetLabel``, and
-    ``linkTypeDescription``. Common defaults include ``"Supersedes" /
-    "Superseded by"`` and ``"Attachment" / "Message"``.
-
-    On failure: returns ``{"mode": "error", "error": <slug>, ...}``.
+    Use before ``set_links`` — links need a ``linkTypeId`` from here. Each
+    item has ``linkTypeId``, ``sourceLabel``, ``targetLabel`` (link types
+    are directed). On failure returns ``{"mode": "error", "error": <slug>}``.
     """
     try:
         raw = await _app.get_client().list_link_definitions(
@@ -384,20 +287,12 @@ async def list_link_definitions(
 
 @register(v2_name="laserfiche_audit_reason_list")
 async def get_audit_reasons() -> dict[str, Any]:
-    """Return the audit-reason codes the authenticated user is allowed to supply.
+    """Return the audit-reason codes the authenticated user may supply.
 
-    Use before ``delete_entry`` or ``get_document_edoc`` (with export
-    auditing) when ``LF_REQUIRE_AUDIT_REASON=true`` or when the user is
-    asking for an audited delete. The response is grouped by operation
-    type — pick an ID from the correct group.
-
-    Returns: Dict shaped roughly as ``{"deleteEntry": [{id, name, ...}],
-    "exportDocument": [...], ...}``. Each item has ``id``, ``name``, and
-    ``description``. The ``id`` is what you pass to ``delete_entry`` as
-    ``audit_reason_id``.
-
-    On failure: returns ``{"mode": "error", "error": <slug>, ...}``.
-    Common slugs: ``auth_failed`` if the account isn't permitted to audit.
+    Use before an audited ``delete_entry`` (``LF_REQUIRE_AUDIT_REASON``).
+    Response is grouped by operation type; pass the chosen ``id`` as
+    ``audit_reason_id``. On failure returns ``{"mode": "error", "error":
+    <slug>}``.
     """
     try:
         raw = await _app.get_client().get_audit_reasons()

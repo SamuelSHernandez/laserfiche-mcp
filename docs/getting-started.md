@@ -138,10 +138,17 @@ beneath it, you're connected — each tool shows up twice, once under its
 original verb-first name (`get_entry`) and once under the v2
 `laserfiche_{resource}_{verb}` form (`laserfiche_entry_get`). Both
 resolve to the same function; the old names will be removed in v3.0.
-If `laserfiche` doesn't appear — or shows up red — Claude Desktop
-writes its MCP logs to
-`~/Library/Logs/Claude/mcp-server-laserfiche.log` on macOS, and that's the
-first place to look.
+If `laserfiche` doesn't appear — or shows up red — run
+`uvx laserfiche-mcp diagnose` in a terminal (with the same LF_* values)
+before anything else: it probes the server and tells you whether the
+problem is the URL, the API version, or the credentials. Claude Desktop's
+own MCP logs are at `%APPDATA%\Claude\logs\mcp-server-laserfiche.log`
+on Windows and `~/Library/Logs/Claude/mcp-server-laserfiche.log` on macOS.
+
+> Tool count note: by default each tool shows up under two names. Set
+> `LF_LEGACY_TOOL_NAMES=false` in the `env` block to register only the
+> `laserfiche_*` names — half the catalog, and the behavior v3.0 makes
+> permanent.
 
 For Claude Code instead of Desktop, the equivalent one-liner is:
 
@@ -155,9 +162,22 @@ claude mcp add laserfiche -- uvx laserfiche-mcp \
 
 ## Test it without Claude first
 
-Before you wire the server to a real client, the
-[MCP Inspector](https://github.com/modelcontextprotocol/inspector) is the
-fastest way to verify the tool surface end-to-end:
+The built-in diagnostic needs nothing but your config:
+
+```bash
+uvx laserfiche-mcp diagnose
+```
+
+It authenticates, probes every endpoint, and prints an OK/unavailable
+table. Failures are classified: unreachable server (URL/VPN/TLS), wrong
+`LF_API_VERSION` (it probes the other version and names the right one),
+or genuinely rejected credentials. If you have no config yet,
+`uvx laserfiche-mcp setup` walks you through creating one and ends with
+this same check.
+
+For inspecting the tool surface interactively, the
+[MCP Inspector](https://github.com/modelcontextprotocol/inspector) goes
+deeper (requires Node):
 
 ```bash
 npx @modelcontextprotocol/inspector uvx laserfiche-mcp

@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-14
+
+Merges the local production-hardening / CLI / `ops/` work below with the
+already-published `2.2.0` release (Desktop extension, remote HTTP transport,
+per-user OAuth — see that section immediately below). `2.2.0` is taken on
+PyPI, so this line of work ships as `2.3.0`.
+
+### Security
+
+- **Confirmation tokens are now bound to the operation's parameters, not
+  just its operation + entry.** Previously a token issued for e.g.
+  `delete_pages(page_range="1-2")` would still verify for
+  `delete_pages(page_range="1-9999")` on execute, because only
+  `(operation, entry_id, entry_name)` were signed into the token — a
+  preview/execute mismatch could silently escalate the blast radius of a
+  destructive call. `confirmation.py` now hashes the execute-relevant
+  arguments (`page_range` for `delete_pages`, `new_name` for
+  `rename_entry`, `new_parent_id` + `new_name` for `move_entry`, ...) into
+  the signed payload; a drifted value at execute time fails verification
+  and names the specific parameter that changed. See
+  `src/laserfiche_mcp/confirmation.py`.
+- **`LF_CONFIRMATION_SECRET`** (optional, default unset) reconciled with
+  the `2.2.0` remote HTTP / multi-instance transport: when set, the HMAC
+  signing key is derived from it instead of a random per-process key, so
+  tokens survive restarts and verify across instances sharing the
+  secret — required for a preview and its execute call to land on
+  different `--http` server processes. Unset keeps the safer
+  single-instance default (a restart invalidates pending tokens).
+
+### Added
+
+- **`ops/` package** — deterministic logic shared by the CLI and the MCP
+  tools so the two front ends can't drift: `ops/extract.py` (text
+  extraction: PDF, DOCX, PPTX, EML, HTML, RTF, `text/*`, plus `.xlsx` /
+  Outlook `.msg` via the new `[office]` extra), `ops/find.py` (in-document
+  search), `ops/manifest.py` (folder-tree inventory), `ops/duplicates.py`
+  (byte-identical detection), `ops/compare.py` (entry/field diffing),
+  `ops/content_search.py` (the `/Searches` orchestration lifted out of
+  `tools/content_search.py`), and `ops/pages.py` (`parse_page_spec`).
+- **`search_content` / `laserfiche_entry_search_content`** — full-text
+  search returning matched passages (page, text, match, hit_type,
+  field_name), not just entries. Backed by `client/_search.py`'s
+  `_SearchMixin`, which handles both the v1 and v2 async `/Searches`
+  dialects.
+- **CLI subcommands** with no LLM in the loop: `ls`, `get`, `cat`, `find`,
+  `search`, `manifest`, `dedupe`, `diff` (plus aliases `list`, `download`,
+  `read`, `duplicates`, `compare`), and the `setup` first-run wizard.
+  Backwards compatible — a bare `laserfiche-mcp` still starts the stdio
+  MCP server. All read-only by construction; they never register write
+  tools. Implemented in `cli_commands.py`, wired through `cli.py`
+  alongside the existing `--http`/`--diagnose`/`serve`/`diagnose`
+  handling from `2.2.0`.
+- **`LF_LEGACY_TOOL_NAMES`** (default `true`) — set `false` to skip
+  registering the v1.x verb-first tool aliases, roughly halving the tool
+  catalog the model pays for on every request. Available today; will
+  become the v3.0 default.
+- **Streaming download** — `LaserficheClient.export_entry_to_file()`
+  streams to a `.part` sibling in 64 KB chunks and renames on success, so
+  a 400 MB edoc costs one buffer instead of 400 MB of RSS and a
+  failed/capped transfer never leaves a file that looks complete.
+
+### Changed
+
+- **Tool catalog trimmed ~40%** (docstrings and parameter descriptions) —
+  read-only catalog from ~24,100 to ~14,500 tokens, write-tool docstrings
+  from ~7,700 to ~4,200 per alias set. No behavior change; the
+  preview-then-token contract and its escalations are unchanged.
+- **`get_document_edoc(mode="text")`** now routes non-PDF, non-`text/*`
+  content through `ops/extract`, so DOCX, PPTX, XLSX, EML, HTML and RTF
+  extract instead of dead-ending in `unsupported_content_type`.
+- **`diagnose`** runs its probes with `retry_attempts=0` and classifies
+  the first probe's failure (unreachable vs. wrong API version vs. bad
+  credentials) instead of always blaming LF_USERNAME/LF_PASSWORD.
+- Windows-hostile Laserfiche entry names (`:`, `?`, `"`, ...) are now
+  sanitized wherever they become local file names (CLI `get`, `cat`/`find`
+  scratch downloads, `get_document_edoc(mode="text")` extraction).
+- `smithery.yaml` and `.env.example` caught up with the full config
+  surface (`LF_LEGACY_TOOL_NAMES`, `LF_LOG_FORMAT`, `LF_SEARCH_*`,
+  `LF_CONFIRMATION_SECRET`, and the `2.2.0` HTTP/OAuth settings together).
+
 ## [2.2.0] - 2026-07-09
 
 Distribution and access: a no-terminal install path for end users, and a

@@ -23,6 +23,8 @@ The job of *this* file is:
 
 from __future__ import annotations
 
+import os
+
 from . import permissions
 from ._app import (
     clamp_max_results,
@@ -45,6 +47,7 @@ from .observability import tool_logger
 # Import every tool module so each ``@register`` fires and the registry
 # is populated before _register_read_tools() runs below.
 from .tools import (  # noqa: F401
+    content_search,
     definitions,
     documents,
     natural_search,
@@ -71,11 +74,28 @@ _clamp_max_results = clamp_max_results
 _clamp_search_page_size = clamp_search_page_size
 
 
-def _register_one(spec: ToolSpec) -> None:
-    """Register a single tool under both its legacy and v2 names.
+def _legacy_names_enabled() -> bool:
+    """Whether the v1.x verb-first aliases are registered alongside v2 names.
 
-    Both registrations point at the same function — the v2 name is the
-    recommended path, the legacy name is a deprecation shim through v2.x.
+    Read straight from the environment (not Settings) because read tools
+    register at module import, before configuration is validated. Defaults
+    to true — v2.x promised the legacy names survive until v3.0 — but
+    every duplicate name roughly doubles the tool catalog the model pays
+    for on every request, so token-sensitive deployments should set
+    ``LF_LEGACY_TOOL_NAMES=false`` (the v3.0 behavior, available today).
+    """
+    return os.environ.get("LF_LEGACY_TOOL_NAMES", "true").strip().lower() not in (
+        "false",
+        "0",
+        "no",
+    )
+
+
+def _register_one(spec: ToolSpec) -> None:
+    """Register a single tool under its v2 name, plus the legacy alias.
+
+    The v2 name is the recommended path; the legacy name is a deprecation
+    shim through v2.x, skipped entirely when ``LF_LEGACY_TOOL_NAMES=false``.
 
     The function is wrapped with ``tool_logger`` so every call (regardless
     of which name the agent used) emits one structured log event with a
@@ -84,7 +104,8 @@ def _register_one(spec: ToolSpec) -> None:
     same wrapped function under both names gives one log line per call.
     """
     wrapped = tool_logger(spec.fn)
-    mcp.tool(name=spec.legacy_name)(wrapped)
+    if _legacy_names_enabled():
+        mcp.tool(name=spec.legacy_name)(wrapped)
     mcp.tool(name=spec.v2_name)(wrapped)
 
 

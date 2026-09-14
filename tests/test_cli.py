@@ -9,6 +9,7 @@ hermetic.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from laserfiche_mcp import cli, server
 from laserfiche_mcp.client import LaserficheClient
 from laserfiche_mcp.config import Settings
 from laserfiche_mcp.errors import LaserficheError
-from tests.conftest import _BASE, _StubAuth
+from tests.conftest import _BASE, _BASE_V2, _StubAuth
 
 # --- _parse_args -------------------------------------------------------------
 
@@ -514,3 +515,492 @@ def test_main_keyboard_interrupt_is_swallowed(
 
     monkeypatch.setattr(server, "mcp", _StubMCP())
     cli.main(lambda: None)  # Should NOT raise.
+
+
+# --- subcommand parsing ------------------------------------------------------
+
+
+def test_bare_invocation_still_means_serve() -> None:
+    """Every existing MCP client config launches this binary with no args."""
+    args = cli._parse_args([])
+    assert getattr(args, "command", None) is None
+    assert args.diagnose is False
+
+
+def test_diagnose_flag_and_subcommand_both_parse() -> None:
+    assert cli._parse_args(["--diagnose"]).diagnose is True
+    assert cli._parse_args(["diagnose"]).command == "diagnose"
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["ls", "1"], "ls"),
+        (["get", "42"], "get"),
+        (["cat", "42"], "cat"),
+        (["find", "42", "needle"], "find"),
+        (["search", "unpaid balance"], "search"),
+        (["manifest", "1"], "manifest"),
+        (["dedupe", "1"], "dedupe"),
+        (["diff", "1", "2"], "diff"),
+        (["serve"], "serve"),
+    ],
+)
+def test_every_subcommand_parses(argv: list[str], expected: str) -> None:
+    assert cli._parse_args(argv).command == expected
+
+
+def test_global_verbose_survives_a_following_subcommand() -> None:
+    """Without SUPPRESS defaults the subparser would reset this to 0."""
+    args = cli._parse_args(["-v", "find", "42", "needle"])
+    assert args.verbose == 1
+    assert args.command == "find"
+
+
+def test_config_before_subcommand_is_preserved() -> None:
+    args = cli._parse_args(["--config", ".env.custom", "ls", "1"])
+    assert args.config == ".env.custom"
+
+
+def test_json_flag_defaults_false_and_sets_true() -> None:
+    assert cli._parse_args(["ls", "1"]).json is False
+    assert cli._parse_args(["ls", "1", "--json"]).json is True
+
+
+def test_subcommand_specific_options_parse() -> None:
+    args = cli._parse_args(["find", "42", "x", "--regex", "--context", "80", "--limit", "5"])
+    assert (args.regex, args.context, args.limit) == (True, 80, 5)
+
+
+def test_manifest_format_choice_is_validated() -> None:
+    assert cli._parse_args(["manifest", "1", "--format", "jsonl"]).format == "jsonl"
+    with pytest.raises(SystemExit):
+        cli._parse_args(["manifest", "1", "--format", "xml"])
+
+
+def test_entry_reference_accepts_a_path() -> None:
+    path = r"\HR\Leases\a.pdf"
+    assert cli._parse_args(["cat", path]).entry == path
+
+
+def test_help_text_lists_the_repository_commands() -> None:
+    for name in ("ls", "get", "cat", "find", "search", "manifest", "dedupe", "diff"):
+        assert f"  {name} " in cli._HELP_TEXT
+
+
+# --- diagnose failure classification -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_diagnose_unreachable_does_not_blame_credentials(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Wrong URL / DNS / firewall must not read as a password problem."""
+    monkeypatch.setattr(cli, "build_auth_strategy", lambda _settings: _StubAuth())
+    monkeypatch.setenv("LF_RETRY_ATTEMPTS", "0")
+    settings = Settings()  # type: ignore[call-arg]
+    import httpx
+
+    httpx_mock.add_exception(httpx.ConnectError("connection refused"))
+
+    rc = await cli._run_diagnose(settings)
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "UNREACHABLE" in out
+    assert "not a credentials problem" in out
+    assert "LF_PASSWORD" not in out
+
+
+@pytest.mark.asyncio
+async def test_run_diagnose_404_probes_the_other_api_version(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Wrong LF_API_VERSION: diagnose should name the version that works."""
+    monkeypatch.setattr(cli, "build_auth_strategy", lambda _settings: _StubAuth())
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=1&%24skip=0",
+        status_code=404,
+        json={"title": "Not Found"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE_V2}/FieldDefinitions?%24top=1&%24skip=0",
+        json={"value": []},
+    )
+
+    rc = await cli._run_diagnose(settings)
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "LF_API_VERSION=v2" in out
+
+
+@pytest.mark.asyncio
+async def test_run_diagnose_401_still_points_at_credentials(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "build_auth_strategy", lambda _settings: _StubAuth())
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=1&%24skip=0",
+        status_code=401,
+    )
+
+    rc = await cli._run_diagnose(settings)
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "LF_USERNAME / LF_PASSWORD" in out
+    assert "9528" in out  # the misleading LF error code is called out
+
+
+# --- setup wizard -------------------------------------------------------------
+
+
+def test_setup_writes_user_env_and_runs_diagnose(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    user_env = tmp_path / ".laserfiche-mcp" / ".env"
+    monkeypatch.setattr(cli, "USER_ENV_PATH", user_env)
+
+    answers = iter(
+        [
+            "https://lf.example.test/LFRepositoryAPI",  # url
+            "demo",  # repo
+            "svc-account",  # username
+            "",  # api version -> default v1
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    import getpass
+
+    monkeypatch.setattr(getpass, "getpass", lambda _prompt: "s3cret")
+
+    async def fake_diagnose(settings):
+        assert settings.repository_id == "demo"
+        return 0
+
+    monkeypatch.setattr(cli, "_run_diagnose", fake_diagnose)
+
+    rc = cli._run_setup()
+
+    assert rc == 0
+    written = user_env.read_text(encoding="utf-8")
+    assert "LF_REPO_API_URL=https://lf.example.test/LFRepositoryAPI" in written
+    assert "LF_PASSWORD=s3cret" in written
+    assert "LF_API_VERSION=v1" in written
+    out = capsys.readouterr().out
+    assert "You're connected" in out
+
+
+def test_setup_cancelled_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    user_env = tmp_path / ".laserfiche-mcp" / ".env"
+    monkeypatch.setattr(cli, "USER_ENV_PATH", user_env)
+
+    def interrupt(_prompt):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", interrupt)
+
+    rc = cli._run_setup()
+
+    assert rc == 1
+    assert not user_env.exists()
+    assert "nothing was written" in capsys.readouterr().out
+
+
+def test_user_env_fallback_only_when_nothing_else_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    user_env = tmp_path / ".laserfiche-mcp" / ".env"
+    user_env.parent.mkdir(parents=True)
+    user_env.write_text("LF_REPOSITORY_ID=from-user-level\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "USER_ENV_PATH", user_env)
+    monkeypatch.chdir(tmp_path)  # no ./.env here
+
+    # Case 1: explicit env var present -> user-level file must NOT load.
+    monkeypatch.setenv("LF_REPO_API_URL", "https://explicit.example.test/api")
+    monkeypatch.delenv("LF_REPOSITORY_ID", raising=False)
+    cli._load_user_env_if_unconfigured()
+    assert os.environ.get("LF_REPOSITORY_ID") != "from-user-level"
+
+    # Case 2: nothing configured -> it loads.
+    monkeypatch.delenv("LF_REPO_API_URL", raising=False)
+    cli._load_user_env_if_unconfigured()
+    assert os.environ.get("LF_REPOSITORY_ID") == "from-user-level"
+
+
+# --- command aliases ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    [
+        ("list", "ls"),
+        ("download", "get"),
+        ("read", "cat"),
+        ("compare", "diff"),
+        ("duplicates", "dedupe"),
+    ],
+)
+def test_office_friendly_aliases_parse(alias: str, canonical: str) -> None:
+    from laserfiche_mcp.cli_commands import COMMAND_ALIASES
+
+    argv = {
+        "ls": [alias, "1"],
+        "get": [alias, "1"],
+        "cat": [alias, "1"],
+        "diff": [alias, "1", "2"],
+        "dedupe": [alias, "1"],
+    }[canonical]
+    args = cli._parse_args(argv)
+    assert args.command == alias
+    assert COMMAND_ALIASES[alias] == canonical
+
+
+def test_setup_subcommand_parses() -> None:
+    assert cli._parse_args(["setup"]).command == "setup"
+
+
+# --- diagnose speed: probes must not inherit the retry policy ----------------
+
+
+@pytest.mark.asyncio
+async def test_diagnose_probes_with_zero_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """diagnose exists to give a fast verdict; with the configured backoff
+    (up to 10 retries) an unreachable server would stall it for minutes."""
+    captured: dict[str, Any] = {}
+
+    class _RecordingClient:
+        def __init__(self, settings: Settings, auth: Any) -> None:
+            captured["settings"] = settings
+
+        async def __aenter__(self) -> _RecordingClient:
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+        async def list_field_definitions(self, max_results: int = 1) -> None:
+            raise LaserficheError("connect timeout")  # no status: unreachable
+
+    monkeypatch.setenv("LF_RETRY_ATTEMPTS", "5")
+    monkeypatch.setattr(cli, "LaserficheClient", _RecordingClient)
+    monkeypatch.setattr(cli, "build_auth_strategy", lambda _s: object())
+
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.retry_attempts == 5
+
+    rc = await cli._run_diagnose(settings)
+
+    assert rc == 1
+    assert captured["settings"].retry_attempts == 0
+    assert "UNREACHABLE" in capsys.readouterr().out
+
+
+# --- setup wizard hardening ---------------------------------------------------
+
+
+def test_url_problem_flags_bare_hostname_and_paths() -> None:
+    assert cli._url_problem("lf.example.org") is not None
+    assert cli._url_problem(r"\\server\share") is not None
+    assert cli._url_problem("ftp://lf.example.org") is not None
+    assert cli._url_problem("https://") is not None
+    assert cli._url_problem("https://lf.example.org/LFRepositoryAPI") is None
+    assert cli._url_problem("http://10.0.0.5/LFRepositoryAPI") is None
+
+
+def test_env_quote_passes_simple_values_through() -> None:
+    assert cli._env_quote("v1") == "v1"
+    assert cli._env_quote("https://lf.example.org/LFRepositoryAPI") == (
+        "https://lf.example.org/LFRepositoryAPI"
+    )
+
+
+def test_env_quote_round_trips_awkward_passwords(tmp_path: Path) -> None:
+    """A password with spaces, '#', quotes, or backslashes must survive the
+    write-then-parse cycle python-dotenv (and pydantic-settings) apply."""
+    from dotenv import dotenv_values
+
+    awkward = 'p4$s back\\slash#1 "quoted"'
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"LF_PASSWORD={cli._env_quote(awkward)}\n", encoding="utf-8")
+
+    assert dotenv_values(env_file)["LF_PASSWORD"] == awkward
+
+
+def test_setup_declines_to_overwrite_existing_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    user_env = tmp_path / ".laserfiche-mcp" / ".env"
+    user_env.parent.mkdir(parents=True)
+    user_env.write_text("LF_REPOSITORY_ID=keep-me\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "USER_ENV_PATH", user_env)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+
+    rc = cli._run_setup()
+
+    assert rc == 0
+    assert user_env.read_text(encoding="utf-8") == "LF_REPOSITORY_ID=keep-me\n"
+    assert "nothing was changed" in capsys.readouterr().out
+
+
+def test_setup_overwrites_after_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    user_env = tmp_path / ".laserfiche-mcp" / ".env"
+    user_env.parent.mkdir(parents=True)
+    user_env.write_text("LF_REPOSITORY_ID=old\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "USER_ENV_PATH", user_env)
+
+    answers = iter(
+        [
+            "y",  # overwrite?
+            "https://lf.example.test/LFRepositoryAPI",
+            "demo",
+            "svc-account",
+            "",  # api version -> default
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    import getpass
+
+    monkeypatch.setattr(getpass, "getpass", lambda _prompt: "s3cret")
+
+    async def fake_diagnose(_settings: Settings) -> int:
+        return 0
+
+    monkeypatch.setattr(cli, "_run_diagnose", fake_diagnose)
+
+    rc = cli._run_setup()
+
+    assert rc == 0
+    assert "LF_REPOSITORY_ID=demo" in user_env.read_text(encoding="utf-8")
+
+
+def test_setup_reprompts_on_invalid_url(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    user_env = tmp_path / ".laserfiche-mcp" / ".env"
+    monkeypatch.setattr(cli, "USER_ENV_PATH", user_env)
+
+    answers = iter(
+        [
+            "lf.example.test",  # bare hostname — rejected, re-prompted
+            "https://lf.example.test/LFRepositoryAPI",
+            "demo",
+            "svc-account",
+            "",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    import getpass
+
+    monkeypatch.setattr(getpass, "getpass", lambda _prompt: "s3cret")
+
+    async def fake_diagnose(_settings: Settings) -> int:
+        return 0
+
+    monkeypatch.setattr(cli, "_run_diagnose", fake_diagnose)
+
+    rc = cli._run_setup()
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "http://" in out  # the objection names the expected scheme
+    assert "LF_REPO_API_URL=https://lf.example.test/LFRepositoryAPI" in user_env.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_setup_quotes_awkward_password_in_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dotenv import dotenv_values
+
+    user_env = tmp_path / ".laserfiche-mcp" / ".env"
+    monkeypatch.setattr(cli, "USER_ENV_PATH", user_env)
+
+    answers = iter(
+        [
+            "https://lf.example.test/LFRepositoryAPI",
+            "demo",
+            "svc-account",
+            "",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    import getpass
+
+    monkeypatch.setattr(getpass, "getpass", lambda _prompt: "pa ss#word")
+
+    async def fake_diagnose(_settings: Settings) -> int:
+        return 0
+
+    monkeypatch.setattr(cli, "_run_diagnose", fake_diagnose)
+
+    rc = cli._run_setup()
+
+    assert rc == 0
+    assert dotenv_values(user_env)["LF_PASSWORD"] == "pa ss#word"
+
+
+def test_setup_insists_on_a_nonempty_password(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    user_env = tmp_path / ".laserfiche-mcp" / ".env"
+    monkeypatch.setattr(cli, "USER_ENV_PATH", user_env)
+
+    answers = iter(
+        [
+            "https://lf.example.test/LFRepositoryAPI",
+            "demo",
+            "svc-account",
+            "",  # api version default
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    import getpass
+
+    passwords = iter(["", "   ", "finally-a-password"])
+    monkeypatch.setattr(getpass, "getpass", lambda _prompt: next(passwords))
+
+    async def fake_diagnose(_settings: Settings) -> int:
+        return 0
+
+    monkeypatch.setattr(cli, "_run_diagnose", fake_diagnose)
+
+    rc = cli._run_setup()
+
+    assert rc == 0
+    assert "A value is required" in capsys.readouterr().out
+    assert "finally-a-password" in user_env.read_text(encoding="utf-8")

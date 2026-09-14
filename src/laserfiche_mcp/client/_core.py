@@ -10,8 +10,10 @@ can call those primitives directly.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import warnings
+from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import urljoin
 
@@ -117,7 +119,15 @@ class _CoreClient:
             try:
                 await self._auth.apply(request)
                 response = await self._http.send(request)
-            except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as exc:
+            # TimeoutException is a sibling of ConnectError under TransportError,
+            # not a subclass — without it a cold-starting server's first request
+            # failed outright instead of being retried.
+            except (
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.RemoteProtocolError,
+                httpx.TimeoutException,
+            ) as exc:
                 last_exc = exc
                 if attempt + 1 >= attempts:
                     break
@@ -222,6 +232,53 @@ class _CoreClient:
             )
         return response.content, response.headers.get("content-type")
 
+    async def _request_meta_only(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None = None,
+    ) -> tuple[int | None, str | None]:
+        """Open a response, read its headers, and close without buffering the body.
+
+        Returns ``(content_length, content_type)``; ``content_length`` is
+        ``None`` when the server answers with chunked encoding and omits the
+        header. Used by ``mode='info'`` so probing the size of a 400 MB edoc
+        costs a request round-trip instead of a 400 MB transfer.
+
+        This deliberately bypasses ``_send``: streaming responses can't be
+        replayed through that retry loop, and a metadata probe is cheap
+        enough to retry at the caller's level.
+        """
+        if self._http is None:
+            raise RuntimeError("LaserficheClient must be used as an async context manager.")
+
+        request = self._http.build_request(method, url, json=json)
+        await self._auth.apply(request)
+        try:
+            response = await self._http.send(request, stream=True)
+        except httpx.HTTPError as exc:
+            raise LaserficheError(f"Network error probing {method} {url}: {exc!r}") from exc
+
+        try:
+            if response.status_code >= 400:
+                # Error bodies are small — read this one so the message is useful.
+                await response.aread()
+                try:
+                    detail: object = response.json()
+                except ValueError:
+                    detail = response.text
+                raise LaserficheError(
+                    f"Laserfiche API error {response.status_code}: {detail}",
+                    status_code=response.status_code,
+                    detail=detail,
+                )
+            raw_length = response.headers.get("content-length")
+            length = int(raw_length) if raw_length is not None and raw_length.isdigit() else None
+            return length, response.headers.get("content-type")
+        finally:
+            await response.aclose()
+
     # --- Cache helper (used by _DefinitionsMixin) -------------------------
 
     def _cache_alive(
@@ -237,3 +294,93 @@ class _CoreClient:
         if time.monotonic() >= expiry:
             return None
         return value
+
+    async def _request_stream_to_file(
+        self,
+        method: str,
+        url: str,
+        dest: Path,
+        *,
+        json: dict[str, Any] | None = None,
+        max_bytes: int | None = None,
+        chunk_size: int = 65536,
+    ) -> tuple[int, str | None, str]:
+        """Stream a response body straight to disk. Returns (bytes, type, sha256).
+
+        The point is that the body never lands in memory — a 400 MB edoc costs
+        one 64 KB buffer, not 400 MB of RSS, and never passes through a tool
+        result. ``_request_bytes_with_meta`` buffers the whole response and is
+        the wrong primitive for anything large.
+
+        Writes to a ``.part`` sibling and renames on success, so a failed or
+        aborted transfer never leaves a truncated file that looks complete.
+
+        ``max_bytes`` is enforced twice: once against Content-Length before a
+        single byte is written, and again against the running total for servers
+        that stream without declaring a length. Exceeding it raises
+        ``LaserficheError`` with ``size_exceeds_cap`` in the message and
+        deletes the partial file.
+
+        Like ``_request_meta_only``, this bypasses ``_send``'s retry loop —
+        a partially-consumed stream can't be replayed.
+        """
+        if self._http is None:
+            raise RuntimeError("LaserficheClient must be used as an async context manager.")
+
+        request = self._http.build_request(method, url, json=json)
+        await self._auth.apply(request)
+        try:
+            response = await self._http.send(request, stream=True)
+        except httpx.HTTPError as exc:
+            raise LaserficheError(f"Network error streaming {method} {url}: {exc!r}") from exc
+
+        partial = dest.with_name(dest.name + ".part")
+        digest = hashlib.sha256()
+        written = 0
+
+        try:
+            if response.status_code >= 400:
+                await response.aread()
+                try:
+                    detail: object = response.json()
+                except ValueError:
+                    detail = response.text
+                raise LaserficheError(
+                    f"Laserfiche API error {response.status_code}: {detail}",
+                    status_code=response.status_code,
+                    detail=detail,
+                )
+
+            content_type = response.headers.get("content-type")
+            declared = response.headers.get("content-length")
+            if (
+                max_bytes is not None
+                and declared is not None
+                and declared.isdigit()
+                and int(declared) > max_bytes
+            ):
+                raise LaserficheError(
+                    f"size_exceeds_cap: edoc is {int(declared)} bytes, over the "
+                    f"{max_bytes}-byte cap. Raise max_bytes to download it."
+                )
+
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with partial.open("wb") as handle:
+                async for chunk in response.aiter_bytes(chunk_size):
+                    written += len(chunk)
+                    if max_bytes is not None and written > max_bytes:
+                        raise LaserficheError(
+                            f"size_exceeds_cap: transfer passed the {max_bytes}-byte "
+                            "cap (server declared no Content-Length). Raise max_bytes "
+                            "to download it."
+                        )
+                    digest.update(chunk)
+                    handle.write(chunk)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+        finally:
+            await response.aclose()
+
+        partial.replace(dest)
+        return written, content_type, digest.hexdigest()

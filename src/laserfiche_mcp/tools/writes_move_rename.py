@@ -28,7 +28,11 @@ def _rename_preview(
     current_name: str,
 ) -> dict[str, Any]:
     """Build the ``mode: preview`` response for ``rename_entry``."""
-    token = confirmation.create_token("rename_entry", entry_id, current_name)
+    # Bind new_name: the user confirms renaming to THIS name, so an
+    # execute call with a different new_name must fail token verification.
+    token = confirmation.create_token(
+        "rename_entry", entry_id, current_name, params={"new_name": new_name}
+    )
     current_path = entry.get("fullPath") or entry.get("FullPath") or ""
     folder_path = entry.get("folderPath") or entry.get("FolderPath")
     if folder_path:
@@ -85,68 +89,27 @@ async def rename_entry(
             default=None,
             description=(
                 "From the preview response. HMAC-signed, 5-minute TTL, "
-                "bound to (operation, entry_id, current_name). Omit to get "
-                "a fresh preview; pass to execute."
+                "bound to (operation, entry_id, current_name, new_name). "
+                "Omit to get a fresh preview; pass to execute with the SAME "
+                "new_name that was previewed."
             ),
         ),
     ] = None,
 ) -> dict[str, Any]:
     """Rename an entry. **Two-step: preview first, then execute with token.**
 
-    Renaming changes the entry's name AND its ``fullPath``. External
-    references (shortcuts, links from other entries, deep links into the
-    web client, hardcoded paths in workflows) break — read the preview's
-    ``would_be_full_path`` carefully and confirm with the user before
-    passing the token back.
+    Renaming changes the entry's ``fullPath``; external references break.
 
-    **Step 1 — preview**
-        Call with ``confirmation_token=None`` (omitted). Response:
+    Step 1: call without ``confirmation_token`` -> ``mode="preview"`` with
+    ``current_full_path``, ``would_be_full_path`` and a 5-minute token
+    bound to (operation, entry_id, current name). **Surface the would-be
+    path to the user — never silently round-trip both calls.**
 
-        ```json
-        {
-          "mode": "preview",
-          "operation": "rename_entry",
-          "entry_id": 84493,
-          "current_name": "probe.txt",
-          "new_name": "probe-final.txt",
-          "current_full_path": "\\Sandbox\\probe.txt",
-          "would_be_full_path": "\\Sandbox\\probe-final.txt",
-          "entry_type": "Document",
-          "warning": "Renaming changes the entry's full path ...",
-          "confirmation_token": "<opaque base64>",
-          "ttl_seconds": 300,
-          "next_step": "Surface this preview ..."
-        }
-        ```
+    Step 2: re-call with the same args plus the token -> ``mode="executed"``
+    with the updated entry.
 
-        Surface the preview to the user. Do NOT silently round-trip both
-        calls without showing the user the would-be path.
-
-    **Step 2 — execute**
-        Re-call with the same ``entry_id``, the same ``new_name``, and
-        the ``confirmation_token`` from step 1. Returns
-        ``{"mode": "executed", ..., "result": <updated entry>}``.
-
-    Args:
-        entry_id: Integer entry ID.
-        new_name: New name. Path-safe (no backslashes).
-        confirmation_token: From the preview response. HMAC-signed and
-            bound to ``(operation, entry_id, current entry name)`` — a
-            token can't be replayed for a different entry. Expires after
-            5 minutes; server restart invalidates all pending tokens.
-
-    Returns: On preview, ``{"mode": "preview", "confirmation_token": <str>,
-    "current_full_path": ..., "would_be_full_path": ..., ...}``.
-    On execute, ``{"mode": "executed", "entry_id": <int>, "old_name":
-    <str>, "new_name": <str>, "result": <updated entry>}``.
-
-    Pre-server errors (returned before the API call):
-        - ``path_not_allowed`` — entry's path outside the allow list.
-        - ``invalid_confirmation_token`` — token expired, tampered, or
-          for a different entry. Re-run step 1 to get a fresh one.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "entry_id": <int>, "new_name": <str>, ...}``. Common slugs:
+    Pre-server errors: ``path_not_allowed``, ``invalid_confirmation_token``
+    (expired/tampered/wrong entry — redo step 1). Server slugs:
     ``not_found``, ``auth_failed``.
     """
     require_writes_enabled()
@@ -170,6 +133,7 @@ async def rename_entry(
         "rename_entry",
         entry_id,
         current_name,
+        params={"new_name": new_name},
     )
     if not ok:
         return invalid_token_response("rename_entry", entry_id, reason)
@@ -202,7 +166,15 @@ def _move_preview(
     target_path: str,
 ) -> dict[str, Any]:
     """Build the ``mode: preview`` response for ``move_entry``."""
-    token = confirmation.create_token("move_entry", entry_id, current_name)
+    # Bind the destination (and optional rename): the user confirms moving
+    # to THIS folder under THIS name, so an execute call with a different
+    # new_parent_id or new_name must fail token verification.
+    token = confirmation.create_token(
+        "move_entry",
+        entry_id,
+        current_name,
+        params={"new_parent_id": new_parent_id, "new_name": new_name},
+    )
     final_name = new_name or current_name
     would_be_path = f"{target_path}\\{final_name}".rstrip("\\") if target_path else final_name
     return {
@@ -266,47 +238,18 @@ async def move_entry(
 ) -> dict[str, Any]:
     """Move an entry to a different parent folder. **Two-step: preview, then execute.**
 
-    Same path-change risks as ``rename_entry`` — external references
-    break when the entry's ``fullPath`` changes. Folder moves carry the
-    whole subtree along, so the blast radius is the whole subtree's
-    descendant paths.
+    Changes ``fullPath`` (folders carry their whole subtree); external
+    references break. The path fence checks BOTH source and destination —
+    the destination is re-checked on the execute leg.
 
-    **Step 1 — preview**
-        Call with ``confirmation_token=None``. Response includes
-        ``current_full_path`` and ``would_be_full_path`` (computed from
-        the destination parent), plus an HMAC-signed
-        ``confirmation_token`` valid for 5 minutes. Surface to the user.
+    Step 1: call without ``confirmation_token`` -> preview with
+    ``current_full_path``, ``would_be_full_path``, 5-minute token. Surface
+    to the user. Step 2: re-call with the token; optional ``new_name``
+    renames in the same operation.
 
-    **Step 2 — execute**
-        Re-call with the same arguments plus the token.
-
-    **Path-fence note**: the path check runs on BOTH the source AND the
-    destination. A token issued for an allowed source path cannot be
-    replayed to land in a denied destination — the destination's path is
-    refetched on the execute leg and checked again.
-
-    Args:
-        entry_id: Integer entry ID of the entry to move.
-        new_parent_id: Integer entry ID of the destination folder.
-        new_name: Optional rename to apply in the same operation. If
-            omitted, the entry keeps its current name in the new
-            location. Path-safe (no backslashes).
-        confirmation_token: From the preview response. HMAC-signed,
-            5-minute TTL, server-restart-invalidating.
-
-    Returns: On preview, ``{"mode": "preview", "confirmation_token": <str>,
-    "current_full_path": ..., "would_be_full_path": ..., ...}``.
-    On execute, ``{"mode": "executed", "entry_id": <int>, "old_name":
-    <str>, "new_parent_id": <int>, "new_name": <str>, "result": <updated entry>}``.
-
-    Pre-server errors (returned before the API call):
-        - ``path_not_allowed`` — source OR destination falls outside
-          the allow list.
-        - ``invalid_confirmation_token`` — token expired or tampered.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "entry_id": <int>, "new_parent_id": <int>, ...}``. Common slugs:
-    ``not_found`` (entry or destination doesn't exist), ``auth_failed``.
+    Pre-server errors: ``path_not_allowed`` (source or destination),
+    ``invalid_confirmation_token``. Server slugs: ``not_found``,
+    ``auth_failed``.
     """
     require_writes_enabled()
     if new_name is not None:
@@ -327,9 +270,10 @@ async def move_entry(
     current_name = entry_name(entry)
 
     # Also fence on the destination — moving an allowed-path entry into
-    # a denied folder is still a write-into-deny-zone. The destination's
-    # path is refetched on the execute leg so a token issued for one
-    # destination can't be replayed to land in a different one.
+    # a denied folder is still a write-into-deny-zone. This fence runs on
+    # both legs; the guarantee that the execute leg lands in the SAME
+    # destination the user previewed comes from the token's parameter
+    # binding on (new_parent_id, new_name), checked below.
     try:
         target = await _app.get_client().get_entry(new_parent_id)
         target_path = target.get("fullPath") or target.get("FullPath") or ""
@@ -348,6 +292,7 @@ async def move_entry(
         "move_entry",
         entry_id,
         current_name,
+        params={"new_parent_id": new_parent_id, "new_name": new_name},
     )
     if not ok:
         return invalid_token_response("move_entry", entry_id, reason)

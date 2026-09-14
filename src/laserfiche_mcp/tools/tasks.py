@@ -17,10 +17,8 @@ _OPERATION_TOKEN = Annotated[
     Field(
         description=(
             "Operation token returned by an async tool (delete_entry, "
-            "copy_entry, occasionally import_document). Server-scoped; "
-            "tokens from a different server instance won't resolve."
+            "copy_entry, sometimes import_document)."
         ),
-        examples=["op-12345-abcd", "task-9f2c-7c1e"],
         min_length=1,
     ),
 ]
@@ -30,28 +28,14 @@ _OPERATION_TOKEN = Annotated[
 async def get_task_status(operation_token: _OPERATION_TOKEN) -> dict[str, Any]:
     """Look up the status of an async operation by its token.
 
-    The async tools (``delete_entry``, ``copy_entry``, sometimes
-    ``import_document``) return an ``operation_token`` instead of the
-    final result — call this to check whether the operation finished.
-    For "wait until done" semantics, use ``wait_for_task`` instead so
-    you don't have to write a polling loop.
+    Async tools (``delete_entry``, ``copy_entry``, sometimes
+    ``import_document``) return an ``operation_token``; call this to check
+    progress, or ``wait_for_task`` for wait-until-done semantics.
 
-    Args:
-        operation_token: The string token returned by the originating
-            async tool.
-
-    Returns: Server's task payload — ``operationToken``,
-    ``operationType``, ``percentComplete``, ``status`` (one of
-    ``NotStarted``, ``InProgress``, ``Completed``, ``Failed``,
-    ``Canceled``), ``redirectUri`` (set when the op produced a new
-    entry, e.g. after a copy), ``entryId`` (the resulting entry's ID
-    when applicable), ``errors`` (list — empty on success), and
-    timestamps.
-
-    On failure: returns ``{"mode": "error", "error": <slug>,
-    "operation_token": <str>, ...}``. Common slugs: ``not_found``
-    (token unknown — usually expired or from a different server
-    instance), ``auth_failed``.
+    Returns the server's task payload (``status`` of NotStarted/InProgress/
+    Completed/Failed/Canceled, ``percentComplete``, ``entryId`` when a new
+    entry resulted, ``errors``). On failure returns ``{"mode": "error",
+    "error": <slug>}`` (``not_found`` = token expired or wrong server).
     """
     try:
         raw = await _app.get_client().get_task_status(operation_token)
@@ -71,11 +55,7 @@ async def wait_for_task(
         int,
         Field(
             default=60,
-            description=(
-                "Maximum time to wait. Set higher for large folder deletes "
-                "or large copies. Returns the last observed status with "
-                "timed_out=True if the deadline is reached."
-            ),
+            description="Maximum wait; on deadline the last status returns with timed_out=true.",
             ge=1,
             le=3600,
         ),
@@ -92,27 +72,10 @@ async def wait_for_task(
 ) -> dict[str, Any]:
     """Block until an async operation reaches a terminal state.
 
-    Preferred over manual polling with ``get_task_status``. Returns
-    quickly when the op is fast; otherwise polls at ``poll_interval_seconds``
-    until ``Completed``, ``Failed``, or ``Canceled`` — or until
-    ``timeout_seconds`` is reached, in which case the last observed
-    status is returned with ``timed_out=true`` so the caller can decide
-    whether to keep waiting.
-
-    Args:
-        operation_token: Token from the originating async tool.
-        timeout_seconds: Maximum time to wait (default 60). Set higher
-            for large folder deletes or large copies.
-        poll_interval_seconds: Delay between status checks (default 1.0).
-            Bounded below at 0.1s.
-
-    Returns: Same payload as ``get_task_status``, with an added
-    ``timed_out`` boolean indicating whether the wait ended on timeout.
-
-    On failure: if a poll call fails mid-wait, returns
-    ``{"mode": "error", "error": <slug>, "operation_token": <str>, ...}``.
-    Common slugs: ``not_found`` (token invalidated by server restart),
-    ``auth_failed``.
+    Preferred over manual polling. Returns the same payload as
+    ``get_task_status`` plus ``timed_out`` — true when ``timeout_seconds``
+    elapsed first, so the caller can decide whether to keep waiting.
+    On a failed poll returns ``{"mode": "error", "error": <slug>}``.
     """
     deadline = time.monotonic() + max(1, timeout_seconds)
     last: dict[str, Any] = {}

@@ -24,6 +24,25 @@ Name search (case-insensitive, wildcards * and ?):
   {LF:Name="*.pdf"}
   {LF:Name="Smith?Jane"}
 
+Content search — searches INSIDE documents, including OCR'd text:
+  {LF:Basic~="unpaid balance"}
+  {LF:Basic~="Windham Ave",option="DFANLT"}
+
+  Use this whenever the user asks about what a document *says* rather
+  than what it is named. Name= only matches filenames and will miss
+  every document whose text mentions the term.
+
+  The `option` string selects which content is searched:
+    D = document text (the full-text / OCR index)
+    F = field values
+    A = annotation text
+    N = entry name
+    L = allow a leading wildcard    T = allow a trailing wildcard
+  Omitting `option` searches D, F, A and N with no added wildcards.
+  Pass option="D" to search only OCR'd document text and nothing else.
+
+  `~=` is the operator for LF:Basic clauses (not `=`).
+
 Path scoping (limits the search to a folder subtree):
   {LF:LookIn="\\\\Imports\\\\2024"}
 
@@ -34,6 +53,7 @@ Template field search (template name and field name in their own brackets):
 Combined:
   {LF:Name="*.pdf"} & {[Application]:[Status]="Approved"}
   {LF:LookIn="\\\\HR"} & {[Personnel]:[Hire Year]=2025}
+  {LF:Basic~="termination",option="D"} & {LF:LookIn="\\\\HR"}
 
 Quoting:
   Double quotes are required around string values.
@@ -58,8 +78,13 @@ def repair_escape_quotes(query: str) -> str | None:
 
     Returns the rewritten query, or ``None`` if no change was needed. A
     closing quote is recognized when followed (after optional whitespace) by
-    ``}``, ``&``, ``|`` or end-of-string — anything else inside the value
-    span is treated as content and escaped.
+    ``}``, ``&``, ``|``, ``,`` or end-of-string — anything else inside the
+    value span is treated as content and escaped.
+
+    ``,`` is in that set because a clause may carry trailing arguments after
+    the value, as in ``{LF:Basic~="unpaid balance",option="DFANLT"}``.
+    Without it the comma reads as content, the closing quote gets escaped,
+    and the repair pass corrupts a query that was valid to begin with.
 
     The walk is intentionally a hand-rolled state machine, not a regex,
     because the closing-quote heuristic depends on lookahead context.
@@ -96,7 +121,7 @@ def repair_escape_quotes(query: str) -> str | None:
             j = i + 1
             while j < n and query[j] == " ":
                 j += 1
-            if j == n or query[j] in "}&|":
+            if j == n or query[j] in "}&|,":
                 out.append('"')
                 in_value = False
                 i += 1

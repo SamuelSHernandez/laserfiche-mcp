@@ -11,13 +11,34 @@
 > **Community project — not affiliated with or endorsed by Laserfiche.**
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that lets
-Claude (Desktop, Code, or any MCP client) search and read documents in a
-[Laserfiche](https://www.laserfiche.com) repository.
+Claude (Desktop, Code, or any MCP client) search, read, and — when you opt
+in — write documents in a self-hosted
+[Laserfiche](https://www.laserfiche.com) repository. The same binary is
+also a full command-line client (`ls`, `get`, `cat`, `search`, `manifest`,
+`dedupe`, ...) for the deterministic work that needs no model at all.
 
-Current release **v2.2.0** — read and write tools for self-hosted Repository
-API v1 and v2, a one-click Claude Desktop extension, and an optional remote HTTP
-transport with per-user OAuth for web clients. See the [changelog](CHANGELOG.md)
-for detail and the [roadmap](#roadmap) for what's next.
+Current release **v2.3.0** — read and write tools for self-hosted Repository
+API v1 and v2, a one-click Claude Desktop extension, an optional remote HTTP
+transport with per-user OAuth for web clients, and a full CLI (`ls`, `get`,
+`cat`, `search`, `manifest`, `dedupe`, ...) for the deterministic work that
+needs no model at all. Read-only by default; write tools register only with
+`LF_READ_ONLY=false` and are guarded by path fences and a two-step,
+parameter-bound confirmation flow. See the [CHANGELOG](CHANGELOG.md) for
+per-release notes and the [roadmap](#roadmap) for what's next.
+
+## Quick start
+
+```bash
+uv tool install laserfiche-mcp   # or run ad hoc: uvx laserfiche-mcp
+laserfiche-mcp setup             # wizard: server URL + account, then verifies the connection
+laserfiche-mcp ls 1              # you're in — list the repository root
+```
+
+Then wire it into your MCP client — see
+[Claude Desktop](#connect-to-claude-desktop) and
+[Claude Code](#connect-to-claude-code) below. Prefer environment variables
+over the wizard? See [Configure](#configure). Want a no-terminal install
+instead? See the [Claude Desktop extension](#for-everyone--the-claude-desktop-extension).
 
 ## What you can do with it
 
@@ -27,14 +48,14 @@ Once connected, Claude can:
 
 - Search the repository with native Laserfiche search syntax, by name pattern, or via the LLM-friendly `search_natural` flow (asks the server for templates first, then runs with automatic 400 repair)
 - List the contents of any folder, look up an entry by ID or path, read all template field values, list field/tag/template/link definitions and audit reasons
-- Inspect document metadata, fetch the raw edoc as base64, or extract text server-side (PDF via pypdf) — all via `get_document_edoc(..., mode=...)`
+- Inspect document metadata, fetch the raw edoc as base64, or extract text locally (PDF, DOCX, PPTX, XLSX, EML, HTML, RTF, `text/*`) — all via `get_document_edoc(..., mode=...)`
 
 **Write** (opt-in via `LF_READ_ONLY=false`):
 
 - Create folders, import documents, copy entries (async), rename and move entries
 - Set, merge, and clear fields, tags, and links on an entry
 - Assign and remove templates — with optional client-side validation of repository-required fields before the API call
-- Delete entries (folders cascade), edocs, and specific page ranges — all with a two-step preview→confirm-token flow, HMAC-signed and bound to operation + entry, expiring after 5 minutes
+- Delete entries (folders cascade), edocs, and specific page ranges — all with a two-step preview→confirm-token flow, HMAC-signed and bound to operation + entry + the operation's own parameters, expiring after 5 minutes
 
 **Operate safely** — every write checks the entry's path against
 `LF_WRITE_PATHS_ALLOW` / `LF_WRITE_PATHS_DENY`, folder deletes refuse
@@ -118,7 +139,7 @@ Minimum required variables for self-hosted password-grant auth:
 | `LF_AUTH_MODE`       | `password`                                    |
 | `LF_READ_ONLY`       | `true` (default — see Writes section below)   |
 
-**Optional write-mode variables** (all default off; see the [Safety model](#safety-model) section for context):
+**Optional write-mode variables** (fences and allowlists default off; the delete batch cap and required-field validation default on — see the [Safety model](#safety-model) section for context):
 
 | Variable                            | Default | Purpose                                                                          |
 | ----------------------------------- | ------- | -------------------------------------------------------------------------------- |
@@ -133,6 +154,12 @@ Minimum required variables for self-hosted password-grant auth:
 | `LF_SCHEMA_CACHE_TTL_SECONDS`       | `300`   | Cache window for the schema-definition lookups that back `LF_VALIDATE_NAMES` and `LF_VALIDATE_REQUIRED_FIELDS`. Set to `0` to disable caching. |
 | `LF_IMPORT_MAX_BYTES`               | `25 MB` | Client-side cap on `import_document` payload size                                |
 | `LF_EDOC_MAX_BYTES`                 | `25 MB` | Cap on `get_document_edoc` downloads in `bytes`/`text` modes                     |
+| `LF_SEARCH_TIMEOUT_SECONDS`         | `60`    | How long `search_content` waits for an async search before abandoning it         |
+| `LF_SEARCH_POLL_INTERVAL_SECONDS`   | `1`     | Delay between `search_content` status polls; backs off toward 2s on long searches |
+| `LF_SEARCH_CONTEXT_HITS_MAX`        | `10`    | Hard cap on matched passages returned per entry by `search_content`              |
+| `LF_LEGACY_TOOL_NAMES`              | `true`  | Also register the v1.x verb-first aliases. Set `false` to roughly halve the per-request tool catalog (the v3.0 behavior, available today) |
+| `LF_CONFIRMATION_SECRET`            | unset   | Optional secret the destructive-op confirmation tokens are signed with. Unset: random per-process key, so a **restart invalidates pending preview tokens** (the safer single-instance default). Set it to keep tokens valid across restarts / across instances sharing the secret. Treat like a password. |
+| `LF_LOG_FORMAT`                     | `text`  | `json` emits one JSON object per log line (for jq / Datadog / Splunk)            |
 
 See [`.env.example`](.env.example) for the full list including OAuth
 config, pagination limits, request timeout, retry attempts, and SSL
@@ -282,6 +309,80 @@ connector in the client's settings.
 > - See [docs/remote-http.md](docs/remote-http.md) for the full deployment and
 >   security checklist.
 
+## Command line (no model, no tokens)
+
+Everything the MCP tools do against the repository, the same binary does from
+a shell — same code path, no LLM in the loop. Use it for the work that has one
+correct answer: inventories, downloads, dedupe, grepping a contract.
+
+```bash
+laserfiche-mcp setup                           # one-time: save connection details
+laserfiche-mcp ls 1                            # list a folder (alias: list)
+laserfiche-mcp ls '\HR\Leases'                 # ...or by path
+laserfiche-mcp get 4821 --to ./lease.pdf       # stream a document to disk
+laserfiche-mcp cat 4821                        # extracted text on stdout
+laserfiche-mcp cat 4821 --pages 4-9            # just those pages
+laserfiche-mcp find 4821 'unpaid balance'      # grep one document
+laserfiche-mcp search 'unpaid balance'         # grep the whole repository
+laserfiche-mcp manifest 1 --out inventory.csv  # walk a tree, write CSV
+laserfiche-mcp dedupe 1                        # byte-identical documents
+laserfiche-mcp diff 4821 4822                  # compare two entries (alias: compare)
+```
+
+Office-friendly synonyms work everywhere: `list`, `read` (cat), `download`
+(get), `compare` (diff), `duplicates` (dedupe). On Windows, quote paths
+with double quotes: `laserfiche-mcp list "\HR\Leases"`.
+
+`ENTRY` and `FOLDER` accept a numeric entry ID or a repository path. Every
+command takes `--json`, so the same invocation backs a shell pipeline:
+
+```bash
+laserfiche-mcp search 'termination' --json | jq -r '.results[].name'
+laserfiche-mcp manifest 1 --json | jq '.by_extension'
+laserfiche-mcp manifest 1 --out tree.jsonl --format jsonl && jq -r 'select(.extension=="pdf").name' tree.jsonl
+```
+
+Conventions that make these scriptable:
+
+- Results go to **stdout**; progress and warnings go to **stderr**.
+- Exit codes are meaningful: `0` success, `1` the operation failed or found
+  nothing, `2` bad usage. `laserfiche-mcp find 4821 'indemnify' >/dev/null &&
+  echo present` does what you would expect.
+- Nothing here writes to the repository. The subcommands are read-only by
+  construction and never register the write tools.
+
+### What each command saves you
+
+| Command | Instead of | Why it is cheaper |
+| --- | --- | --- |
+| `get --to` | a base64 blob in a tool result | Streamed to disk; the bytes never enter a context window, and never sit in RAM either |
+| `cat` / `find` | reading a whole document into the model | Extraction and matching happen locally; you get the passage, not the file |
+| `search` | opening each hit to see what it says | Laserfiche's own OCR index returns the matched passages |
+| `manifest` | one `list_folder` call per subfolder | One walk, one CSV, a summary you can read at a glance |
+| `dedupe` | downloading everything to compare | Sizes are probed first; only size collisions are ever downloaded |
+| `diff` | eyeballing two records side by side | A set comparison with one correct answer |
+
+### Document formats
+
+`cat`, `find`, and the MCP's `mode="text"` read these with **no extra
+dependencies**: PDF, DOCX, PPTX, EML, HTML, RTF, and anything `text/*`
+(including CSV, JSON, XML, Markdown).
+
+Two more need the optional extra:
+
+```bash
+pip install 'laserfiche-mcp[office]'   # adds .xlsx and Outlook .msg
+```
+
+Legacy binary `.doc` / `.xls` / `.ppt` are not supported — correct extraction
+needs an external converter such as LibreOffice, and bundling that would break
+the "pip install and it works" promise. Re-save as OOXML, or read Laserfiche's
+own indexed text with `search`.
+
+Scanned images have no text layer at all. `cat` says so explicitly rather than
+returning an empty string, and points you at `search`, which reads the OCR
+index where that text actually lives.
+
 ## Tools
 
 > Tool names below are shown in their original verb-first form
@@ -300,6 +401,7 @@ connector in the client's settings.
 | `search_entries`             | `laserfiche_entry_search`              | Run a raw Laserfiche search query, e.g. `{LF:Name="*.pdf"}`             |
 | `search_by_name`             | `laserfiche_entry_search_by_name`      | Convenience wrapper: name pattern + optional folder scope               |
 | `search_natural`             | `laserfiche_entry_search_natural`      | Two-mode guided search: ask for grammar+templates, then run with auto-repair on 400 |
+| `search_content`             | `laserfiche_entry_search_content`      | Full-text search that returns the **matched passages** — page number plus excerpt, straight from the OCR index |
 | `list_folder`                | `laserfiche_folder_list`               | List children of a folder by ID                                          |
 | `get_entry`                  | `laserfiche_entry_get`                 | Fetch metadata for one entry by ID                                       |
 | `get_entry_by_path`          | `laserfiche_entry_get_by_path`         | Resolve a full path to an entry                                          |
@@ -339,8 +441,13 @@ connector in the client's settings.
 Tools with **two-step token** return a preview + HMAC-signed
 `confirmation_token` on first call. Surface the preview to the user; on
 go-ahead, re-call with the same arguments plus the token. Tokens are
-bound to `(operation, entry_id, entry_name)`, expire after 5 minutes,
-and are invalidated by server restart.
+bound to `(operation, entry_id, entry_name)` **and the operation's own
+parameters** (`page_range` for `delete_pages`, `new_name` for
+`rename_entry`, destination + name for `move_entry`) — executing with
+different arguments than were previewed fails verification. They expire
+after 5 minutes,
+and are invalidated by server restart (unless `LF_CONFIRMATION_SECRET`
+is set — see [Configure](#configure)).
 
 ### Using `search_natural`
 
@@ -366,6 +473,45 @@ env var (default 100) — some self-hosted SimpleSearches implementations
 reject `$top` values above an internal limit, so this defaults lower than
 the list/folder cap.
 
+### Using `search_content`
+
+The other search tools answer *which* entries matched. `search_content`
+answers *what they say*, by returning the matched passages themselves —
+page number, surrounding excerpt, and the exact substring that matched —
+pulled from Laserfiche's full-text index, which is where OCR output for
+scanned documents lives.
+
+```
+search_content(query="unpaid balance", folder_path="\Leases")
+→ { "results": [
+      { "entry_id": 7, "name": "lease-4821.pdf", "hit_count": 6,
+        "hits": [ { "page": 4,
+                    "text": "…tenant owes an unpaid balance of $2,400 as of March…",
+                    "match": "unpaid balance" } ] } ] }
+```
+
+That answers most "what does this document say about X" questions without
+downloading anything. Reach for `get_document_edoc(mode="text")` only when
+an excerpt points you at the right document and you need more of it.
+
+A bare phrase is wrapped into `{LF:Basic~="..."}` for you. Pass a query
+starting with `{` to use raw syntax instead — e.g. `option="D"` to search
+only OCR'd document text, or `option="DFANLT"` to permit leading and
+trailing wildcards.
+
+Two knobs control cost: `hits_for_top` (how many results get their
+passages fetched — one extra request each, default 5) and `hits_per_entry`
+(passages per result, default 3, capped by `LF_SEARCH_CONTEXT_HITS_MAX`).
+
+This is the asynchronous `/Searches` flow rather than `SimpleSearches`,
+which is what makes context hits available at all — they're keyed by a
+search token that only the async flow produces. Laserfiche caps concurrent
+searches per session (two, on v1), so the tool runs the whole
+create→poll→read→close cycle inside one call and always releases the token,
+including on timeout and failure. Older builds without the `/Searches`
+endpoints get a structured `async_search_unavailable` error pointing at
+`search_entries` as the fallback.
+
 ### `get_document_edoc` modes
 
 On v1 servers the Laserfiche `Text` export endpoint doesn't exist, so
@@ -376,11 +522,53 @@ On v1 servers the Laserfiche `Text` export endpoint doesn't exist, so
 | --------- | ---------------------------------------------------------- |
 | `info`    | You only need metadata (size, content-type). Default.      |
 | `bytes`   | You want the raw file as base64 — capped at `LF_EDOC_MAX_BYTES` (25 MB by default; override per-call with `max_bytes`). |
-| `text`    | You want extracted text. PDFs go through `pypdf` server-side; `text/*` is decoded directly; anything else returns a structured "use mode=bytes" error. OCR is not attempted. |
+| `text`    | You want extracted text. PDF, DOCX, PPTX, XLSX, EML, HTML, RTF and `text/*` are handled (format detected from content-type + entry name — octet-stream PDFs work). OCR is not attempted; for scans use `search_content`, which reads the OCR index. |
 
 All tool descriptions are written to read like prompts — they tell the
 model when to use the tool, valid input shapes, and what kind of follow-up
 is expected. See [`src/laserfiche_mcp/server.py`](src/laserfiche_mcp/server.py).
+
+## Troubleshooting
+
+**Start with one command:**
+
+```bash
+laserfiche-mcp diagnose
+```
+
+It authenticates, probes every endpoint your Laserfiche build exposes, and
+prints an OK/unavailable table plus your write-mode and logging config.
+Failures are classified — it will tell you whether the server was
+unreachable (URL/VPN/TLS, *not* your password), whether the other
+`LF_API_VERSION` would work (it probes both and names the right one), or
+whether the credentials themselves were rejected.
+
+No config yet, or config in doubt? Run the wizard:
+
+```bash
+laserfiche-mcp setup
+```
+
+It asks for the server URL, repository, and service account, saves them to
+`~/.laserfiche-mcp/.env` (`%USERPROFILE%\.laserfiche-mcp\.env` on
+Windows), and ends with a diagnose run. Every later CLI invocation finds
+that file automatically when nothing else is configured.
+
+Windows notes:
+
+- In **PowerShell/cmd**, quote repository paths with double quotes:
+  `laserfiche-mcp list "\HR\Leases"`. Avoid a trailing backslash before
+  the closing quote — it escapes the quote.
+- Claude Desktop logs live at `%APPDATA%\Claude\logs\` (macOS:
+  `~/Library/Logs/Claude/`). Look for `mcp-server-laserfiche.log`.
+
+Common misconfigurations:
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| diagnose says UNREACHABLE | Wrong `LF_REPO_API_URL`, VPN down, self-signed cert | Fix the URL; for internal certs set `LF_VERIFY_SSL=false` (dev only) |
+| diagnose suggests the other version | `LF_API_VERSION` mismatch | Set the version it names |
+| HTTP 401, or LF error 9528 ("LFDS unreachable") | Bad credentials — 9528's wording is misleading | Re-run `laserfiche-mcp setup` or fix `LF_USERNAME`/`LF_PASSWORD` |
 
 ## Errors
 
@@ -455,7 +643,7 @@ except as noted:
 - **Folder-delete batch cap** (`LF_DELETE_FOLDER_MAX_DESCENDANTS`, default 50) — `delete_entry` on a folder with more immediate children refuses unless `force_large_delete=true` is passed alongside the confirmation token. The preview surfaces `exceeds_batch_cap: true` so the LLM can explain the size before re-calling.
 - **Audit-reason requirement** (`LF_REQUIRE_AUDIT_REASON`, default false) — when true, `delete_entry` refuses without an `audit_reason_id`. Use `get_audit_reasons` to enumerate valid IDs.
 - **Required-field validation** (`LF_VALIDATE_REQUIRED_FIELDS`, default **true**) — `assign_template` lists `FieldDefinitions`, finds `isRequired: true` fields, checks them against what's on the entry and what's in the caller's `fields=`, and returns a structured `missing_required_fields` error before the PUT — instead of the server's opaque `Multistatus response. [9039]`.
-- **Two-step confirmation tokens** (always on for destructive ops) — `rename_entry`, `move_entry`, `delete_entry`, `delete_edoc`, `delete_pages` return a preview + HMAC-signed token on first call; execute on second call. Tokens bind to `(operation, entry_id, entry_name)`, expire after 5 minutes, invalidate on server restart.
+- **Two-step confirmation tokens** (always on for destructive ops) — `rename_entry`, `move_entry`, `delete_entry`, `delete_edoc`, `delete_pages` return a preview + HMAC-signed token on first call; execute on second call. Tokens bind to `(operation, entry_id, entry_name)` plus the operation's execute-relevant parameters (`page_range`, `new_name`, destination), so the execute leg cannot silently swap in different arguments than the user confirmed; they expire after 5 minutes. By default the signing key is random per-process, so a restart invalidates pending tokens; set `LF_CONFIRMATION_SECRET` to derive a stable key instead (tokens survive restarts and verify across instances sharing the secret — for multi-instance deployments).
 
 ### Recommended starting config for write mode
 
@@ -476,12 +664,6 @@ fence regardless of which tools are registered.
 
 ## Roadmap
 
-- **v2.x follow-ups** (deferred from the v2.0 audit) — write-tool
-  collapses (`field_update(mode)`, `tag_update(add, remove)`,
-  `link_update(mode)`), preview/execute splits of the 5 destructive
-  tools, parameter-description polish for the JSON schema the LLM sees,
-  structured JSON logging (`LF_LOG_FORMAT=json`) with a `redact()`
-  helper. Working notes in [`docs/internal/TODO.md`](docs/internal/TODO.md).
 - **Server-side audit logging** — sidecar file with rotation, capturing
   every write tool call with the authenticated user, target entry, and
   outcome.
@@ -491,14 +673,25 @@ fence regardless of which tools are registered.
 - **v3.0** — Remove the verb-first deprecation aliases (`get_entry`,
   `set_fields`, ...). Only the `laserfiche_{resource}_{verb}` names
   remain.
-- **Beyond** — Workflow trigger tools, async `/Searches` flow for large
-  result sets, server-side text extraction for Office documents.
+- **Stateless MCP (spec 2026-07-28)** — the protocol core is now
+  stateless: the initialize handshake and session IDs are gone, and
+  cross-call state must live in server-minted handles passed as ordinary
+  tool arguments. This server is already shaped for that world — the
+  HMAC-signed `confirmation_token` is exactly such a handle (set
+  `LF_CONFIRMATION_SECRET` so every instance can verify every instance's
+  tokens), and the async-search token never crosses a call boundary. The
+  remaining review item for a remote/multi-instance deployment is that
+  the per-process lifespan client and schema caches become per-instance.
+  The cacheable `tools/list` in the new spec also raises the value of a
+  small catalog (`LF_LEGACY_TOOL_NAMES=false`).
+- **Beyond** — Workflow trigger tools, MCP resource links for edocs, and
+  per-viewer table summaries for spreadsheet entries.
 
 ## Development
 
 ```bash
 uv sync --extra dev
-uv run pytest                  # mocked HTTP, enforces 80% coverage baseline
+uv run pytest                  # mocked HTTP, enforces 85% coverage baseline
 uv run ruff check src tests
 uv run mypy src
 ```
@@ -533,8 +726,7 @@ Issues and PRs welcome — particularly:
 - Endpoint corrections for Repository API Server builds the v1 / v2 wire format hasn't been validated against
 - Laserfiche Cloud client + JWT-signed `client_credentials` assertion flow
 - Server-side audit logging for write-mode deployments (sidecar file + rotation)
-- Structured JSON logging + per-tool-call redaction (`LF_LOG_FORMAT=json`)
-- Async `/Searches` flow for very large result sets
+- Text extraction for more document formats (`ops/extract.py`)
 
 This is a community project, **not** affiliated with or endorsed by
 Laserfiche.

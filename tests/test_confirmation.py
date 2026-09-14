@@ -112,8 +112,91 @@ def test_token_rejected_when_structurally_short() -> None:
 def test_token_rejected_with_non_integer_fields() -> None:
     import base64
 
-    bad = base64.urlsafe_b64encode(b"delete_entry:notanint:abc:123:sig").decode().rstrip("=")
+    bad = base64.urlsafe_b64encode(b"delete_entry:notanint:abc:-:123:sig").decode().rstrip("=")
     ok, reason = confirmation.verify_token(bad, "delete_entry", 1, "x")
     assert ok is False
     assert reason is not None
     assert "integer" in reason.lower()
+
+
+# --- LF_CONFIRMATION_SECRET (stable signing key) -----------------------------
+
+
+def test_secret_derived_tokens_survive_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With LF_CONFIRMATION_SECRET set, a new process (new random secret)
+    still verifies tokens minted before the restart."""
+    import secrets
+
+    monkeypatch.setenv("LF_CONFIRMATION_SECRET", "org-shared-secret")
+    token = confirmation.create_token("delete_entry", 42, "lease.pdf")
+
+    # Simulate a restart: the per-process fallback secret changes.
+    monkeypatch.setattr(confirmation, "_SERVER_SECRET", secrets.token_bytes(32))
+
+    ok, reason = confirmation.verify_token(token, "delete_entry", 42, "lease.pdf")
+    assert ok is True
+    assert reason is None
+
+
+def test_changing_the_secret_invalidates_existing_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LF_CONFIRMATION_SECRET", "first-secret")
+    token = confirmation.create_token("delete_entry", 42, "lease.pdf")
+
+    monkeypatch.setenv("LF_CONFIRMATION_SECRET", "rotated-secret")
+    ok, reason = confirmation.verify_token(token, "delete_entry", 42, "lease.pdf")
+    assert ok is False
+    assert reason is not None
+    assert "signature" in reason.lower()
+
+
+def test_unset_secret_keeps_per_process_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default behavior is unchanged: random per-process key, so a restart
+    (simulated by swapping the module secret) invalidates pending tokens."""
+    import secrets
+
+    monkeypatch.delenv("LF_CONFIRMATION_SECRET", raising=False)
+    token = confirmation.create_token("delete_entry", 42, "lease.pdf")
+    ok, _ = confirmation.verify_token(token, "delete_entry", 42, "lease.pdf")
+    assert ok is True
+
+    monkeypatch.setattr(confirmation, "_SERVER_SECRET", secrets.token_bytes(32))
+    ok, reason = confirmation.verify_token(token, "delete_entry", 42, "lease.pdf")
+    assert ok is False
+    assert reason is not None
+    assert "signature" in reason.lower()
+
+
+def test_token_minted_without_secret_fails_once_secret_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LF_CONFIRMATION_SECRET", raising=False)
+    token = confirmation.create_token("delete_entry", 42, "lease.pdf")
+
+    monkeypatch.setenv("LF_CONFIRMATION_SECRET", "now-configured")
+    ok, _ = confirmation.verify_token(token, "delete_entry", 42, "lease.pdf")
+    assert ok is False
+
+
+def test_secret_from_settings_when_env_var_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A secret configured only through Settings (e.g. a .env file parsed by
+    pydantic-settings, never exported) reaches the signing key too."""
+    from types import SimpleNamespace
+
+    from pydantic import SecretStr
+
+    from laserfiche_mcp import _app
+
+    monkeypatch.delenv("LF_CONFIRMATION_SECRET", raising=False)
+    stub = SimpleNamespace(confirmation_secret=SecretStr("via-settings"))
+    monkeypatch.setattr(_app, "get_settings", lambda: stub)
+
+    token = confirmation.create_token("delete_entry", 42, "lease.pdf")
+
+    # Same secret via the env var derives the same key — proving the
+    # Settings path used the derived key, not the per-process fallback.
+    monkeypatch.setenv("LF_CONFIRMATION_SECRET", "via-settings")
+    ok, reason = confirmation.verify_token(token, "delete_entry", 42, "lease.pdf")
+    assert ok is True
+    assert reason is None
