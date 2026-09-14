@@ -109,6 +109,10 @@ async def test_returns_context_hits_for_matching_entries(
     assert hit["page"] == 4
     assert hit["match"] == "unpaid balance"
     assert "unpaid balance" in hit["text"]
+    # Excerpts are untrusted content pulled from a document body — a
+    # top-level notice flags this rather than wrapping every short hit.
+    assert "content_notice" in result
+    assert "untrusted" in result["content_notice"].lower()
 
 
 @pytest.mark.asyncio
@@ -142,6 +146,8 @@ async def test_hits_for_top_zero_skips_the_context_hit_requests(
 
     assert result["results"][0]["hits"] == []
     assert not any("ContextHits" in path for _, path in _requests(httpx_mock))
+    # No excerpts were fetched, so there's nothing to flag as untrusted.
+    assert "content_notice" not in result
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,10 @@ from pytest_httpx import HTTPXMock
 from laserfiche_mcp import server
 from laserfiche_mcp.client import LaserficheClient
 from laserfiche_mcp.config import Settings
+from laserfiche_mcp.tools._helpers import (
+    UNTRUSTED_DOCUMENT_TEXT_NOTICE,
+    wrap_untrusted_document_text,
+)
 from laserfiche_mcp.tools.documents import parse_page_spec
 from tests.conftest import (
     _BASE,
@@ -25,6 +29,18 @@ from tests.conftest import (
     SAMPLE_PDF_TEXT,
     _StubAuth,
 )
+
+
+def _unwrap(wrapped: str) -> str:
+    """Strip the <laserfiche_document_text> untrusted-content wrapper,
+    returning the raw extracted text, for tests that need to assert on
+    length/prefix/concatenation of the actual extracted content."""
+    prefix = "<laserfiche_document_text>\n" + UNTRUSTED_DOCUMENT_TEXT_NOTICE + "\n\n"
+    suffix = "\n</laserfiche_document_text>"
+    assert wrapped.startswith(prefix), wrapped[:200]
+    assert wrapped.endswith(suffix), wrapped[-200:]
+    return wrapped[len(prefix) : -len(suffix)]
+
 
 # --- get_document_text (v2-only) --------------------------------------------
 
@@ -55,7 +71,7 @@ async def test_get_document_text_on_v2_returns_decoded_text(
         monkeypatch.setattr(_app, "get_client", lambda: client)
         result = await server.get_document_text(entry_id=42)
 
-    assert result["text"] == "hello world"
+    assert result["text"] == wrap_untrusted_document_text("hello world")
     assert result["truncated"] is False
     assert result["entry_id"] == 42
 
@@ -82,8 +98,9 @@ async def test_get_document_text_truncates_long_output(
         monkeypatch.setattr(_app, "get_client", lambda: client)
         result = await server.get_document_text(entry_id=42, max_chars=50)
 
-    assert result["text"].startswith("x" * 50)
-    assert len(result["text"]) == 50
+    raw = _unwrap(result["text"])
+    assert raw.startswith("x" * 50)
+    assert len(raw) == 50
     assert result["truncated"] is True
     assert result["char_count"] == 50
 
@@ -469,7 +486,7 @@ async def test_edoc_text_mode_decodes_plain_text(
 
     assert result["mode"] == "text"
     assert "error" not in result
-    assert result["text"] == "hello world"
+    assert result["text"] == wrap_untrusted_document_text("hello world")
 
 
 @pytest.mark.asyncio
@@ -649,7 +666,8 @@ async def test_edoc_text_char_offset_pages_through_a_long_document(
     assert first["truncated"] is True
     assert first["char_offset"] == 0
     assert first["next_char_offset"] == 20
-    assert len(first["text"]) == 20
+    first_raw = _unwrap(first["text"])
+    assert len(first_raw) == 20
 
     second = await server.get_document_edoc(
         entry_id=42,
@@ -662,7 +680,8 @@ async def test_edoc_text_char_offset_pages_through_a_long_document(
     # The two windows are contiguous, so concatenating them reproduces a
     # prefix of the whole extraction.
     assert first["chars_available"] == second["chars_available"]
-    assert (first["text"] + second["text"])[:20] == first["text"]
+    second_raw = _unwrap(second["text"])
+    assert (first_raw + second_raw)[:20] == first_raw
 
 
 @pytest.mark.asyncio
@@ -709,7 +728,7 @@ async def test_edoc_text_char_offset_applies_to_plain_text_entries(
 
     result = await server.get_document_edoc(entry_id=42, mode="text", char_offset=4)
 
-    assert result["text"] == "efghij"
+    assert result["text"] == wrap_untrusted_document_text("efghij")
     assert result["chars_available"] == 10
     assert result["next_char_offset"] is None
 
