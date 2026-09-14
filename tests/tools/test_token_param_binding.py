@@ -21,9 +21,7 @@ from tests.conftest import _BASE
 
 
 def test_token_roundtrips_with_identical_params() -> None:
-    token = confirmation.create_token(
-        "delete_pages", 42, "Doc", params={"page_range": "1-2"}
-    )
+    token = confirmation.create_token("delete_pages", 42, "Doc", params={"page_range": "1-2"})
     ok, reason = confirmation.verify_token(
         token, "delete_pages", 42, "Doc", params={"page_range": "1-2"}
     )
@@ -32,9 +30,7 @@ def test_token_roundtrips_with_identical_params() -> None:
 
 
 def test_token_rejects_drifted_param_naming_it() -> None:
-    token = confirmation.create_token(
-        "delete_pages", 42, "Doc", params={"page_range": "1-2"}
-    )
+    token = confirmation.create_token("delete_pages", 42, "Doc", params={"page_range": "1-2"})
     ok, reason = confirmation.verify_token(
         token, "delete_pages", 42, "Doc", params={"page_range": "1-9999"}
     )

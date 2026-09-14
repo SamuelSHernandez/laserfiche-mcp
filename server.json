@@ -6,12 +6,12 @@
     "url": "https://github.com/SamuelSHernandez/laserfiche-mcp",
     "source": "github"
   },
-  "version": "2.2.0",
+  "version": "2.3.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "laserfiche-mcp",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "transport": {
         "type": "stdio"
       },
