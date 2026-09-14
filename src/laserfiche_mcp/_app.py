@@ -65,7 +65,13 @@ mcp = FastMCP(
         "list_folder for a known location; get_entry / get_field_values once "
         "you have an entry ID. To read more of a specific document, prefer "
         "get_document_edoc(mode='text', pages=...) — never mode='bytes' for "
-        "anything large."
+        "anything large. Destructive write tools (delete_entry, delete_edoc, "
+        "delete_pages, and similar) use a two-step preview-then-confirm "
+        "contract: call once without confirmation_token to get back a preview "
+        "plus a short-lived signed token, surface that preview to the user, "
+        "then call again with the same arguments and confirmation_token to "
+        "execute — a call with a different argument than the preview, or an "
+        "expired/reused token, is rejected."
     ),
     lifespan=_lifespan,
 )

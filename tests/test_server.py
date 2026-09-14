@@ -20,6 +20,18 @@ from laserfiche_mcp import server
 from laserfiche_mcp.client import LaserficheClient
 from tests.conftest import _BASE
 
+
+def test_mcp_instructions_document_the_confirm_token_contract() -> None:
+    """The server's `instructions` field must tell the calling model that
+    destructive tools use a preview -> confirm token pattern, so it
+    doesn't have to discover the contract by trial and error."""
+    text = server.mcp.instructions
+    assert text is not None
+    lower = text.lower()
+    assert "confirmation_token" in lower
+    assert "preview" in lower
+
+
 # --- _clamp_max_results (re-exported from _app) -----------------------------
 
 
