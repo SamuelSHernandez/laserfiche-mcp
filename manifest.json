@@ -69,6 +69,14 @@
     {
       "name": "laserfiche_document_get_edoc",
       "description": "Read document metadata, bytes, or extracted text"
+    },
+    {
+      "name": "laserfiche_document_find_duplicates",
+      "description": "Find byte-identical documents in a folder tree"
+    },
+    {
+      "name": "laserfiche_entry_compare",
+      "description": "Diff two entries' metadata and field values"
     }
   ],
   "user_config": {
