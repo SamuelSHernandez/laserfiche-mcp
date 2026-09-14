@@ -157,10 +157,18 @@ def local_source_path_allowed(
 
 
 def tool_allowed(
-    tool_name: str,
+    tool_name: str | tuple[str, ...],
     allowed_csv: str | None,
 ) -> tuple[bool, str | None]:
     """Check ``tool_name`` against a comma-separated allowlist.
+
+    ``tool_name`` may be a single name or a tuple of equivalent names for
+    the same tool (e.g. ``(legacy_name, v2_name)``) — the tool passes if
+    ANY of them appears in the allowlist, so an operator who configures
+    ``LF_WRITE_TOOLS_ALLOWED`` with the README-recommended v2 names
+    (``laserfiche_template_assign``) gets the same result as one who uses
+    the legacy names (``assign_template``); a deployment mixing both
+    naming schemes across entries also works.
 
     Returns ``(ok, reason)``. When ``allowed_csv`` is None or empty, all
     tools pass (no allowlist configured).
@@ -168,10 +176,11 @@ def tool_allowed(
     allowed = _parse_csv(allowed_csv)
     if not allowed:
         return True, None
-    if tool_name not in allowed:
+    names = (tool_name,) if isinstance(tool_name, str) else tool_name
+    if not any(n in allowed for n in names):
+        shown = repr(names[0]) if len(names) == 1 else " / ".join(repr(n) for n in names)
         return False, (
-            f"Tool {tool_name!r} is not in the configured allowlist "
-            f"(LF_WRITE_TOOLS_ALLOWED={allowed})."
+            f"Tool {shown} is not in the configured allowlist (LF_WRITE_TOOLS_ALLOWED={allowed})."
         )
     return True, None
 

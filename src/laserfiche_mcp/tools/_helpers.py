@@ -17,6 +17,7 @@ from typing import Any
 from .. import _app, permissions
 from .._app import get_settings
 from ..errors import LaserficheError, classify_lf_error, local_error
+from ._registry import v2_rename_map
 
 # Every tool that returns text pulled out of a Laserfiche document body
 # (get_document_text, get_document_edoc(mode='text'), and search_content's
@@ -143,7 +144,12 @@ def check_write_permission(
     """
     settings = get_settings()
 
-    ok, reason = permissions.tool_allowed(operation, settings.write_tools_allowed)
+    # ``operation`` is always the tool's legacy (function) name — the
+    # literal every write tool passes here. Also check its v2 alias so
+    # LF_WRITE_TOOLS_ALLOWED matches regardless of which naming scheme the
+    # operator configured (see permissions.tool_allowed).
+    v2_name = v2_rename_map().get(operation, operation)
+    ok, reason = permissions.tool_allowed((operation, v2_name), settings.write_tools_allowed)
     if not ok:
         return local_error(operation, "tool_not_allowed", reason=reason)
 

@@ -158,7 +158,7 @@ Minimum required variables for self-hosted password-grant auth:
 | `LF_SEARCH_TIMEOUT_SECONDS`         | `60`    | How long `search_content` waits for an async search before abandoning it         |
 | `LF_SEARCH_POLL_INTERVAL_SECONDS`   | `1`     | Delay between `search_content` status polls; backs off toward 2s on long searches |
 | `LF_SEARCH_CONTEXT_HITS_MAX`        | `10`    | Hard cap on matched passages returned per entry by `search_content`              |
-| `LF_LEGACY_TOOL_NAMES`              | `true`  | Also register the v1.x verb-first aliases. Set `false` to roughly halve the per-request tool catalog (the v3.0 behavior, available today) |
+| `LF_LEGACY_TOOL_NAMES`              | `false` | Set `true` to also register the v1.x verb-first aliases alongside the v2 names. Default changed to `false` in v2.3.0 — registering both roughly doubles the per-request tool catalog; set `true` if you still call tools by their legacy names |
 | `LF_CONFIRMATION_SECRET`            | unset   | Optional secret the destructive-op confirmation tokens are signed with. Unset: random per-process key, so a **restart invalidates pending preview tokens** (the safer single-instance default). Set it to keep tokens valid across restarts / across instances sharing the secret. Treat like a password. |
 | `LF_LOG_FORMAT`                     | `text`  | `json` emits one JSON object per log line (for jq / Datadog / Splunk)            |
 

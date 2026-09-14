@@ -59,14 +59,24 @@ PyPI, so this line of work ships as `2.3.0`.
   tools. Implemented in `cli_commands.py`, wired through `cli.py`
   alongside the existing `--http`/`--diagnose`/`serve`/`diagnose`
   handling from `2.2.0`.
-- **`LF_LEGACY_TOOL_NAMES`** (default `true`) — set `false` to skip
-  registering the v1.x verb-first tool aliases, roughly halving the tool
-  catalog the model pays for on every request. Available today; will
-  become the v3.0 default.
+- **`LF_LEGACY_TOOL_NAMES`** — set `true` to also register the v1.x
+  verb-first tool aliases alongside the v2 names. See **Breaking** below
+  for the default change.
 - **Streaming download** — `LaserficheClient.export_entry_to_file()`
   streams to a `.part` sibling in 64 KB chunks and renames on success, so
   a 400 MB edoc costs one buffer instead of 400 MB of RSS and a
   failed/capped transfer never leaves a file that looks complete.
+
+### Breaking
+
+- **`LF_LEGACY_TOOL_NAMES` now defaults to `false`.** The catalog was
+  registering both the legacy verb-first names AND the v2
+  `laserfiche_{resource}_{verb}` names for every tool (~104 entries),
+  roughly doubling the per-session tool-catalog token cost for no
+  benefit to new users. If you (or a saved agent config) call tools by
+  their legacy names (`assign_template`, `delete_entry`, ...), set
+  `LF_LEGACY_TOOL_NAMES=true` to keep registering them — this was
+  previously the default and remains fully supported.
 
 ### Changed
 
