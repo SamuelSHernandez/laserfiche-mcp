@@ -48,9 +48,11 @@ from .observability import tool_logger
 # Import every tool module so each ``@register`` fires and the registry
 # is populated before _register_read_tools() runs below.
 from .tools import (  # noqa: F401
+    compare,
     content_search,
     definitions,
     documents,
+    duplicates,
     natural_search,
     preview_execute_splits,
     reads,
