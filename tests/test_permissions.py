@@ -275,6 +275,69 @@ def test_page_range_rejects_non_string() -> None:
     assert ok is False
 
 
+# --- local_source_path_allowed -----------------------------------------------
+
+
+def test_local_source_unfenced_when_unset(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    f = tmp_path / "anywhere.txt"
+    f.write_bytes(b"x")
+    ok, reason = permissions.local_source_path_allowed(str(f), None)
+    assert ok is True
+    assert reason is None
+
+
+def test_local_source_allows_path_inside_allowed_dir(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    f = allowed / "sub" / "doc.txt"
+    f.parent.mkdir()
+    f.write_bytes(b"x")
+    ok, reason = permissions.local_source_path_allowed(str(f), str(allowed))
+    assert ok is True
+    assert reason is None
+
+
+def test_local_source_allows_the_allowed_dir_itself(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    ok, _ = permissions.local_source_path_allowed(str(allowed), str(allowed))
+    assert ok is True
+
+
+def test_local_source_blocks_path_outside_allowed_dir(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"x")
+    ok, reason = permissions.local_source_path_allowed(str(outside), str(allowed))
+    assert ok is False
+    assert reason is not None
+    assert "LF_IMPORT_SOURCE_DIRS" in reason
+
+
+def test_local_source_blocks_sibling_dir_with_shared_prefix(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """'allowed-archive' must not match the allowed prefix 'allowed' —
+    same boundary requirement as path_allowed's prefix matching."""
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    sibling = tmp_path / "allowed-archive" / "doc.txt"
+    sibling.parent.mkdir()
+    sibling.write_bytes(b"x")
+    ok, _ = permissions.local_source_path_allowed(str(sibling), str(allowed))
+    assert ok is False
+
+
+def test_local_source_checks_multiple_allowed_dirs(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    f = second / "doc.txt"
+    f.write_bytes(b"x")
+    ok, _ = permissions.local_source_path_allowed(str(f), f"{first},{second}")
+    assert ok is True
+
+
 # --- tool_allowed -----------------------------------------------------------
 
 

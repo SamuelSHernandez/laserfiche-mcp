@@ -232,6 +232,18 @@ class Settings(BaseSettings):
         "lower to keep upload latency predictable. Override per-call by "
         "raising this env var.",
     )
+    import_source_dirs: str | None = Field(
+        default=None,
+        description="Comma-separated local filesystem directories; when set, "
+        "import_document refuses to read a source file_path that doesn't "
+        "resolve (symlinks included) to one of these directories or a "
+        "descendant of one. Mirrors LF_WRITE_PATHS_ALLOW but fences the "
+        "LOCAL source side of an import instead of the repository "
+        "destination. When unset (default), import_document will read any "
+        "local path the MCP process has filesystem access to — set this in "
+        "shared or multi-tenant deployments to restrict which directories "
+        "can be sourced from.",
+    )
     log_level: str = Field(
         default="INFO",
         description="Python logging level for the server (DEBUG, INFO, WARNING, ERROR).",

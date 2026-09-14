@@ -149,10 +149,11 @@ Minimum required variables for self-hosted password-grant auth:
 | `LF_WRITE_TOOLS_ALLOWED`            | unset   | Comma-separated write-tool names to scope what registers; e.g. metadata-only     |
 | `LF_DELETE_FOLDER_MAX_DESCENDANTS`  | `50`    | Refuse folder deletes above this immediate-child count unless `force_large_delete=true` |
 | `LF_REQUIRE_AUDIT_REASON`           | `false` | When `true`, `delete_entry` refuses to execute without `audit_reason_id`         |
-| `LF_VALIDATE_REQUIRED_FIELDS`       | `true`  | Validate repo-wide required fields client-side before `assign_template` PUTs     |
+| `LF_VALIDATE_REQUIRED_FIELDS`       | `true`  | Validate the target template's own required fields (fields with a `defaultValue` are skipped) client-side before `assign_template` PUTs |
 | `LF_VALIDATE_NAMES`                 | `true`  | Pre-flight field / tag / template / link-type names against cached schema definitions; returns `invalid_*_name` instead of an opaque 400 |
 | `LF_SCHEMA_CACHE_TTL_SECONDS`       | `300`   | Cache window for the schema-definition lookups that back `LF_VALIDATE_NAMES` and `LF_VALIDATE_REQUIRED_FIELDS`. Set to `0` to disable caching. |
 | `LF_IMPORT_MAX_BYTES`               | `25 MB` | Client-side cap on `import_document` payload size                                |
+| `LF_IMPORT_SOURCE_DIRS`             | unset   | Comma-separated local directories `import_document` may read `file_path` from (symlinks resolved before comparison). Unset: any path the MCP process can read is accepted. |
 | `LF_EDOC_MAX_BYTES`                 | `25 MB` | Cap on `get_document_edoc` downloads in `bytes`/`text` modes                     |
 | `LF_SEARCH_TIMEOUT_SECONDS`         | `60`    | How long `search_content` waits for an async search before abandoning it         |
 | `LF_SEARCH_POLL_INTERVAL_SECONDS`   | `1`     | Delay between `search_content` status polls; backs off toward 2s on long searches |
@@ -639,6 +640,7 @@ the following guards are available — all independent, all opt-in
 except as noted:
 
 - **Path-prefix fences** (`LF_WRITE_PATHS_ALLOW`, `LF_WRITE_PATHS_DENY`) — every write checks the entry's `fullPath` (or the parent's for creates) against the configured prefixes. Case-insensitive, deny wins over allow, both `\` and `/` accepted. `move_entry` fences on BOTH source and destination paths so a token from an allowed source can't be replayed to land in a denied folder. Strongest single fence — recommended for any non-trivial deployment.
+- **Local import source fence** (`LF_IMPORT_SOURCE_DIRS`, default unset) — `import_document` reads `file_path` off the MCP process's own filesystem; with this set, the resolved (symlinks included) path must fall inside one of the configured directories or the tool refuses with `source_path_not_allowed`. This is the source-side counterpart to the path-prefix fences above, which only cover the repository destination.
 - **Tool-level allowlist** (`LF_WRITE_TOOLS_ALLOWED`) — restrict which write tools register at all. Example: `merge_fields,merge_tags,assign_template` for a metadata-only deployment that can't create or delete anything.
 - **Folder-delete batch cap** (`LF_DELETE_FOLDER_MAX_DESCENDANTS`, default 50) — `delete_entry` on a folder with more immediate children refuses unless `force_large_delete=true` is passed alongside the confirmation token. The preview surfaces `exceeds_batch_cap: true` so the LLM can explain the size before re-calling.
 - **Audit-reason requirement** (`LF_REQUIRE_AUDIT_REASON`, default false) — when true, `delete_entry` refuses without an `audit_reason_id`. Use `get_audit_reasons` to enumerate valid IDs.

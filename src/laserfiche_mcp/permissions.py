@@ -31,6 +31,7 @@ Page range syntax (for delete_pages):
 
 from __future__ import annotations
 
+import os
 import re
 
 _PAGE_RANGE_RE = re.compile(r"^[1-9]\d*(-[1-9]\d*)?(,[1-9]\d*(-[1-9]\d*)?)*$")
@@ -114,6 +115,45 @@ def path_allowed(
         )
 
     return True, None
+
+
+def local_source_path_allowed(
+    file_path: str,
+    allow_csv: str | None,
+) -> tuple[bool, str | None]:
+    """Check a local filesystem source path against an allowed-directory list.
+
+    Mirrors ``path_allowed`` but fences the *source* side of
+    ``import_document`` (the local file the MCP process reads) rather
+    than the repository destination. Returns ``(ok, reason)``.
+
+    Behavior:
+        * ``allow_csv`` unset/empty -> always OK. Fencing is opt-in so
+          existing single-user/single-machine deployments keep working
+          unchanged until they set ``LF_IMPORT_SOURCE_DIRS``.
+        * Otherwise ``file_path`` must resolve (symlinks included, via
+          ``os.path.realpath``) to a path equal to, or nested under, one
+          of the configured directories. Resolving symlinks stops a
+          symlink planted inside an allowed directory from pointing
+          a read outside of it.
+        * Comparison uses ``os.path.normcase`` so it's case-insensitive
+          on case-insensitive filesystems (Windows) and case-sensitive
+          elsewhere, matching platform path semantics.
+    """
+    allow = _parse_csv(allow_csv)
+    if not allow:
+        return True, None
+
+    resolved = os.path.normcase(os.path.realpath(file_path))
+    for raw_dir in allow:
+        allowed_dir = os.path.normcase(os.path.realpath(raw_dir))
+        if resolved == allowed_dir or resolved.startswith(allowed_dir + os.sep):
+            return True, None
+
+    return False, (
+        f"File path {file_path!r} resolves outside the allowed import "
+        f"source directories (LF_IMPORT_SOURCE_DIRS={allow})."
+    )
 
 
 def tool_allowed(

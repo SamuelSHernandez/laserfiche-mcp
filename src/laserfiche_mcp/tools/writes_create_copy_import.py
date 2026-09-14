@@ -8,7 +8,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from .. import _app
+from .. import _app, permissions
 from .._app import get_settings
 from ..errors import LaserficheError, classify_lf_error, local_error
 from ._helpers import (
@@ -278,7 +278,9 @@ async def import_document(
                 "Absolute or working-directory-relative path to the local "
                 "file. Must exist and be readable by the MCP process. "
                 "Path is interpreted on the MCP server's filesystem — "
-                "typically the same machine as Claude Desktop/Code."
+                "typically the same machine as Claude Desktop/Code. When "
+                "LF_IMPORT_SOURCE_DIRS is configured, the path must resolve "
+                "inside one of those directories."
             ),
             examples=["/tmp/uploads/invoice.pdf", "C:\\Users\\me\\Documents\\report.pdf"],
             min_length=1,
@@ -337,7 +339,8 @@ async def import_document(
     apply metadata on import.
 
     Returns the server's import payload (``entryCreate.entryId`` = new
-    document). Pre-server errors: ``path_not_allowed``, ``file_not_found``,
+    document). Pre-server errors: ``path_not_allowed`` (destination),
+    ``source_path_not_allowed`` (LF_IMPORT_SOURCE_DIRS), ``file_not_found``,
     ``size_exceeds_cap`` (LF_IMPORT_MAX_BYTES, default 25 MB; API caps at
     100 MB). Server slugs: ``not_found``, ``required_field_missing``,
     ``auth_failed``.
@@ -372,6 +375,17 @@ async def import_document(
             return tag_err
 
     settings = get_settings()
+    source_ok, source_reason = permissions.local_source_path_allowed(
+        file_path, settings.import_source_dirs
+    )
+    if not source_ok:
+        return local_error(
+            "import_document",
+            "source_path_not_allowed",
+            file_path=file_path,
+            reason=source_reason,
+        )
+
     file_bytes, file_err = _read_import_file(file_path, settings.import_max_bytes)
     if file_err is not None:
         return file_err
