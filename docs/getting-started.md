@@ -134,30 +134,30 @@ window). When you reopen it, the server is registered.
 
 You can confirm it loaded by opening the tools panel in the message
 composer. If `laserfiche` appears in the list with the read tools
-beneath it, you're connected — each tool shows up twice, once under its
-original verb-first name (`get_entry`) and once under the v2
-`laserfiche_{resource}_{verb}` form (`laserfiche_entry_get`). Both
-resolve to the same function; the old names will be removed in v3.0.
-If `laserfiche` doesn't appear — or shows up red — run
+beneath it, you're connected — each tool shows up once, under its v2
+`laserfiche_{resource}_{verb}` name (`laserfiche_entry_get`). If
+`laserfiche` doesn't appear — or shows up red — run
 `uvx laserfiche-mcp diagnose` in a terminal (with the same LF_* values)
 before anything else: it probes the server and tells you whether the
 problem is the URL, the API version, or the credentials. Claude Desktop's
 own MCP logs are at `%APPDATA%\Claude\logs\mcp-server-laserfiche.log`
 on Windows and `~/Library/Logs/Claude/mcp-server-laserfiche.log` on macOS.
 
-> Tool count note: by default each tool shows up under two names. Set
-> `LF_LEGACY_TOOL_NAMES=false` in the `env` block to register only the
-> `laserfiche_*` names — half the catalog, and the behavior v3.0 makes
-> permanent.
+> Tool count note: as of v2.3.0, only the `laserfiche_*` names register
+> by default. If you (or a saved agent config) call tools by their old
+> verb-first names (`get_entry`), set `LF_LEGACY_TOOL_NAMES=true` in the
+> `env` block to also register those — doubling the tool catalog the
+> model pays for on every request.
 
 For Claude Code instead of Desktop, the equivalent one-liner is:
 
 ```bash
-claude mcp add laserfiche -- uvx laserfiche-mcp \
+claude mcp add laserfiche \
   -e LF_REPO_API_URL=https://lf.example.com/LFRepositoryAPI \
   -e LF_REPOSITORY_ID=my-repo \
   -e LF_USERNAME=service-account \
-  -e LF_PASSWORD=replace-me
+  -e LF_PASSWORD=replace-me \
+  -- uvx laserfiche-mcp
 ```
 
 ## Test it without Claude first

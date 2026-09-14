@@ -43,11 +43,11 @@
   },
   "tools": [
     {
-      "name": "laserfiche_search",
+      "name": "laserfiche_entry_search",
       "description": "Search the repository with native Laserfiche syntax"
     },
     {
-      "name": "laserfiche_search_natural",
+      "name": "laserfiche_entry_search_natural",
       "description": "Guided natural-language search (templates first, then executes)"
     },
     {
@@ -67,7 +67,7 @@
       "description": "Read all template field values on an entry"
     },
     {
-      "name": "laserfiche_document_edoc_get",
+      "name": "laserfiche_document_get_edoc",
       "description": "Read document metadata, bytes, or extracted text"
     }
   ],
