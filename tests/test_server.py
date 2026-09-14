@@ -211,6 +211,8 @@ async def test_all_tools_registered() -> None:
         "wait_for_task",
         "get_template_fields",
         "task_wait_or_poll",
+        "find_duplicate_documents",
+        "compare_entries",
     }
     # v2.0 names — laserfiche_{resource}_{verb}. From _V2_RENAME_MAP.
     v2 = set(server._V2_RENAME_MAP.values())
