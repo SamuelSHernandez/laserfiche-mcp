@@ -137,6 +137,30 @@ async def test_search_natural_mode_b_executes_and_returns_results(
 
 
 @pytest.mark.asyncio
+async def test_search_natural_mode_b_results_carry_web_url_when_configured(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LF_WEB_CLIENT_URL_TEMPLATE", "https://lf.example.com/doc/{entry_id}")
+    server._reset_settings_for_tests()
+
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/SimpleSearches",
+        json={"value": [{"id": 999, "name": "found.pdf", "entryType": "Document"}]},
+    )
+
+    result = await server.search_natural(
+        question="x",
+        lf_query='{LF:Name="*Smith*"}',
+        max_results=50,
+    )
+
+    assert result["entries"][0]["web_url"] == "https://lf.example.com/doc/999"
+
+
+@pytest.mark.asyncio
 async def test_search_natural_repair_escape_quotes(
     httpx_mock: HTTPXMock,
     patched_client: LaserficheClient,

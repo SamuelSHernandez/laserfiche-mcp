@@ -487,6 +487,61 @@ async def test_edoc_text_mode_decodes_plain_text(
     assert result["mode"] == "text"
     assert "error" not in result
     assert result["text"] == wrap_untrusted_document_text("hello world")
+    assert "hint" not in result
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_mode_hints_at_search_content_on_a_large_read(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A read that returns more than _LARGE_READ_HINT_CHARS worth of text
+    carries a `hint` pointing at search_content — the in-band nudge added
+    alongside the instructions-field guidance, since that guidance is easy
+    for a calling model to forget by the fifth document (see CHANGELOG.md
+    Unreleased and the audit referenced there)."""
+    from laserfiche_mcp.tools.documents import _LARGE_READ_HINT_CHARS
+
+    big_text = "x" * (_LARGE_READ_HINT_CHARS + 1)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=big_text.encode("utf-8"),
+        headers={"content-type": "text/plain; charset=utf-8"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert "search_content" in result["hint"]
+    assert len(result["text"]) > _LARGE_READ_HINT_CHARS
+
+
+@pytest.mark.asyncio
+async def test_get_document_text_hints_at_search_content_on_a_large_read(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same hint applies to the simpler v2-only get_document_text tool."""
+    from laserfiche_mcp.tools.documents import _LARGE_READ_HINT_CHARS
+
+    monkeypatch.setenv("LF_API_VERSION", "v2")
+    server._reset_settings_for_tests()
+    settings = Settings()  # type: ignore[call-arg]
+
+    big_text = ("x" * (_LARGE_READ_HINT_CHARS + 1)).encode("utf-8")
+    httpx_mock.add_response(
+        method="POST",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42/Export",
+        content=big_text,
+    )
+
+    async with LaserficheClient(settings, _StubAuth()) as client:
+        from laserfiche_mcp import _app
+
+        monkeypatch.setattr(_app, "get_client", lambda: client)
+        result = await server.get_document_text(entry_id=42)
+
+    assert "search_content" in result["hint"]
 
 
 @pytest.mark.asyncio

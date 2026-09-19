@@ -116,6 +116,42 @@ async def test_returns_context_hits_for_matching_entries(
 
 
 @pytest.mark.asyncio
+async def test_results_carry_web_url_when_configured(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LF_WEB_CLIENT_URL_TEMPLATE", "https://lf.example.com/doc/{entry_id}")
+    server._reset_settings_for_tests()
+
+    _mock_search_lifecycle(
+        httpx_mock,
+        results=[{"id": 7, "name": "lease.pdf", "entryType": "Document", "rowNumber": 1}],
+    )
+    httpx_mock.add_response(method="DELETE", url=f"{_BASE}/Searches/{_TOKEN}")
+
+    result = await server.search_content(query="unpaid balance", hits_for_top=0)
+
+    assert result["results"][0]["web_url"] == "https://lf.example.com/doc/7"
+
+
+@pytest.mark.asyncio
+async def test_results_omit_web_url_when_unconfigured(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    _mock_search_lifecycle(
+        httpx_mock,
+        results=[{"id": 7, "name": "lease.pdf", "entryType": "Document", "rowNumber": 1}],
+    )
+    httpx_mock.add_response(method="DELETE", url=f"{_BASE}/Searches/{_TOKEN}")
+
+    result = await server.search_content(query="unpaid balance", hits_for_top=0)
+
+    assert "web_url" not in result["results"][0]
+
+
+@pytest.mark.asyncio
 async def test_token_is_released_after_a_successful_search(
     httpx_mock: HTTPXMock,
     patched_client: LaserficheClient,

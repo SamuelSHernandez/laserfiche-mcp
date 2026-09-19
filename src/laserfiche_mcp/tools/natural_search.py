@@ -8,9 +8,10 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .. import _app
-from .._app import clamp_search_page_size
+from .._app import clamp_search_page_size, get_settings
 from ..client import LaserficheClient
 from ..errors import LaserficheError
+from ..links import attach_web_urls
 from ..models import (
     SearchAttempt,
     SearchNaturalResponse,
@@ -239,7 +240,7 @@ async def _run_execute_mode(
         # Success path.
         results = SearchResults.from_api(raw)
         pagination_unknown = results.next_link is None and len(results.entries) >= effective_max
-        return _dump(
+        outcome = _dump(
             mode="results",
             question=question,
             lf_query=current_query,
@@ -250,6 +251,8 @@ async def _run_execute_mode(
             pagination_unknown=pagination_unknown,
             effective_max_results=effective_max,
         )
+        attach_web_urls(outcome["entries"], settings=get_settings())
+        return outcome
 
     # Loop exhausted without returning — should not happen, but be safe.
     return _dump(
@@ -336,9 +339,10 @@ async def search_natural(
     up to two automatic repairs (escape inner quotes; wildcard-wrap bare
     ``Name=`` values when ``fuzzy=True``), then returns ``mode="error"`` with
     every ``attempts`` entry (query, repair, status, server body) so you can
-    author a fresh query. Success returns ``mode="results"``;
-    ``pagination_unknown=true`` means the server hit the cap without saying
-    whether more exist.
+    author a fresh query. Success returns ``mode="results"``, with each
+    entry carrying ``web_url`` when LF_WEB_CLIENT_URL_TEMPLATE is
+    configured; ``pagination_unknown=true`` means the server hit the cap
+    without saying whether more exist.
     """
     effective_max = clamp_search_page_size(max_results)
     client = _app.get_client()

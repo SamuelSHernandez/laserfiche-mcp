@@ -34,6 +34,42 @@ async def test_search_entries_happy_path(
 
 
 @pytest.mark.asyncio
+async def test_search_entries_omits_web_url_when_unconfigured(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/SimpleSearches",
+        json={"value": [{"id": 7, "name": "x.pdf", "entryType": "Document"}]},
+    )
+
+    result = await server.search_entries(query='{LF:Name="x.pdf"}')
+
+    assert "web_url" not in result["entries"][0]
+
+
+@pytest.mark.asyncio
+async def test_search_entries_carries_web_url_when_configured(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LF_WEB_CLIENT_URL_TEMPLATE", "https://lf.example.com/doc/{entry_id}")
+    server._reset_settings_for_tests()
+
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/SimpleSearches",
+        json={"value": [{"id": 7, "name": "x.pdf", "entryType": "Document"}]},
+    )
+
+    result = await server.search_entries(query='{LF:Name="x.pdf"}')
+
+    assert result["entries"][0]["web_url"] == "https://lf.example.com/doc/7"
+
+
+@pytest.mark.asyncio
 async def test_search_entries_wraps_laserfiche_error_as_runtime(
     httpx_mock: HTTPXMock,
     patched_client: LaserficheClient,
@@ -154,6 +190,28 @@ async def test_list_folder_happy_path(
 
 
 @pytest.mark.asyncio
+async def test_list_folder_uses_folder_template_for_child_folders(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "LF_WEB_CLIENT_FOLDER_URL_TEMPLATE", "https://lf.example.com/folder/{entry_id}"
+    )
+    server._reset_settings_for_tests()
+
+    httpx_mock.add_response(
+        method="GET",
+        url=(f"{_BASE}/Entries/1/Laserfiche.Repository.Folder/children?%24top=25&%24skip=0"),
+        json={"value": [{"id": 10, "name": "child", "entryType": "Folder"}]},
+    )
+
+    result = await server.list_folder(folder_id=1)
+
+    assert result["entries"][0]["web_url"] == "https://lf.example.com/folder/10"
+
+
+@pytest.mark.asyncio
 async def test_list_folder_clamps_negative_skip_to_zero(
     httpx_mock: HTTPXMock,
     patched_client: LaserficheClient,
@@ -203,6 +261,26 @@ async def test_get_entry_happy_path(
 
     assert result["id"] == 42
     assert result["template_name"] == "PAF"
+
+
+@pytest.mark.asyncio
+async def test_get_entry_carries_web_url_when_configured(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LF_WEB_CLIENT_URL_TEMPLATE", "https://lf.example.com/doc/{entry_id}")
+    server._reset_settings_for_tests()
+
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "x", "entryType": "Document"},
+    )
+
+    result = await server.get_entry(entry_id=42)
+
+    assert result["web_url"] == "https://lf.example.com/doc/42"
 
 
 @pytest.mark.asyncio

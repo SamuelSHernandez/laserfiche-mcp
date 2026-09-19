@@ -15,6 +15,8 @@ from enum import Enum
 from pydantic import Field, HttpUrl, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .links import validate_web_client_url_template
+
 
 class DeploymentMode(str, Enum):
     SELF_HOSTED = "self_hosted"
@@ -245,6 +247,31 @@ class Settings(BaseSettings):
         "shared or multi-tenant deployments to restrict which directories "
         "can be sourced from.",
     )
+    web_client_url_template: str | None = Field(
+        default=None,
+        description="URL template for a clickable link into the Laserfiche "
+        "web client for a Document entry, e.g. 'https://lf.example.com/"
+        "Laserfiche/DocView.aspx?repo={repo_id}&id={entry_id}'. Must start "
+        "with http:// or https:// and contain {entry_id}; {repo_id} is the "
+        "only other allowed placeholder. Cannot be derived from "
+        "LF_REPO_API_URL — the web client's host/path and its URL scheme "
+        "are deployment- and product-specific, so this must be copied by "
+        "hand from a document URL in your own web client. When unset "
+        "(default), search/read tools omit the web_url field entirely. "
+        "Opening the link still requires the viewer's own Laserfiche "
+        "web-client login and is subject to the repository's entry-level "
+        "ACLs — it grants no access beyond that, so it is only useful to "
+        "deployments where the people using it have their own Laserfiche "
+        "logins.",
+    )
+    web_client_folder_url_template: str | None = Field(
+        default=None,
+        description="Same as LF_WEB_CLIENT_URL_TEMPLATE but for Folder and "
+        "RecordSeries entries — most Laserfiche web clients use a "
+        "different page to browse a folder than to view a document. "
+        "Optional: leave unset to omit web_url for folders even when "
+        "LF_WEB_CLIENT_URL_TEMPLATE is set for documents.",
+    )
     log_level: str = Field(
         default="INFO",
         description="Python logging level for the server (DEBUG, INFO, WARNING, ERROR).",
@@ -399,6 +426,15 @@ class Settings(BaseSettings):
 
         if not self.http_path.startswith("/"):
             raise ValueError(f"LF_HTTP_PATH must start with '/', got {self.http_path!r}.")
+
+        if self.web_client_url_template is not None:
+            validate_web_client_url_template(
+                self.web_client_url_template, field_name="LF_WEB_CLIENT_URL_TEMPLATE"
+            )
+        if self.web_client_folder_url_template is not None:
+            validate_web_client_url_template(
+                self.web_client_folder_url_template, field_name="LF_WEB_CLIENT_FOLDER_URL_TEMPLATE"
+            )
 
         if self.http_oauth_issuer is not None:
             if self.http_public_url is None:

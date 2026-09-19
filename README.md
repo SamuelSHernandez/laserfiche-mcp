@@ -139,6 +139,20 @@ Minimum required variables for self-hosted password-grant auth:
 | `LF_AUTH_MODE`       | `password`                                    |
 | `LF_READ_ONLY`       | `true` (default — see Writes section below)   |
 
+**Optional — web-client links.** Unset by default, so search/read tools
+never emit `web_url`. Cannot be derived from `LF_REPO_API_URL` — copy it by
+hand from your own Laserfiche web client (open a document, copy the browser
+URL, substitute the entry ID with `{entry_id}`). See `.env.example` for
+worked examples. A returned link grants no access by itself: opening it
+still requires the *viewer's own* Laserfiche web-client login and is
+subject to the repository's entry-level ACLs — useful for staff who have
+Laserfiche accounts, useless to an end user who doesn't.
+
+| Variable                            | Default | Purpose                                                                          |
+| ------------------------------------ | ------- | -------------------------------------------------------------------------------- |
+| `LF_WEB_CLIENT_URL_TEMPLATE`         | unset   | URL template for a Document viewer link, e.g. `https://lf.example.com/Laserfiche/DocView.aspx?repo={repo_id}&id={entry_id}` |
+| `LF_WEB_CLIENT_FOLDER_URL_TEMPLATE`  | unset   | Same, for Folder/RecordSeries entries — most web clients browse on a different page than they view a document on |
+
 **Optional write-mode variables** (fences and allowlists default off; the delete batch cap and required-field validation default on — see the [Safety model](#safety-model) section for context):
 
 | Variable                            | Default | Purpose                                                                          |
@@ -687,8 +701,8 @@ fence regardless of which tools are registered.
   the per-process lifespan client and schema caches become per-instance.
   The cacheable `tools/list` in the new spec also raises the value of a
   small catalog (`LF_LEGACY_TOOL_NAMES=false`).
-- **Beyond** — Workflow trigger tools, MCP resource links for edocs, and
-  per-viewer table summaries for spreadsheet entries.
+- **Beyond** — Workflow trigger tools, and per-viewer table summaries for
+  spreadsheet entries.
 
 ## Development
 

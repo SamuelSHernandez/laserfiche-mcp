@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A client evaluating a pre-2.3.0 build reported the tool exhausting its
+context after ~5 prompts. An audit of the first fix attempt below found
+the tool catalog — while real, and independently guarded now — was **not**
+the dominant cause: measured with `tiktoken` (`cl100k_base`) against the
+actual wire payload, the pre-2.3.0 catalog (both naming schemes, always
+registered — the flag didn't exist yet) was ~19.7k tokens; 2.3.0's default
+read-only catalog measures ~9.3k tokens today, a ~53% cut, not the
+~24,100 → ~14,500 figure the 2.3.0 entry below states (that number appears
+to have been measured at an earlier point in that release and was never
+reconciled against the shipped build — flagged here rather than silently
+edited, since it's a released entry). Even the larger, pre-2.3.0 number is
+a small fraction of a modern context window. The dominant cause is
+`get_document_edoc(mode="text")` / `get_document_text`, which return up to
+50,000 chars (~12–15k tokens) **per call**, with nothing to reclaim that
+text once it's in the conversation — five such reads alone accounts for
+the report.
+
+### Fixed
+- **`get_document_edoc` / `get_document_text` now attach a `hint` to any
+  read over 15,000 characters**, pointing the calling model at
+  `search_content` for multi-document fact-checking. The `instructions`
+  field said this once, at session start; a model five documents into a
+  folder walk has likely forgotten it. This hint repeats it at the moment
+  it's actually relevant — right after a read that just added a real
+  chunk of text to the conversation. See `_LARGE_READ_HINT_CHARS` /
+  `_with_multi_doc_hint` in `src/laserfiche_mcp/tools/documents.py`. This
+  is still non-enforcing prose guidance, not a hard cap — a model can
+  ignore it, and MCP's stateless design (see the README's Roadmap entry
+  on the 2026-07-28 spec) means the server has no cross-call session state
+  to enforce a cumulative budget against even if it wanted to.
+
+### Changed
+- **Instructions field also steers multi-document reads toward
+  `search_content`**, tightened to avoid repeating the existing
+  search_content guidance two sentences earlier. See
+  `src/laserfiche_mcp/_app.py`.
+
+### Added
+- **Web-client viewer links (`web_url`).** `search_entries`,
+  `search_by_name`, `list_folder`, `get_entry`, `get_entry_by_path`,
+  `search_natural`, and `search_content` now attach a `web_url` field to
+  each Document/Folder/RecordSeries result — a clickable link into the
+  Laserfiche web client — when the new `LF_WEB_CLIENT_URL_TEMPLATE` /
+  `LF_WEB_CLIENT_FOLDER_URL_TEMPLATE` env vars are configured. Unset by
+  default: the field is omitted entirely, not null. The template can't be
+  derived from `LF_REPO_API_URL` (the web client's host/path and URL
+  scheme are deployment- and product-specific), so it's copied by hand
+  from a real document URL — see `.env.example`. Lets an agent hand a user
+  a link to open or download a document themselves instead of pulling the
+  whole payload through `get_document_edoc`; the link still requires the
+  viewer's own Laserfiche web-client login and is subject to the
+  repository's entry-level ACLs, so it's only useful where end users have
+  their own Laserfiche accounts. New module: `src/laserfiche_mcp/links.py`.
+- **Catalog size regression guard.** `tests/test_server.py` now asserts
+  the default read-only catalog stays under a character budget (30,783
+  chars / 22 tools measured at write time, ceiling at 38,000; ~9.3k
+  tokens) and that `LF_LEGACY_TOOL_NAMES=true` still costs close to the
+  expected ~2x, registering through the real gate
+  (`server._register_one`) rather than hand-building both name sets. This
+  guards catalog-size regressions specifically — docstring bloat or the
+  legacy-name default flipping back — not the ~5-prompt failure mode as a
+  whole, which is the `Fixed` entry above.
+
 ## [2.3.0] - 2026-09-14
 
 Merges the local production-hardening / CLI / `ops/` work below with the
