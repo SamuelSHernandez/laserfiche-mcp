@@ -31,12 +31,14 @@ Four things, and not much else.
 - **Python 3.10 or newer.** The server is published on PyPI. If you already
   have [`uv`](https://github.com/astral-sh/uv) installed, that's all you need
   — `uvx` will fetch and run the server without a global install.
-- **A reachable Laserfiche Repository API Server endpoint.** Self-hosted
-  only — URLs shaped like `https://lf.example.com/LFRepositoryAPI`. Both
-  the v1 and v2 routing surfaces are supported (set `LF_API_VERSION`
+- **A reachable Laserfiche Repository API Server endpoint.** Self-hosted is
+  the battle-tested path — URLs shaped like `https://lf.example.com/LFRepositoryAPI`.
+  Both the v1 and v2 routing surfaces are supported (set `LF_API_VERSION`
   accordingly; defaults to `v1`, which is what most current on-prem
-  installations expose). Laserfiche Cloud is still on the roadmap, not
-  yet supported.
+  installations expose). Laserfiche Cloud is also implemented
+  (`LF_DEPLOYMENT_MODE=cloud`, `LF_AUTH_MODE=api_key`) but BETA — it has
+  never been exercised against a live Cloud tenant; see the README's
+  Configure section.
 - **A service account with read access to the repository.** Username +
   password is the default auth path; OAuth via Laserfiche Directory Server
   (LFDS) is supported if your environment is set up for it.

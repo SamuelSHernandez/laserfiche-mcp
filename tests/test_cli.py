@@ -50,6 +50,26 @@ def test_cli_parse_args_version_flag() -> None:
     assert short.version is True
 
 
+def test_cli_parse_args_help_wins_over_subcommand() -> None:
+    """`--help`/`-V` combined with a subcommand must not crash on the
+    subcommand's own required positional — help/version must always win.
+
+    Regression: `laserfiche-mcp --help ls` used to fail argparse's
+    positional-argument validation ("the following arguments are
+    required: folder") instead of showing help, because -h/--help was a
+    plain store_true flag checked only after parsing fully succeeded.
+    """
+    args = cli._parse_args(["--help", "ls"])
+    assert args.help is True
+
+    args = cli._parse_args(["-V", "ls"])
+    assert args.version is True
+
+    # Also the reverse order, and with a subcommand that itself needs args.
+    args = cli._parse_args(["ls", "--help"])
+    assert args.help is True
+
+
 def test_cli_parse_args_diagnose_flag() -> None:
     args = cli._parse_args(["--diagnose"])
     assert args.diagnose is True
@@ -322,6 +342,10 @@ async def test_run_diagnose_success_path(
     assert "Authentication" in out and "OK" in out
     assert "Endpoint probes:" in out
     assert "Done." in out
+    # Regression: HttpUrl doesn't reliably carry a trailing slash, so a
+    # bare concatenation of repo_api_url + repository_id used to glue the
+    # path straight onto repository_id with nothing between them.
+    assert "Target: https://lf.example.test/LFRepositoryAPI/demo " in out
 
 
 @pytest.mark.asyncio
@@ -454,6 +478,45 @@ def test_main_diagnose_exits_with_diagnose_return_code(
     assert exc.value.code == 7
     # Writes are NOT registered on the diagnose path.
     assert called == []
+
+
+def test_main_rejects_diagnose_combined_with_subcommand(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--diagnose ls 1 used to silently discard 'ls 1' and just diagnose."""
+    monkeypatch.setattr("sys.argv", ["laserfiche-mcp", "--diagnose", "ls", "1"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main(lambda: None)
+    assert exc.value.code == 2
+    assert "--diagnose" in capsys.readouterr().err
+
+
+def test_main_rejects_http_combined_with_subcommand(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--http ls 1 used to silently no-op --http and just run ls."""
+    monkeypatch.setattr("sys.argv", ["laserfiche-mcp", "--http", "ls", "1"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main(lambda: None)
+    assert exc.value.code == 2
+    assert "--http" in capsys.readouterr().err
+
+
+def test_main_rejects_verbose_and_quiet_across_parsers(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """-v ls 1 -q used to silently pick DEBUG (verbose) over quiet — -v is
+    parsed by the top-level parser, -q by the ls subcommand's own separate
+    mutually-exclusive group, so argparse itself never sees the conflict."""
+    monkeypatch.setattr("sys.argv", ["laserfiche-mcp", "-v", "ls", "1", "-q"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main(lambda: None)
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "verbose" in err.lower() and "quiet" in err.lower()
 
 
 def test_main_config_flag_loads_dotenv_then_starts(

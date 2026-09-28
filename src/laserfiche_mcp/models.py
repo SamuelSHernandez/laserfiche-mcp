@@ -15,7 +15,29 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator
+
+_DATETIME_ADAPTER = TypeAdapter(datetime)
+
+
+def _coerce_optional_datetime(value: Any) -> datetime | None:
+    """Parse an API timestamp, tolerating blank or malformed values.
+
+    The Repository API has been observed to return a blank or otherwise
+    unparseable value for creationTime/lastModifiedTime. Letting pydantic's
+    normal datetime coercion raise here would surface a raw
+    ValidationError out of every read tool's ``from_api`` call instead of
+    the structured error contract those tools promise — treat "can't
+    parse this timestamp" as "unknown," not a hard failure.
+    """
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return _DATETIME_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def _pick(raw: dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -58,6 +80,11 @@ class EntrySummary(BaseModel):
     full_path: str | None = None
     creation_time: datetime | None = None
     last_modified_time: datetime | None = None
+
+    @field_validator("creation_time", "last_modified_time", mode="before")
+    @classmethod
+    def _tolerate_malformed_timestamps(cls, value: Any) -> datetime | None:
+        return _coerce_optional_datetime(value)
 
     @classmethod
     def from_api(cls, raw: dict[str, Any]) -> EntrySummary:
@@ -341,3 +368,22 @@ class SearchNaturalResponse(BaseModel):
     attempts: list[SearchAttempt] = Field(default_factory=list)
     final_error: str | None = None
     next_action: str | None = None
+    operation: str | None = Field(
+        default=None,
+        description="Present on mode='error': always 'search_natural'. Part of "
+        "the standard error envelope every other tool's failure carries too.",
+    )
+    kind: str | None = Field(
+        default=None,
+        description="Present on mode='error': one of the 5 canonical "
+        "ToolErrorKind values (see docs/error-contract.md).",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Present on mode='error': the specific subkind, e.g. 'bad_query_syntax'.",
+    )
+    request_id: str | None = Field(
+        default=None,
+        description="Present on mode='error': UUID4 for this tool call, for "
+        "pivoting into server logs.",
+    )

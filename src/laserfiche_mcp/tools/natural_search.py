@@ -10,7 +10,7 @@ from pydantic import Field
 from .. import _app
 from .._app import clamp_search_page_size, get_settings
 from ..client import LaserficheClient
-from ..errors import LaserficheError
+from ..errors import LaserficheError, classify_lf_error, kind_for_subkind
 from ..links import attach_web_urls
 from ..models import (
     SearchAttempt,
@@ -18,6 +18,7 @@ from ..models import (
     SearchResults,
     TemplateHint,
 )
+from ..observability import get_request_id_or_new
 from ..search import (
     LF_GRAMMAR_REFERENCE,
     build_candidate_queries,
@@ -49,7 +50,7 @@ async def _sample_folder_templates(
                 "Sampled from the repository root instead."
             )
         else:
-            resolved = folder.get("id")
+            resolved = folder.get("id") or folder.get("Id")
             if resolved and resolved > 0:
                 folder_id = resolved
             else:
@@ -64,12 +65,12 @@ async def _sample_folder_templates(
         notes.append(f"Could not list folder {folder_id}: {exc}")
         return [], notes
 
-    entries = children.get("value") or []
+    entries = children.get("value") or children.get("Value") or []
     if not entries:
         notes.append(f"Folder {folder_id} had no children to sample.")
         return [], notes
 
-    entry_ids: list[int] = [e["id"] for e in entries if e.get("id")]
+    entry_ids: list[int] = [eid for e in entries if (eid := e.get("id") or e.get("Id"))]
     detail_results = await asyncio.gather(
         *[client.get_entry(eid) for eid in entry_ids],
         return_exceptions=True,
@@ -202,7 +203,10 @@ async def _run_execute_mode(
                 )
             )
             if exc.status_code != 400:
-                # Non-400 errors are not in the repair contract — surface immediately.
+                # Non-400 errors are not in the repair contract — surface
+                # immediately, classified the same way every other tool's
+                # upstream failures are (kind/error/request_id).
+                classified = classify_lf_error("search_natural", exc)
                 return _dump(
                     mode="error",
                     question=question,
@@ -214,10 +218,15 @@ async def _run_execute_mode(
                         "permissions, network reachability, and credentials "
                         "before retrying."
                     ),
+                    operation="search_natural",
+                    kind=classified["kind"],
+                    error=classified["error"],
+                    request_id=classified["request_id"],
                 )
 
             repair = _next_repair(current_query, repairs_applied, fuzzy)
             if repair is None:
+                classified = classify_lf_error("search_natural", exc)
                 return _dump(
                     mode="error",
                     question=question,
@@ -232,6 +241,13 @@ async def _run_execute_mode(
                         '{LF:LookIn="\\\\path"}, or switch to a template '
                         'field clause like {[Template]:[Field]="value"}.'
                     ),
+                    operation="search_natural",
+                    # The repair contract is exhausted and the server still
+                    # rejected it as a 400 — that's specifically a query-
+                    # syntax problem, not a generic server classification.
+                    kind=kind_for_subkind("bad_query_syntax"),
+                    error="bad_query_syntax",
+                    request_id=classified["request_id"],
                 )
             current_query, current_repair = repair
             repairs_applied.append(current_repair)
@@ -262,6 +278,10 @@ async def _run_execute_mode(
         attempts=attempts,
         final_error="search_natural exhausted repair attempts without a definitive outcome.",
         next_action="Retry with a refined lf_query.",
+        operation="search_natural",
+        kind=kind_for_subkind("bad_query_syntax"),
+        error="bad_query_syntax",
+        request_id=get_request_id_or_new(),
     )
 
 

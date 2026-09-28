@@ -100,8 +100,19 @@ async def _list_all_children(
     folder_id: int,
     *,
     page_size: int,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Page through a folder's children until the server stops returning any."""
+    """Page through a folder's children until the server stops returning
+    any, or until at least ``limit`` items have been collected.
+
+    ``limit`` is the walk's remaining ``max_entries`` budget — without it,
+    a folder with thousands of children is paged through in full before
+    ``walk()``'s own per-item truncation check ever runs, turning "stop
+    after max_entries" into "stop after max_entries, but only once you've
+    already paid for the whole folder." May return slightly more than
+    ``limit`` (never past the current page boundary); ``walk()`` still
+    truncates to the exact count.
+    """
     out: list[dict[str, Any]] = []
     skip = 0
     while True:
@@ -110,6 +121,8 @@ async def _list_all_children(
         if not isinstance(batch, list) or not batch:
             return out
         out.extend(item for item in batch if isinstance(item, dict))
+        if limit is not None and len(out) >= limit:
+            return out
         if len(batch) < page_size:
             return out
         skip += len(batch)
@@ -145,10 +158,16 @@ async def walk(
     visited: set[int] = {root_id}
 
     while queue:
+        if len(rows) >= max_entries:
+            summary.truncated = True
+            break
+
         folder_id, depth = queue.pop(0)
 
         try:
-            children = await _list_all_children(client, folder_id, page_size=page_size)
+            children = await _list_all_children(
+                client, folder_id, page_size=page_size, limit=max_entries - len(rows)
+            )
         except Exception:  # noqa: BLE001 — recorded below; one subtree can't abort the walk
             summary.folders_unreadable.append(folder_id)
             continue

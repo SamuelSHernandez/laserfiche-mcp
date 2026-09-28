@@ -126,6 +126,39 @@ async def test_rename_split_round_trip(
 
 
 @pytest.mark.asyncio
+async def test_rename_preview_allowlisted_by_its_own_name(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """LF_WRITE_TOOLS_ALLOWED=rename_entry_preview must actually allow it.
+
+    Regression for the allowlist family bug: rename_entry_preview
+    delegates by calling rename_entry(...) directly, so
+    check_write_permission used to see the delegate's hardcoded
+    "rename_entry" operation name instead of the invoked tool's own
+    name — allowlisting exactly what this tool's own docstring
+    recommends used to still fail with tool_not_allowed.
+    """
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    monkeypatch.setattr(server._get_settings(), "write_tools_allowed", "rename_entry_preview")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42,
+            "name": "Old",
+            "entryType": "Document",
+            "fullPath": "\\Folder\\Old",
+            "folderPath": "\\Folder",
+        },
+    )
+
+    preview = await rename_entry_preview(entry_id=42, new_name="New")
+    assert preview["mode"] == "preview"
+
+
+@pytest.mark.asyncio
 async def test_move_split_round_trip(
     monkeypatch: pytest.MonkeyPatch,
     httpx_mock: HTTPXMock,

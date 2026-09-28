@@ -89,7 +89,10 @@ async def wait_for_task(
                 extra={"operation_token": operation_token},
             )
         status = (last.get("status") or last.get("Status") or "").lower()
-        if status in {"completed", "failed", "canceled"}:
+        # Both spellings: self-hosted builds have not been consistent about
+        # "canceled" vs "cancelled" — see client/_search.py's _TERMINAL_BAD
+        # for the same reasoning.
+        if status in {"completed", "failed", "canceled", "cancelled"}:
             return {**last, "timed_out": False}
         if time.monotonic() >= deadline:
             return {**last, "timed_out": True}

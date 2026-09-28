@@ -258,7 +258,9 @@ async def validate_required_fields(
         return None
 
     already_set = {
-        (fv.get("fieldName") or "") for fv in (current.get("value") or []) if fv.get("values")
+        (fv.get("fieldName") or fv.get("FieldName") or "")
+        for fv in (current.get("value") or current.get("Value") or [])
+        if fv.get("values") or fv.get("Values")
     }
     being_supplied = set(caller_fields.keys()) if caller_fields else set()
 

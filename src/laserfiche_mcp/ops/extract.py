@@ -5,8 +5,14 @@ Laserfiche repositories are mostly PDFs and Office documents. The MCP's
 ``unsupported_content_type`` for everything else, which leaves a large share
 of a real repository unreadable without downloading the raw file.
 
-Everything here operates on a file already on disk, never on a bytes blob in
-memory — a 400 MB scan should cost one file handle, not 400 MB of RSS.
+Everything here operates on a file already on disk, never on a bytes blob
+passed in directly — but only the PDF (streamed page-by-page via pypdf) and
+XLSX (streamed row-by-row via openpyxl's ``read_only`` mode) backends are
+actually memory-bound in proportion to what's read. DOCX, PPTX, EML, HTML,
+RTF and plain text are all fully materialized in memory (``ZipFile.read()``,
+``BytesParser.parse()``, or a whole-file read) — fine at realistic Office-
+document sizes, but a 400 MB file in one of those formats costs ~400 MB of
+RSS, not one file handle.
 
 Dependency policy: PDF (pypdf) is already a hard dependency. DOCX, PPTX,
 EML, HTML and RTF are handled with nothing but the standard library — they
@@ -239,6 +245,13 @@ def _extract_docx(path: Path) -> ExtractedText:
             raise ExtractionError(
                 "malformed_docx", "Zip container has no word/document.xml part."
             ) from exc
+        except zipfile.BadZipFile as exc:
+            # The initial ZipFile(path) open only validates the central
+            # directory — a corrupted individual member (bad CRC, truncated
+            # data) only surfaces here, on read.
+            raise ExtractionError(
+                "malformed_docx", f"word/document.xml is corrupted in the zip: {exc}"
+            ) from exc
 
     try:
         root = ElementTree.fromstring(raw)
@@ -262,7 +275,12 @@ def _extract_pptx(path: Path) -> ExtractedText:
         for name in names:
             try:
                 root = ElementTree.fromstring(archive.read(name))
-            except ElementTree.ParseError:
+            except (ElementTree.ParseError, zipfile.BadZipFile):
+                # BadZipFile here means this one slide's member is corrupted
+                # (bad CRC, truncated data) — the initial ZipFile(path) open
+                # only validated the central directory, not every member.
+                # Skip just this slide, consistent with a malformed-XML
+                # slide: a partial deck beats failing the whole extraction.
                 slides.append("")
                 warnings.append(f"{name}: not valid XML, skipped")
                 continue
@@ -314,21 +332,28 @@ def _extract_eml(path: Path) -> ExtractedText:
     from email import policy
     from email.parser import BytesParser
 
-    with path.open("rb") as handle:
-        message = BytesParser(policy=policy.default).parse(handle)
+    try:
+        with path.open("rb") as handle:
+            message = BytesParser(policy=policy.default).parse(handle)
 
-    header_names = ("From", "To", "Cc", "Date", "Subject")
-    headers = [f"{name}: {message[name]}" for name in header_names if message[name]]
+        header_names = ("From", "To", "Cc", "Date", "Subject")
+        headers = [f"{name}: {message[name]}" for name in header_names if message[name]]
 
-    body = ""
-    part = message.get_body(preferencelist=("plain", "html"))
-    if part is not None:
-        content = part.get_content()
-        body = strip_html(content) if part.get_content_subtype() == "html" else content
+        body = ""
+        part = message.get_body(preferencelist=("plain", "html"))
+        if part is not None:
+            content = part.get_content()
+            body = strip_html(content) if part.get_content_subtype() == "html" else content
 
-    attachments = [a.get_filename() or "(unnamed)" for a in message.iter_attachments()]
-    if attachments:
-        headers.append(f"Attachments: {', '.join(attachments)}")
+        attachments = [a.get_filename() or "(unnamed)" for a in message.iter_attachments()]
+        if attachments:
+            headers.append(f"Attachments: {', '.join(attachments)}")
+    except Exception as exc:  # noqa: BLE001 — message parsing/decoding raises many subclasses
+        # E.g. LookupError for an unrecognized charset, or a malformed
+        # MIME structure the email package can't walk.
+        raise ExtractionError(
+            "malformed_eml", f"Could not parse .eml ({type(exc).__name__}): {exc}"
+        ) from exc
 
     return ExtractedText(text="\n".join(headers) + "\n\n" + body.strip(), backend="email")
 

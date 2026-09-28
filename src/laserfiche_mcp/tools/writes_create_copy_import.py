@@ -232,8 +232,20 @@ def _read_import_file(file_path: str, max_bytes: int) -> tuple[bytes, dict[str, 
             ),
         )
 
-    with open(file_path, "rb") as fh:
-        return fh.read(), None
+    try:
+        with open(file_path, "rb") as fh:
+            return fh.read(), None
+    except OSError as exc:
+        # isfile()/getsize() above are TOCTOU-prone (Windows especially: a
+        # file open in another app routinely passes both, then raises
+        # PermissionError on open — a routine user mistake on one of the
+        # most commonly used write tools, not an edge case).
+        return b"", local_error(
+            "import_document",
+            "file_read_failed",
+            file_path=file_path,
+            message=f"Could not read {file_path!r}: {exc}",
+        )
 
 
 def _build_import_metadata(

@@ -31,25 +31,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
+from ._pyjwt_support import require_pyjwt
 from .config import Settings
 
 if TYPE_CHECKING:
     from jwt import PyJWKClient
 
 logger = logging.getLogger("laserfiche_mcp")
-
-_INSTALL_HINT = (
-    "OAuth Resource Server mode needs PyJWT. Install the extra: pip install 'laserfiche-mcp[oauth]'"
-)
-
-
-def _require_pyjwt() -> Any:
-    """Import PyJWT lazily, raising a clear message if the extra is missing."""
-    try:
-        import jwt  # noqa: PLC0415
-    except ImportError as exc:  # pragma: no cover - exercised only without the extra
-        raise RuntimeError(_INSTALL_HINT) from exc
-    return jwt
 
 
 def _extract_scopes(claims: dict[str, Any]) -> list[str]:
@@ -99,14 +87,14 @@ class JwtTokenVerifier(TokenVerifier):
     async def _client(self) -> PyJWKClient:
         """Lazily build (and cache) the PyJWKClient that fetches signing keys."""
         if self._jwk_client is None:
-            jwt = _require_pyjwt()
+            jwt = require_pyjwt("OAuth Resource Server mode")
             url = await self._jwks_url()
             # PyJWKClient caches keys and handles rotation on cache miss.
             self._jwk_client = jwt.PyJWKClient(url, cache_keys=True)
         return self._jwk_client
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        jwt = _require_pyjwt()
+        jwt = require_pyjwt("OAuth Resource Server mode")
         try:
             client = await self._client()
             # Signing-key fetch and decode are synchronous (urllib inside PyJWT);

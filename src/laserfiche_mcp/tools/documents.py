@@ -622,6 +622,17 @@ async def get_document_edoc(
     else:
         page_spec = None
 
+    # Probe Content-Length first (headers only, no body transferred) so the
+    # cap actually bounds transfer/memory cost — checking only after a full
+    # download defeats the point of the cap for anything over it: a 300 MB
+    # document was fully buffered in memory before being refused.
+    try:
+        declared_size, _ = await client.export_entry_meta_only(entry_id, part="Edoc")
+    except LaserficheError as exc:
+        return classify_lf_error("get_document_edoc", exc, entry_id=entry_id)
+    if declared_size is not None and declared_size > effective_cap:
+        return _edoc_size_cap_response(entry_id, mode, declared_size, effective_cap, None)
+
     try:
         content, content_type = await client.export_entry_with_meta(entry_id, part="Edoc")
     except LaserficheError as exc:
@@ -629,6 +640,10 @@ async def get_document_edoc(
 
     byte_size = len(content)
 
+    # Second check: the server may not have declared Content-Length above
+    # (declared_size is None), so this is the only cap enforcement for that
+    # case — kept as a safety net even though the probe already caught the
+    # common case.
     if byte_size > effective_cap:
         return _edoc_size_cap_response(entry_id, mode, byte_size, effective_cap, content_type)
 

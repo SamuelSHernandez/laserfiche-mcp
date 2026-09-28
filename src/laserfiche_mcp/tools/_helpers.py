@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from mcp.server.auth.middleware.auth_context import get_access_token
+
 from .. import _app, permissions
 from .._app import get_settings
 from ..errors import LaserficheError, classify_lf_error, local_error
@@ -46,6 +48,32 @@ def wrap_untrusted_document_text(text: str) -> str:
         f"<laserfiche_document_text>\n{UNTRUSTED_DOCUMENT_TEXT_NOTICE}\n\n"
         f"{text}\n</laserfiche_document_text>"
     )
+
+
+# write_collapses.py / preview_execute_splits.py wrapper tools delegate by
+# calling these functions directly — e.g. field_update(mode="merge") just
+# calls merge_fields(...) — so the delegate's own hardcoded operation name
+# (not the wrapper name the operator/LLM actually invoked) is what reaches
+# check_write_permission. Without this table, allowlisting exactly the
+# wrapper name in LF_WRITE_TOOLS_ALLOWED — which every wrapper's own
+# docstring recommends — breaks the tool it recommends. Each family's
+# names (and their v2 aliases) are treated as interchangeable for the
+# allowlist check only; nothing else about them is shared.
+_ALLOWLIST_FAMILIES: dict[str, frozenset[str]] = {
+    name: frozenset(family)
+    for family in (
+        {"rename_entry", "rename_entry_preview", "rename_entry_execute"},
+        {"move_entry", "move_entry_preview", "move_entry_execute"},
+        {"delete_entry", "delete_entry_preview", "delete_entry_execute"},
+        {"delete_edoc", "delete_edoc_preview", "delete_edoc_execute"},
+        {"delete_pages", "delete_pages_preview", "delete_pages_execute"},
+        {"set_fields", "merge_fields", "field_update"},
+        {"set_tags", "merge_tags", "tag_update"},
+        {"set_links", "link_update"},
+        {"assign_template", "remove_template", "template_assign_or_remove"},
+    )
+    for name in family
+}
 
 
 class ToolAbortedError(Exception):
@@ -117,9 +145,25 @@ def entry_type(entry: dict[str, Any] | None) -> str:
 
 
 def entry_path(entry: dict[str, Any] | None) -> str | None:
+    """Pull ``fullPath``/``FullPath`` out of an entry, ``None`` only when
+    genuinely absent.
+
+    ``permissions.path_allowed()`` treats ``path=None`` as "can't enforce
+    the fence, allow it" — deliberately, since a lookup that couldn't
+    determine the path shouldn't block the write. But an `or`-chain
+    (``entry.get("fullPath") or entry.get("FullPath")``) can't tell that
+    apart from the key being *present* with an empty string, which would
+    silently take the same "can't enforce" path instead of being fenced
+    like any other path value. Checking membership first keeps those
+    distinct.
+    """
     if entry is None:
         return None
-    return entry.get("fullPath") or entry.get("FullPath")
+    if "fullPath" in entry:
+        return entry["fullPath"]  # type: ignore[no-any-return]
+    if "FullPath" in entry:
+        return entry["FullPath"]  # type: ignore[no-any-return]
+    return None
 
 
 def check_write_permission(
@@ -145,11 +189,16 @@ def check_write_permission(
     settings = get_settings()
 
     # ``operation`` is always the tool's legacy (function) name — the
-    # literal every write tool passes here. Also check its v2 alias so
-    # LF_WRITE_TOOLS_ALLOWED matches regardless of which naming scheme the
-    # operator configured (see permissions.tool_allowed).
-    v2_name = v2_rename_map().get(operation, operation)
-    ok, reason = permissions.tool_allowed((operation, v2_name), settings.write_tools_allowed)
+    # literal every write tool passes here. Check every name this
+    # operation could have been invoked as: its own legacy + v2 names,
+    # plus — via _ALLOWLIST_FAMILIES — any wrapper/delegate sibling's
+    # legacy + v2 names, so LF_WRITE_TOOLS_ALLOWED matches regardless of
+    # which naming scheme or collapsed/split tool the operator configured
+    # (see permissions.tool_allowed).
+    v2_map = v2_rename_map()
+    family = _ALLOWLIST_FAMILIES.get(operation, frozenset({operation}))
+    names = tuple(sorted({n for name in family for n in (name, v2_map.get(name, name))}))
+    ok, reason = permissions.tool_allowed(names, settings.write_tools_allowed)
     if not ok:
         return local_error(operation, "tool_not_allowed", reason=reason)
 
@@ -171,6 +220,43 @@ def check_write_permission(
         return local_error(operation, subkind, reason=reason, path=path)
 
     return None
+
+
+def check_destructive_scope(operation: str) -> dict[str, Any] | None:
+    """Refuse a destructive execute call when the caller's OAuth token lacks
+    the configured destructive scope. Returns None on success.
+
+    No-op unless both LF_HTTP_OAUTH_ISSUER (OAuth Resource Server mode) and
+    LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE are set — an operator opts in twice
+    before this fence does anything. Under stdio or LF_HTTP_AUTH_TOKEN there
+    is no per-caller token to check, so LF_WRITE_TOOLS_ALLOWED remains the
+    only available fence there.
+
+    Call this on the EXECUTE leg only (confirmation_token supplied) — the
+    preview leg is read-only and stays open to any authenticated caller so
+    an unattended agent can still surface "this needs deleting" for a human
+    to act on.
+    """
+    settings = get_settings()
+    required_scope = settings.http_oauth_destructive_scope
+    if not required_scope or not settings.oauth_enabled:
+        return None
+
+    token = get_access_token()
+    scopes = token.scopes if token is not None else []
+    if required_scope in scopes:
+        return None
+
+    return local_error(
+        operation,
+        "destructive_scope_required",
+        reason=(
+            f"This deployment requires the {required_scope!r} OAuth scope "
+            "to execute destructive operations. This caller's token does "
+            "not carry it — have a human with that scope run this instead."
+        ),
+        required_scope=required_scope,
+    )
 
 
 async def check_write_for_entry(operation: str, entry_id: int) -> dict[str, Any]:

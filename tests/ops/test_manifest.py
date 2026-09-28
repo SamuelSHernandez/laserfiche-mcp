@@ -110,6 +110,27 @@ async def test_max_entries_marks_the_result_truncated() -> None:
 
 
 @pytest.mark.asyncio
+async def test_max_entries_stops_paging_the_folder_early() -> None:
+    """max_entries must bound network calls, not just the returned rows.
+
+    Regression: the walk used to page a folder through to completion
+    before ever checking max_entries, so a low cap against a folder with
+    thousands of children still cost as many requests as an unbounded
+    walk — a "stop, not a filter" that didn't actually stop anything
+    until after paying for the whole folder."""
+    children = [_doc(i, f"{i}.pdf") for i in range(100, 5100)]  # 5000 children
+    repo = FakeRepo({1: children})
+
+    rows, summary = await manifest.walk(repo, 1, max_entries=10, page_size=50)
+
+    assert len(rows) == 10
+    assert summary.truncated is True
+    # One page (50 items) already covers the 10-row budget — must not page
+    # through all 100 pages the full folder would otherwise take.
+    assert len(repo.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_unreadable_folder_is_recorded_and_the_walk_continues() -> None:
     repo = FakeRepo(
         {1: [_folder(2, "locked"), _folder(3, "open")], 3: [_doc(4, "reachable.pdf")]},

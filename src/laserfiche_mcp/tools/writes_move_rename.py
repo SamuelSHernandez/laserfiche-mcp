@@ -10,6 +10,7 @@ from .. import _app, confirmation
 from ..errors import LaserficheError, classify_lf_error, invalid_token_response
 from ._helpers import (
     ToolAbortedError,
+    check_write_for_parent,
     check_write_permission,
     entry_name,
     entry_path,
@@ -274,15 +275,17 @@ async def move_entry(
     # both legs; the guarantee that the execute leg lands in the SAME
     # destination the user previewed comes from the token's parameter
     # binding on (new_parent_id, new_name), checked below.
+    #
+    # Fetch + check via check_write_for_parent (not a bare get_entry())
+    # so a fetch failure — a genuine 404, but also a transient 429/5xx/
+    # timeout — fails CLOSED with a structured error, symmetric with the
+    # source side above, instead of silently treating "couldn't confirm
+    # the destination's path" as "no fence applies here."
     try:
-        target = await _app.get_client().get_entry(new_parent_id)
-        target_path = target.get("fullPath") or target.get("FullPath") or ""
-    except LaserficheError:
-        target_path = ""
-    if target_path:
-        dest_err = check_write_permission("move_entry", path=target_path)
-        if dest_err:
-            return dest_err
+        target = await check_write_for_parent("move_entry", new_parent_id)
+    except ToolAbortedError as aborted:
+        return aborted.payload
+    target_path = target.get("fullPath") or target.get("FullPath") or ""
 
     if confirmation_token is None:
         return _move_preview(entry, entry_id, new_parent_id, new_name, current_name, target_path)

@@ -144,6 +144,31 @@ async def test_a_failed_download_is_recorded_not_raised() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_local_io_error_during_download_is_recorded_not_raised() -> None:
+    """export_entry_to_file streams to local disk (scratch dir mkdir/open/
+    write); a local OSError (AV lock, full/locked temp dir) there is not
+    a LaserficheError and must not abort the whole scan — one document's
+    local I/O failure shouldn't cost the rest of the report."""
+
+    class RaisesOSError(FakeDocs):
+        async def export_entry_to_file(
+            self, entry_id: int, dest: Path, *, part: str = "Edoc", max_bytes: int | None = None
+        ) -> tuple[int, str | None, str]:
+            if entry_id == 2:
+                raise PermissionError("Access is denied")
+            return await super().export_entry_to_file(
+                entry_id, dest, part=part, max_bytes=max_bytes
+            )
+
+    client = RaisesOSError({1: b"same", 2: b"same"})
+
+    report = await duplicates.find_duplicates(client, _docs(1, 2))
+
+    assert [s["entry_id"] for s in report.skipped] == [2]
+    assert report.groups == []  # only one copy survived, so no group
+
+
+@pytest.mark.asyncio
 async def test_groups_are_ordered_by_recoverable_space() -> None:
     client = FakeDocs(
         {

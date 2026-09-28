@@ -13,8 +13,15 @@ from collections.abc import Awaitable, Callable
 from typing import Any, cast
 from urllib.parse import urljoin
 
-from ..errors import LaserficheError
+from ..errors import LaserficheError, lf_error_detail
 from ._core import _CoreClient
+
+# Laserfiche errorCode meaning "query parameter not valid" — the specific
+# signal that a $top value is too large for this build. Halving $top only
+# makes sense in response to THIS, not an arbitrary 400 (bad filter,
+# permissions, ...), which would otherwise cost up to 8 wasted round trips
+# (200 -> 100 -> ... -> 1) before the genuine error is finally raised.
+_LF_ERROR_CODE_INVALID_QUERY_PARAM = 216
 
 
 class _DefinitionsMixin(_CoreClient):
@@ -53,7 +60,13 @@ class _DefinitionsMixin(_CoreClient):
             )
         if not response.content:
             return {"value": []}
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise LaserficheError(
+                f"Laserfiche API returned a 2xx response for GET {url} with an "
+                f"unparseable body: {exc!r}"
+            ) from exc
         if isinstance(body, list):
             return {"value": body}
         return cast(dict[str, Any], body)
@@ -147,8 +160,11 @@ class _DefinitionsMixin(_CoreClient):
 
         Starts at ``Settings.max_results_ceiling`` (default 200). Some
         self-hosted v1 builds reject larger ``$top`` values with HTTP 400
-        ``errorCode 216`` ("query parameter not valid"); on that we halve
-        the page size and retry, down to 1. Anything else propagates.
+        ``errorCode 216`` ("query parameter not valid"); on exactly that we
+        halve the page size and retry, down to 1. Any other 400 (bad
+        filter, permissions, ...) propagates immediately rather than
+        wasting up to 8 round trips ruling out a $top problem it doesn't
+        have.
         """
         page_size = max(1, self._settings.max_results_ceiling)
         items: list[dict[str, Any]] = []
@@ -157,7 +173,12 @@ class _DefinitionsMixin(_CoreClient):
             try:
                 raw = await fetch(page_size, skip)
             except LaserficheError as exc:
-                if exc.status_code == 400 and page_size > 1:
+                error_code = lf_error_detail(exc).get("errorCode")
+                if (
+                    exc.status_code == 400
+                    and error_code == _LF_ERROR_CODE_INVALID_QUERY_PARAM
+                    and page_size > 1
+                ):
                     page_size = max(1, page_size // 2)
                     continue
                 raise

@@ -68,6 +68,15 @@ def test_folder_path_composes_with_raw_syntax() -> None:
     assert out == '{LF:Name="*.pdf"} & {LF:LookIn="\\HR"}'
 
 
+def test_quotes_in_folder_path_are_escaped() -> None:
+    """A folder name containing `"` must not break out of the LookIn value
+    span — mirrors the phrase-escaping test above. Regression: folder_path
+    used to be interpolated verbatim, so a folder named e.g. `Q1 "Draft"
+    Folder` would corrupt the generated search command."""
+    out = build_search_command("x", 'Q1 "Draft" Folder')
+    assert out == '{LF:Basic~="x"} & {LF:LookIn="Q1 \\"Draft\\" Folder"}'
+
+
 # --- happy path -------------------------------------------------------------
 
 
@@ -258,6 +267,11 @@ async def test_missing_searches_endpoint_points_at_search_entries(
     assert result["mode"] == "error"
     assert result["error"] == "async_search_unavailable"
     assert "search_entries" in result["hint"]
+    # Regression: `kind` used to stay whatever classify_lf_error derived
+    # from the raw HTTP status (here "not_found" from the 404) even after
+    # `error` was overridden to "async_search_unavailable" — a
+    # self-contradictory envelope. Must be re-derived from the override.
+    assert result["kind"] == "upstream_unavailable"
 
 
 @pytest.mark.asyncio

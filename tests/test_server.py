@@ -13,11 +13,16 @@ checks (which apply uniformly across every write tool), and the
 
 from __future__ import annotations
 
+import logging
+import re
+from pathlib import Path
+
 import pytest
 from pytest_httpx import HTTPXMock
 
 from laserfiche_mcp import server
 from laserfiche_mcp.client import LaserficheClient
+from laserfiche_mcp.tools._registry import all_tools
 from tests.conftest import _BASE
 
 
@@ -45,6 +50,64 @@ def test_mcp_instructions_steer_multi_document_reads_to_search_content() -> None
     lower = text.lower()
     assert "search_content" in lower
     assert "one by one" in lower or "individually" in lower
+
+
+def test_mcp_instructions_only_names_registered_v2_tools() -> None:
+    """Every ``laserfiche_*``-shaped identifier in the onboarding text must
+    be a tool that's actually registered by default.
+
+    Regression: the instructions text used to reference legacy verb-first
+    names (``search_content``, ``get_entry``, ...), which register only
+    when an operator opts in with ``LF_LEGACY_TOOL_NAMES=true`` (default
+    false since v2.3.0) — so a fresh default install's own onboarding
+    text told the model to call tools that returned unknown-tool errors.
+    v2 names are always registered (see ``server._register_one``), so
+    this pins the text to referencing only those.
+    """
+    text = server.mcp.instructions
+    assert text is not None
+    v2_names = {spec.v2_name for spec in all_tools()}
+    mentioned = set(re.findall(r"laserfiche_[a-z_]+", text))
+    assert mentioned, "expected at least one laserfiche_* tool name in the instructions"
+    unknown = mentioned - v2_names
+    assert not unknown, f"instructions reference unregistered tool name(s): {sorted(unknown)}"
+
+
+def test_readme_tools_section_mentions_every_registered_v2_name() -> None:
+    """The README's Tools section is the operator-facing catalog reference —
+    every registered tool's v2 name must appear there (in a table row, or
+    the preview/execute explanatory prose for the 10 split tools). It used
+    to document only 34 of 51 registered tools; an operator scoping
+    LF_WRITE_TOOLS_ALLOWED from that table would unknowingly block a third
+    of the write surface."""
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    tools_section = text.split("## Tools", 1)[1].split("\n## ", 1)[0]
+    v2_names = {spec.v2_name for spec in all_tools()}
+    missing = sorted(name for name in v2_names if name not in tools_section)
+    assert not missing, f"README's ## Tools section is missing: {missing}"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_warns_when_destructive_scope_configured_without_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE without LF_HTTP_OAUTH_ISSUER means the
+    destructive-scope gate silently has no effect — must warn at startup,
+    consistent with http_transport.py's loopback warning for the same
+    "configured X but it has no effect" class of misconfiguration."""
+    from laserfiche_mcp import _app
+
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "http_oauth_destructive_scope", "laserfiche.destructive")
+    monkeypatch.setattr(settings, "http_oauth_issuer", None)
+
+    with caplog.at_level(logging.WARNING, logger="laserfiche_mcp"):
+        async with _app._lifespan(_app.mcp) as ctx:
+            assert "client" in ctx
+
+    assert any("LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE" in r.message for r in caplog.records)
 
 
 # --- _clamp_max_results (re-exported from _app) -----------------------------

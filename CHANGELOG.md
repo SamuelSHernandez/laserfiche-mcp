@@ -37,6 +37,18 @@ the report.
   ignore it, and MCP's stateless design (see the README's Roadmap entry
   on the 2026-07-28 spec) means the server has no cross-call session state
   to enforce a cumulative budget against even if it wanted to.
+- **`mcp` dependency floor bumped from `>=1.2.0` to `>=1.22.0`.** The
+  declared floor was stale and wrong — confirmed by actually installing
+  `mcp==1.2.0` through `1.21.0` in a clean venv, every one of them fails
+  at import or at tool-registration time (`ModuleNotFoundError` on
+  `mcp.server.auth`, then `InvalidSignature`/`TypeError` from
+  `fastmcp`'s forward-ref resolution once `mcp.server.auth` exists but
+  the annotation handling doesn't). `1.22.0` is the first version that
+  actually starts the server and passes the full test suite. A plain
+  `pip install laserfiche-mcp` without the project's own lockfile could
+  have silently resolved into this dead range and failed to start with
+  no indication why; `uv.lock`-based installs were never affected since
+  the lockfile already pinned a working version.
 
 ### Changed
 - **Instructions field also steers multi-document reads toward
@@ -45,6 +57,45 @@ the report.
   `src/laserfiche_mcp/_app.py`.
 
 ### Added
+- **Laserfiche Cloud auth (`LF_AUTH_MODE=api_key`) — BETA, unverified
+  against a live tenant.** Implements Cloud's service-app flow: a
+  short-lived ES256-signed JWT assertion (built from the "access key"
+  exported from the Developer Console) is presented as the Bearer
+  credential to `https://signin.{domain}/oauth/token`, exchanged for an
+  access token used against `https://api.{domain}/repository/v2/...` —
+  which is exactly the URL shape this server's client already builds from
+  `LF_REPO_API_URL` + `LF_API_VERSION=v2`, so no routing changes were
+  needed. Two new secrets: `LF_CLOUD_ACCESS_KEY` (the base64 access-key
+  blob) and `LF_CLOUD_SERVICE_PRINCIPAL_KEY` (a separate secret, carried as
+  the assertion's `client_secret` claim). New `CloudServiceAppStrategy` in
+  `auth.py`, cross-checked against Laserfiche's own open-source client
+  library (`Laserfiche/lf-api-client-core-dotnet`) — unit tests build the
+  assertion JWT from that library's own test vector and confirm it's
+  byte-for-byte compatible (same claims, same ES256 signature, verifiable
+  with the same public key). What is genuinely unverified: the actual
+  network round-trip against Laserfiche's servers, and whether every
+  Repository API v2 endpoint this server wraps behaves identically on
+  Cloud vs. self-hosted. `LF_DEPLOYMENT_MODE=cloud` and `LF_AUTH_MODE=api_key`
+  must now be set together (previously `cloud` unconditionally raised
+  `NotImplementedError`); the reserved-and-unused `LF_API_KEY` field is
+  replaced by the two Cloud-specific secrets above.
+- **`LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE` — human-in-the-loop gate for unattended
+  agents.** The `--http` transport already lets any authenticated caller —
+  human or autonomous agent — call any tool; the confirmation-token preview
+  step is a prompt-level convention, not an enforced one, since nothing
+  stops an unsupervised caller from confirming its own preview. This adds
+  an actual enforcement point: when set (OAuth Resource Server mode only),
+  executing `delete_entry` / `delete_edoc` / `delete_pages` — the three
+  irreversible, content-destroying write tools — requires that scope on
+  the caller's token; previews stay open to everyone since they're
+  read-only. Register a separate `client_credentials` OAuth client for an
+  unattended agent and simply don't grant it this scope, so destructive
+  execution always requires a human's own token. `move_entry` and
+  `rename_entry` are deliberately not gated — they're reversible, so an
+  autonomous agent (e.g. one that files/organizes documents) can still run
+  them unsupervised. New error subkind: `destructive_scope_required`. See
+  the README's new "Unattended agents" section and
+  `tools/_helpers.check_destructive_scope`.
 - **Web-client viewer links (`web_url`).** `search_entries`,
   `search_by_name`, `list_folder`, `get_entry`, `get_entry_by_path`,
   `search_natural`, and `search_content` now attach a `web_url` field to

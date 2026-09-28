@@ -6,6 +6,14 @@ and constructing the MCP application as an import side effect.
 
 from __future__ import annotations
 
+# Upper bound on a single "lo-hi" chunk's span. Without this, a spec like
+# "1-999999999" (a typo, or an attempt to "delete every page") expands into
+# a set with that many entries — multi-second, multi-GB — synchronously on
+# the event loop (this runs inside `async def get_document_edoc` with no
+# executor offload), blocking every other concurrent request for the
+# duration. No real document has anywhere near this many pages.
+_MAX_RANGE_SPAN = 100_000
+
 
 def parse_page_spec(spec: str | None) -> tuple[list[int] | None, str | None]:
     """Parse a 1-based page selection like ``"3"``, ``"4-9"`` or ``"1,3,5-7"``.
@@ -35,6 +43,12 @@ def parse_page_spec(spec: str | None) -> tuple[list[int] | None, str | None]:
                 return None, f"Page numbers are 1-based; got {part!r}."
             if lo > hi:
                 return None, f"Page range {part!r} runs backwards ({lo} > {hi})."
+            if hi - lo + 1 > _MAX_RANGE_SPAN:
+                return None, (
+                    f"Page range {part!r} spans {hi - lo + 1} pages, over the "
+                    f"{_MAX_RANGE_SPAN}-page limit. No real document has this "
+                    "many pages — check for a typo."
+                )
             pages.update(range(lo - 1, hi))
         else:
             if not part.isdigit():

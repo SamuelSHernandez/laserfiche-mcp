@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 
 _PAGE_RANGE_RE = re.compile(r"^[1-9]\d*(-[1-9]\d*)?(,[1-9]\d*(-[1-9]\d*)?)*$")
 
@@ -40,7 +41,12 @@ _NAME_MAX_LENGTH = 128
 
 
 def _normalize(p: str) -> str:
-    return p.replace("/", "\\").lower().rstrip("\\")
+    # NFC-normalize before comparing: a deny/allow prefix and a path returned
+    # by the server can spell the same non-ASCII segment with different
+    # Unicode representations (e.g. NFC "é" vs NFD "e"+combining-accent).
+    # Without this, those compare unequal and a fence meant to block the
+    # path silently lets it through instead.
+    return unicodedata.normalize("NFC", p).replace("/", "\\").lower().rstrip("\\")
 
 
 def has_traversal_segment(path: str) -> bool:
@@ -146,7 +152,11 @@ def local_source_path_allowed(
 
     resolved = os.path.normcase(os.path.realpath(file_path))
     for raw_dir in allow:
-        allowed_dir = os.path.normcase(os.path.realpath(raw_dir))
+        # rstrip the separator first: os.path.realpath on a filesystem/drive
+        # root (e.g. "C:/" on Windows) already returns a trailing separator,
+        # and appending another before the startswith check would reject
+        # every legitimate path under that root.
+        allowed_dir = os.path.normcase(os.path.realpath(raw_dir)).rstrip(os.sep)
         if resolved == allowed_dir or resolved.startswith(allowed_dir + os.sep):
             return True, None
 

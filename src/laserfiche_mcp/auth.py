@@ -7,9 +7,21 @@ The supported flows are:
   receive a bearer token (``expires_in`` ~= 900s), use it on subsequent calls.
   Implemented as :class:`PasswordGrantStrategy`. This is the default.
 
-* **OAuth (cloud, client_credentials with JWT assertion)** — uses
-  ``signin.laserfiche.com/oauth/token`` with a JWT signed by the access key
-  as the Bearer credential. Significantly more setup; reserved for v2.
+* **OAuth (LFDS or a compatible provider, plain client_credentials)** — a
+  standard ``client_id``/``client_secret`` grant. Implemented as
+  :class:`OAuthClientCredentialsStrategy`.
+
+* **Cloud service app (client_credentials with a JWT assertion)** — Laserfiche
+  Cloud's own flow: a short-lived ES256-signed JWT (minted from an "access
+  key" exported from the Developer Console) is presented as the Bearer
+  credential on a request to ``https://signin.{domain}/oauth/token``, which
+  returns a longer-lived access token used as a normal Bearer credential
+  against ``https://api.{domain}/repository/v2/...``. Implemented as
+  :class:`CloudServiceAppStrategy`. Built and unit-tested against the
+  documented flow and Laserfiche's own open-source client library
+  (``Laserfiche/lf-api-client-core-dotnet``) — **never verified against a
+  live Cloud tenant**; treat as beta until someone with Cloud access
+  confirms it end-to-end.
 
 References:
   https://developer.laserfiche.com/docs/api/server/authentication/
@@ -18,17 +30,25 @@ References:
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import logging
 import time
 from abc import ABC, abstractmethod
+from typing import Any
 
 import httpx
 from pydantic import SecretStr
 
+from ._pyjwt_support import require_pyjwt
 from .config import ApiVersion, AuthMode, Settings
 from .errors import LaserficheError
 
 logger = logging.getLogger("laserfiche_mcp.auth")
+
+_CLOUD_ASSERTION_AUDIENCE = "laserfiche.com"
+_CLOUD_ASSERTION_TTL_SECONDS = 1800  # 30 min — matches the official .NET client's default.
 
 
 async def _post_token(
@@ -38,6 +58,7 @@ async def _post_token(
     *,
     grant: str,
     default_expires_in: float = 900.0,
+    extra_headers: dict[str, str] | None = None,
 ) -> tuple[str, float]:
     """POST a token request and return ``(access_token, expires_in)``.
 
@@ -49,12 +70,11 @@ async def _post_token(
     error contract entirely and surfaced to the model as an empty
     ``Error executing tool <name>:`` with nothing actionable in it.
     """
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    if extra_headers:
+        headers.update(extra_headers)
     try:
-        resp = await client.post(
-            url,
-            data=data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
+        resp = await client.post(url, data=data, headers=headers)
     except httpx.TimeoutException as exc:
         raise LaserficheError(
             f"Timed out contacting the Laserfiche token endpoint during the "
@@ -128,10 +148,15 @@ class PasswordGrantStrategy(AuthStrategy):
         self._timeout_seconds = timeout_seconds
         self._access_token: str | None = None
         self._expires_at: float = 0.0
+        self._refresh_lock = asyncio.Lock()
 
     async def apply(self, request: httpx.Request) -> None:
         if not self._access_token or time.time() >= self._expires_at - 30:
-            await self._refresh()
+            async with self._refresh_lock:
+                # Re-check: another concurrent call may have refreshed while we
+                # waited for the lock — avoids a redundant token exchange.
+                if not self._access_token or time.time() >= self._expires_at - 30:
+                    await self._refresh()
         request.headers["Authorization"] = f"Bearer {self._access_token}"
 
     async def _refresh(self) -> None:
@@ -163,10 +188,8 @@ class PasswordGrantStrategy(AuthStrategy):
 class OAuthClientCredentialsStrategy(AuthStrategy):
     """OAuth 2.0 client_credentials grant with simple client_secret.
 
-    NOTE: Laserfiche **Cloud** uses a different flow — it requires a JWT
-    signed by an access key as the Bearer credential, not a plain
-    ``client_secret`` in the request body. That flow is not implemented in
-    v1; see ``signin.laserfiche.com`` docs for the JWT structure.
+    NOTE: Laserfiche **Cloud** uses a different flow — see
+    :class:`CloudServiceAppStrategy` below.
 
     This class works for OAuth providers that accept plain client_credentials
     (e.g., LFDS configured with a custom service app, or any standards-
@@ -190,10 +213,13 @@ class OAuthClientCredentialsStrategy(AuthStrategy):
         self._timeout_seconds = timeout_seconds
         self._access_token: str | None = None
         self._expires_at: float = 0.0
+        self._refresh_lock = asyncio.Lock()
 
     async def apply(self, request: httpx.Request) -> None:
         if not self._access_token or time.time() >= self._expires_at - 30:
-            await self._refresh()
+            async with self._refresh_lock:
+                if not self._access_token or time.time() >= self._expires_at - 30:
+                    await self._refresh()
         request.headers["Authorization"] = f"Bearer {self._access_token}"
 
     async def _refresh(self) -> None:
@@ -215,6 +241,155 @@ class OAuthClientCredentialsStrategy(AuthStrategy):
                 data,
                 grant="client_credentials",
                 default_expires_in=3600.0,
+            )
+            self._access_token = token
+            self._expires_at = time.time() + expires_in
+
+
+def _decode_cloud_access_key(access_key_b64: str) -> dict[str, Any]:
+    """Decode the base64-encoded 'access key' JSON blob exported from the
+    Laserfiche Developer Console: ``{customerId, domain, clientId, jwk}``.
+
+    Raises ``ValueError`` with a clear message on malformed input — this
+    runs once at server startup (building the auth strategy), so failing
+    fast here beats a confusing error on the first real request.
+    """
+    try:
+        raw = base64.b64decode(access_key_b64, validate=True)
+        data: dict[str, Any] = json.loads(raw)
+    except Exception as exc:
+        raise ValueError(
+            "LF_CLOUD_ACCESS_KEY is not a valid base64-encoded access key "
+            "JSON blob. Re-export it from the Laserfiche Developer Console "
+            f"(App Configuration > Authentication). Details: {exc!r}"
+        ) from exc
+
+    missing = [k for k in ("clientId", "domain", "jwk") if not data.get(k)]
+    if missing:
+        raise ValueError(f"LF_CLOUD_ACCESS_KEY is missing required field(s): {', '.join(missing)}.")
+
+    jwk = data.get("jwk")
+    if not isinstance(jwk, dict):
+        raise ValueError("LF_CLOUD_ACCESS_KEY's 'jwk' field must be a JSON object.")
+    jwk_missing = [k for k in ("crv", "x", "y", "d") if not jwk.get(k)]
+    if jwk_missing:
+        raise ValueError(
+            "LF_CLOUD_ACCESS_KEY's 'jwk' field is missing required EC private-key "
+            f"component(s): {', '.join(jwk_missing)}. Re-export the access key from "
+            "the Laserfiche Developer Console (App Configuration > Authentication) "
+            "— it must contain the private key ('d'), not just the public point."
+        )
+    if jwk.get("crv") != "P-256":
+        raise ValueError(
+            f"LF_CLOUD_ACCESS_KEY's 'jwk.crv' is {jwk.get('crv')!r}, expected 'P-256' "
+            "(the assertion is signed with ES256)."
+        )
+    return data
+
+
+class CloudServiceAppStrategy(AuthStrategy):
+    """Laserfiche Cloud OAuth service-app flow (client_credentials + JWT assertion).
+
+    Mirrors Laserfiche's own client libraries (see
+    ``Laserfiche/lf-api-client-core-dotnet``'s ``JwtUtils``/``TokenClient``):
+
+    1. Mint a short-lived (30 min) JWT signed with ES256, using the EC
+       private key embedded in the access key's ``jwk``. Claims:
+       ``client_id`` (from the access key), ``client_secret`` (the separate
+       service principal key), ``aud="laserfiche.com"``, ``iat``/``nbf``/``exp``.
+       The JWT header carries the key's ``kid``.
+    2. POST that JWT as the *Bearer credential* (not a request-body field —
+       this is Laserfiche's own bespoke shape, not RFC 7523 JWT-bearer) to
+       ``https://signin.{domain}/oauth/token`` with
+       ``grant_type=client_credentials`` (+ optional ``scope``).
+    3. Cache the returned access token and use it as a normal Bearer
+       credential against ``https://api.{domain}/repository/v2/...`` —
+       which is exactly the URL shape ``LF_REPO_API_URL`` + v2 already
+       builds, so no client/routing changes are needed for Cloud.
+
+    Built and unit-tested against the documented flow and the official
+    client library above; **never verified against a live Cloud tenant.**
+    """
+
+    def __init__(
+        self,
+        access_key_b64: str,
+        service_principal_key: SecretStr,
+        scope: str | None = None,
+        verify_ssl: bool = True,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        access_key = _decode_cloud_access_key(access_key_b64)
+        self._client_id: str = access_key["clientId"]
+        self._domain: str = access_key["domain"]
+        self._jwk: dict[str, Any] = access_key["jwk"]
+        self._service_principal_key = service_principal_key
+        self._scope = scope
+        self._verify_ssl = verify_ssl
+        self._timeout_seconds = timeout_seconds
+        self._token_url = f"https://signin.{self._domain}/oauth/token"
+        self._access_token: str | None = None
+        self._expires_at: float = 0.0
+        self._refresh_lock = asyncio.Lock()
+
+    async def apply(self, request: httpx.Request) -> None:
+        if not self._access_token or time.time() >= self._expires_at - 30:
+            async with self._refresh_lock:
+                if not self._access_token or time.time() >= self._expires_at - 30:
+                    await self._refresh()
+        request.headers["Authorization"] = f"Bearer {self._access_token}"
+
+    def _build_assertion_jwt(self) -> str:
+        """Mint the client_credentials assertion JWT.
+
+        ``_decode_cloud_access_key`` already validates the jwk's shape at
+        startup, but this still wraps key construction / signing so a
+        latent issue (e.g. a jwk that decodes but isn't accepted by the
+        crypto backend) raises :class:`LaserficheError` instead of an
+        uncaught exception escaping the structured error contract on
+        every single tool call.
+        """
+        try:
+            jwt = require_pyjwt("Cloud service-app auth (LF_AUTH_MODE=api_key)")
+            from jwt.algorithms import ECAlgorithm  # noqa: PLC0415
+
+            private_key = ECAlgorithm(ECAlgorithm.SHA256).from_jwk(json.dumps(self._jwk))
+            now = int(time.time())
+            claims = {
+                "client_id": self._client_id,
+                "client_secret": self._service_principal_key.get_secret_value(),
+                "aud": _CLOUD_ASSERTION_AUDIENCE,
+                "iat": now,
+                "nbf": now,
+                "exp": now + _CLOUD_ASSERTION_TTL_SECONDS,
+            }
+            headers = {"kid": self._jwk["kid"]} if self._jwk.get("kid") else None
+            return str(jwt.encode(claims, private_key, algorithm="ES256", headers=headers))
+        except Exception as exc:
+            raise LaserficheError(
+                "Could not build the Cloud service-app assertion JWT from "
+                f"LF_CLOUD_ACCESS_KEY's jwk: {exc!r}. Re-export the access key "
+                "from the Laserfiche Developer Console (App Configuration > "
+                "Authentication)."
+            ) from exc
+
+    async def _refresh(self) -> None:
+        logger.debug("Requesting Cloud access token (service-app client_credentials)")
+        assertion = self._build_assertion_jwt()
+        async with httpx.AsyncClient(
+            verify=self._verify_ssl,
+            timeout=self._timeout_seconds,
+        ) as client:
+            data = {"grant_type": "client_credentials"}
+            if self._scope:
+                data["scope"] = self._scope
+            token, expires_in = await _post_token(
+                client,
+                self._token_url,
+                data,
+                grant="cloud_client_credentials",
+                default_expires_in=3600.0,
+                extra_headers={"Authorization": f"Bearer {assertion}"},
             )
             self._access_token = token
             self._expires_at = time.time() + expires_in
@@ -251,5 +426,15 @@ def build_auth_strategy(settings: Settings) -> AuthStrategy:
             timeout_seconds=settings.request_timeout_seconds,
         )
 
-    # Settings validation rejects API_KEY before we get here.
-    raise NotImplementedError(f"Unsupported auth mode: {settings.auth_mode}")
+    if settings.auth_mode is AuthMode.API_KEY:
+        # Validated upstream: cloud_access_key and cloud_service_principal_key present.
+        assert settings.cloud_access_key and settings.cloud_service_principal_key
+        return CloudServiceAppStrategy(
+            access_key_b64=settings.cloud_access_key.get_secret_value(),
+            service_principal_key=settings.cloud_service_principal_key,
+            scope=settings.oauth_scope,
+            verify_ssl=settings.verify_ssl,
+            timeout_seconds=settings.request_timeout_seconds,
+        )
+
+    raise NotImplementedError(f"Unsupported auth mode: {settings.auth_mode}")  # pragma: no cover

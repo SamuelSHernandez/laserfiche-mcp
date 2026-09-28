@@ -190,6 +190,29 @@ async def test_list_folder_happy_path(
 
 
 @pytest.mark.asyncio
+async def test_list_folder_total_count_requires_include_count(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """total_count is documented as present "when the build supports
+    $count" — but the tool never actually asked for it by default, so it
+    was structurally always null. include_count=True must wire $count=true
+    through to the request."""
+    httpx_mock.add_response(
+        method="GET",
+        url=(
+            f"{_BASE}/Entries/1/Laserfiche.Repository.Folder/children"
+            "?%24top=25&%24skip=0&%24count=true"
+        ),
+        json={"value": [{"id": 10, "name": "child", "entryType": "Folder"}], "@odata.count": 1},
+    )
+
+    result = await server.list_folder(folder_id=1, include_count=True)
+
+    assert result["total_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_list_folder_uses_folder_template_for_child_folders(
     httpx_mock: HTTPXMock,
     patched_client: LaserficheClient,

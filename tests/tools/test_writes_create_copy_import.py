@@ -76,6 +76,42 @@ async def test_import_document_file_not_found(
 
 
 @pytest.mark.asyncio
+async def test_import_document_file_read_failure_is_structured(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    """isfile()/getsize() are TOCTOU-prone: a file can pass both checks and
+    still fail to open (PermissionError from a file locked by another app
+    is routine on Windows). Must return a structured error, not a raw
+    exception, on one of the most commonly used write tools."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    target = tmp_path / "locked.txt"
+    target.write_bytes(b"content")
+
+    real_open = open
+
+    def _fake_open(path: object, *args: object, **kwargs: object) -> object:
+        if str(path) == str(target):
+            raise PermissionError("Access is denied")
+        return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "laserfiche_mcp.tools.writes_create_copy_import.open", _fake_open, raising=False
+    )
+
+    result = await server.import_document(100, "locked.txt", str(target))
+    assert result["mode"] == "error"
+    assert result["error"] == "file_read_failed"
+
+
+@pytest.mark.asyncio
 async def test_import_document_size_cap(
     monkeypatch: pytest.MonkeyPatch,
     httpx_mock: HTTPXMock,

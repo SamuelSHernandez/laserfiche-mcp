@@ -173,6 +173,18 @@ async def list_folder(
             ge=0,
         ),
     ] = 0,
+    include_count: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Ask the server to also compute total_count — the folder's "
+                "full child count, not just this page's size. Costs an "
+                "extra server-side count on top of the listing, so it's "
+                "opt-in; without it, total_count is always null."
+            ),
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """List the immediate children (documents and subfolders) of a folder.
 
@@ -182,15 +194,16 @@ async def list_folder(
 
     Returns ``entries`` (each with ``web_url`` when web-client link
     templates are configured — see ``search_entries``), ``total_count``
-    (when the build supports ``$count``) and ``next_link``. On failure
-    returns ``{"mode": "error", "error": <slug>, "folder_id": <int>}``
-    (``not_found``, ``auth_failed``).
+    (null unless ``include_count=true`` was passed and the build supports
+    ``$count``) and ``next_link``. On failure returns ``{"mode": "error",
+    "error": <slug>, "folder_id": <int>}`` (``not_found``, ``auth_failed``).
     """
     try:
         raw = await _app.get_client().list_folder(
             folder_id,
             max_results=clamp_max_results(max_results),
             skip=max(0, skip),
+            include_count=include_count,
         )
     except LaserficheError as exc:
         return classify_lf_error("list_folder", exc, extra={"folder_id": folder_id})

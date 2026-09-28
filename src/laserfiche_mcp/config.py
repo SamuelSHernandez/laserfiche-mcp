@@ -4,7 +4,14 @@ Supports two deployment modes:
   - "self_hosted": Repository API Server (on-premise)
   - "cloud":      api.laserfiche.com (Laserfiche Cloud)
 
-Self-hosted is the v1 focus; cloud config is reserved for v2.
+Self-hosted (password or OAuth client_credentials auth) is the
+battle-tested path — real deployments run it. Cloud (``auth_mode=api_key``)
+is implemented against Laserfiche's documented service-app flow and its own
+open-source client library, with unit tests proving the JWT construction is
+cryptographically correct against a known-good test vector — but it has
+never been exercised against a live Cloud tenant. Treat it as beta until
+someone with Cloud access confirms the token exchange and a few Repository
+API calls actually succeed end to end.
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ class AuthMode(str, Enum):
     # username + password → /{api_version}/Repositories/{repo}/Token bearer (self-hosted, default)
     PASSWORD = "password"
     OAUTH = "oauth"  # client_credentials grant (LFDS or compatible)
-    API_KEY = "api_key"  # cloud service principal with JWT (reserved for v2)
+    API_KEY = "api_key"  # Cloud service-app JWT-assertion flow (beta, see module docstring)
 
 
 class ApiVersion(str, Enum):
@@ -82,12 +89,32 @@ class Settings(BaseSettings):
 
     # OAuth (client_credentials grant)
     oauth_token_url: HttpUrl | None = None
-    oauth_scope: str | None = None
+    oauth_scope: str | None = Field(
+        default=None,
+        description="Space-delimited scope string sent with the "
+        "client_credentials grant. Used by both LF_AUTH_MODE=oauth and "
+        "LF_AUTH_MODE=api_key (Cloud) — e.g. 'repository.Read repository.Write'.",
+    )
     client_id: str | None = None
     client_secret: SecretStr | None = None
 
-    # Cloud (reserved for v2)
-    api_key: SecretStr | None = None
+    # Cloud service-app (client_credentials with a JWT assertion; see auth.py)
+    cloud_access_key: SecretStr | None = Field(
+        default=None,
+        description="Base64-encoded 'access key' JSON blob exported from the "
+        "Laserfiche Developer Console for an OAuth service app — contains "
+        "customerId, domain, clientId, and an EC (P-256) JSON Web Key used "
+        "to sign the client_credentials assertion JWT. Required when "
+        "LF_AUTH_MODE=api_key.",
+    )
+    cloud_service_principal_key: SecretStr | None = Field(
+        default=None,
+        description="Service principal key created for the service "
+        "principal in Laserfiche Account Administration — carried as the "
+        "assertion JWT's `client_secret` claim. Distinct from the access "
+        "key above (a separate secret, not part of that JSON blob). "
+        "Required when LF_AUTH_MODE=api_key.",
+    )
 
     # --- Network ---
     verify_ssl: bool = Field(
@@ -359,6 +386,21 @@ class Settings(BaseSettings):
         "accepted (e.g. 'laserfiche.read'). When unset, any validly-signed "
         "token for the right audience is accepted.",
     )
+    http_oauth_destructive_scope: str | None = Field(
+        default=None,
+        description="OAuth scope (e.g. 'laserfiche.destructive') a caller's "
+        "token must carry to execute delete_entry, delete_edoc, or "
+        "delete_pages — the three irreversible, content-destroying write "
+        "tools. Checked only on the execute leg (confirmation_token "
+        "supplied); previews stay open to any authenticated caller since "
+        "they're read-only. OAuth mode only (LF_HTTP_OAUTH_ISSUER set) — "
+        "ignored under stdio or LF_HTTP_AUTH_TOKEN, where "
+        "LF_WRITE_TOOLS_ALLOWED is the only fence available. Grant this "
+        "scope to humans, withhold it from unattended/autonomous agents' "
+        "client_credentials tokens, so destructive actions always require "
+        "a human's own credential — move_entry and rename_entry are "
+        "unaffected since they're reversible.",
+    )
     http_oauth_algorithms: str = Field(
         default="RS256",
         description="Comma-separated allowlist of JWT signing algorithms. "
@@ -369,12 +411,15 @@ class Settings(BaseSettings):
     # --- Validation ---
     @model_validator(mode="after")
     def _validate(self) -> Settings:
-        if self.deployment_mode is DeploymentMode.CLOUD:
-            raise NotImplementedError(
-                "Cloud deployment mode is reserved for v2. "
-                "Set LF_DEPLOYMENT_MODE=self_hosted for now."
+        cloud_mode = self.deployment_mode is DeploymentMode.CLOUD
+        api_key_auth = self.auth_mode is AuthMode.API_KEY
+        if cloud_mode != api_key_auth:
+            raise ValueError(
+                "LF_DEPLOYMENT_MODE=cloud and LF_AUTH_MODE=api_key must be "
+                "set together — Laserfiche Cloud only supports the "
+                "service-app JWT-assertion flow (api_key), and api_key auth "
+                "only makes sense against Cloud."
             )
-
         missing: list[str] = []
         if not self.repo_api_url:
             missing.append("LF_REPO_API_URL")
@@ -394,16 +439,23 @@ class Settings(BaseSettings):
             if not self.client_secret:
                 missing.append("LF_CLIENT_SECRET")
         elif self.auth_mode is AuthMode.API_KEY:
-            raise NotImplementedError(
-                "api_key auth (cloud JWT-signed assertion) is reserved for v2. "
-                "Use LF_AUTH_MODE=password or oauth."
-            )
+            if not self.cloud_access_key:
+                missing.append("LF_CLOUD_ACCESS_KEY")
+            if not self.cloud_service_principal_key:
+                missing.append("LF_CLOUD_SERVICE_PRINCIPAL_KEY")
 
         if missing:
             raise ValueError(
                 "Missing required environment variables: "
                 + ", ".join(missing)
                 + ". See .env.example for the full list."
+            )
+
+        if cloud_mode and self.api_version is not ApiVersion.V2:
+            raise ValueError(
+                "LF_DEPLOYMENT_MODE=cloud requires LF_API_VERSION=v2 — "
+                "Laserfiche Cloud's Repository API only exposes the v2 "
+                f"surface (got LF_API_VERSION={self.api_version.value})."
             )
 
         if self.max_results_default > self.max_results_ceiling:

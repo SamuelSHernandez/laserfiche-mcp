@@ -22,7 +22,7 @@ from pydantic import Field
 
 from .. import _app
 from .._app import clamp_search_page_size, get_settings
-from ..errors import LaserficheError, classify_lf_error
+from ..errors import LaserficheError, classify_lf_error, kind_for_subkind
 from ..links import attach_web_urls
 from ..observability import get_request_id_or_new
 from ..ops.content_search import STATUS_ABSENT, build_search_command, run_search
@@ -43,6 +43,11 @@ def _classify_create_error(exc: LaserficheError, command: str) -> dict[str, Any]
     payload = classify_lf_error("search_content", exc, extra={"query": command})
     if exc.status_code in STATUS_ABSENT:
         payload["error"] = "async_search_unavailable"
+        # classify_lf_error already set `kind` from the raw HTTP status (e.g.
+        # a 404 classifies as "not_found") — re-derive it from the
+        # overridden subkind too, or the envelope contradicts itself
+        # (error="async_search_unavailable" but kind="not_found").
+        payload["kind"] = kind_for_subkind("async_search_unavailable")
         payload["hint"] = (
             "This Laserfiche build does not expose the asynchronous /Searches "
             "endpoints, so context hits are unavailable. Fall back to "
