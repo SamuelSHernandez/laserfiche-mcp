@@ -124,10 +124,11 @@ anything changed?
 *"Users spend most of their time on other [products]"* and bring a
 *"compressed model of what we think we know about a system"* with them.
 
-**Here:** the wizard asks for "Repository name — the repository you pick
-when signing into Laserfiche Web Access," not `LF_REPOSITORY_ID`. It's
-borrowing vocabulary the person already has from a Laserfiche product
-they've used, instead of teaching new jargon for the same concept. Same
+**Here:** the wizard asks for "Repository name or ID (the repository you
+pick when signing into Laserfiche Web Access)," not `LF_REPOSITORY_ID`.
+It's borrowing vocabulary the person already has from a Laserfiche
+product they've used, instead of teaching new jargon for the same
+concept. Same
 reasoning applies to `env`-var config files, a `setup`/`diagnose`
 subcommand split, and `.env` — all patterns borrowed from the wider dev
 tool ecosystem rather than invented fresh.

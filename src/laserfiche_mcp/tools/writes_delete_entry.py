@@ -15,7 +15,7 @@ from pydantic import Field
 from .. import _app, confirmation
 from .._app import get_settings
 from ..config import Settings
-from ..errors import LaserficheError, classify_lf_error, invalid_token_response, local_error
+from ..errors import LaserficheError, classify_lf_error, local_error
 from ._helpers import (
     ToolAbortedError,
     check_destructive_scope,
@@ -25,6 +25,7 @@ from ._helpers import (
     entry_type,
     fetch_entry_for_op,
     require_writes_enabled,
+    verify_confirmation_token,
 )
 from ._registry import register
 
@@ -299,14 +300,14 @@ async def delete_entry(
     if scope_err is not None:
         return scope_err
 
-    ok, reason = confirmation.verify_token(
+    token_err = verify_confirmation_token(
         confirmation_token,
         "delete_entry",
         entry_id,
         current_name,
     )
-    if not ok:
-        return invalid_token_response("delete_entry", entry_id, reason)
+    if token_err is not None:
+        return token_err
 
     cap_err = _delete_entry_check_caps(
         entry_id,

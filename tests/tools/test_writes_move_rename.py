@@ -123,9 +123,10 @@ async def test_rename_entry_classifies_upstream_error_on_execute(
     assert result["mode"] == "error"
     assert result["error"] == "server_error"
     assert result["entry_id"] == 42
-    assert (
-        result["extra"]["new_name"] == "New" if "extra" in result else result["new_name"] == "New"
-    )
+    # classify_lf_error's `extra` dict is merged into the top-level
+    # response (not nested under an "extra" key) — pin the real shape
+    # instead of hedging between the two.
+    assert result["new_name"] == "New"
 
 
 # --- move_entry: preview/confirm + destination fence ------------------------
@@ -171,6 +172,42 @@ async def test_move_entry_preview_then_execute(
         confirmation_token=preview["confirmation_token"],
     )
     assert result["mode"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_move_entry_replayed_token_after_success_is_a_no_op(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A move without new_name doesn't change current_name, so a replayed
+    confirmation_token (tokens aren't tracked as consumed) still verifies
+    after a successful move — the entry is now already at the
+    destination, and re-executing must not silently PATCH again."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        # Already living at parent 200 — as if the move already happened.
+        json={"id": 42, "name": "Doc", "entryType": "Document", "parentId": 200},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/200",
+        json={"id": 200, "name": "New", "entryType": "Folder", "fullPath": "\\New"},
+        is_reusable=True,
+    )
+
+    preview = await server.move_entry(42, 200)
+    assert preview["mode"] == "preview"
+
+    result = await server.move_entry(42, 200, confirmation_token=preview["confirmation_token"])
+
+    assert result["mode"] == "error"
+    assert result["error"] == "no_op"
+    # No PATCH should have fired — only the two GETs above.
+    assert len(httpx_mock.get_requests()) == 4
 
 
 @pytest.mark.asyncio

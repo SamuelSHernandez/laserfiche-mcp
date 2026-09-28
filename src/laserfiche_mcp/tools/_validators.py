@@ -205,7 +205,7 @@ async def validate_link_types(
 
 async def validate_required_fields(
     operation: str,
-    entry_id: int,
+    entry_id: int | None,
     caller_fields: dict[str, list[Any]] | None,
     *,
     template_name: str | None = None,
@@ -217,6 +217,11 @@ async def validate_required_fields(
     ``LF_VALIDATE_REQUIRED_FIELDS`` is false. Falls back to None on any
     validation-read failure so the real PUT still runs and the server's
     own error path is what surfaces.
+
+    ``entry_id`` may be ``None`` for an entry that doesn't exist yet
+    (``create_folder``, ``import_document``, previewed before the create
+    call) — there's nothing "already set" to check in that case, so every
+    required field must come from ``caller_fields``.
 
     When ``template_name`` is given, the check is scoped to that
     template's own field set (via ``templateFieldNames``/``fieldNames``
@@ -232,7 +237,7 @@ async def validate_required_fields(
     client = _app.get_client()
     try:
         defs_by_name = await client.cached_field_definitions()
-        current = await client.get_field_values(entry_id)
+        current = await client.get_field_values(entry_id) if entry_id is not None else {}
     except LaserficheError:
         return None  # let the actual call surface the error
 
@@ -272,10 +277,13 @@ async def validate_required_fields(
     if not missing:
         return None
 
+    extra: dict[str, Any] = {}
+    if entry_id is not None:
+        extra["entry_id"] = entry_id
     return local_error(
         operation,
         "missing_required_fields",
-        entry_id=entry_id,
+        **extra,
         missing=[fd["name"] for fd in missing],
         field_details=[
             {

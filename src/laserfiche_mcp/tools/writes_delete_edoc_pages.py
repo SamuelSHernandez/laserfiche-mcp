@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .. import _app, confirmation
-from ..errors import LaserficheError, classify_lf_error, invalid_token_response, local_error
+from ..errors import LaserficheError, classify_lf_error, local_error
 from ._helpers import (
     ToolAbortedError,
     check_destructive_scope,
@@ -24,6 +24,7 @@ from ._helpers import (
     entry_path,
     fetch_entry_for_op,
     require_writes_enabled,
+    verify_confirmation_token,
 )
 from ._registry import register
 from ._validators import validate_page_range_input
@@ -102,14 +103,14 @@ async def delete_edoc(
     if scope_err is not None:
         return scope_err
 
-    ok, reason = confirmation.verify_token(
+    token_err = verify_confirmation_token(
         confirmation_token,
         "delete_edoc",
         entry_id,
         current_name,
     )
-    if not ok:
-        return invalid_token_response("delete_edoc", entry_id, reason)
+    if token_err is not None:
+        return token_err
 
     try:
         raw = await _app.get_client().delete_edoc(entry_id)
@@ -237,15 +238,15 @@ async def delete_pages(
     if scope_err is not None:
         return scope_err
 
-    ok, reason = confirmation.verify_token(
+    token_err = verify_confirmation_token(
         confirmation_token,
         "delete_pages",
         entry_id,
         current_name,
         params={"page_range": page_range, "page_count": current_page_count},
     )
-    if not ok:
-        return invalid_token_response("delete_pages", entry_id, reason)
+    if token_err is not None:
+        return token_err
 
     try:
         raw = await _app.get_client().delete_pages(entry_id, page_range)

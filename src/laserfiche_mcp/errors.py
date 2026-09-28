@@ -86,6 +86,7 @@ _SUBKIND_TO_KIND: dict[str, str] = {
     "missing_required_fields": "invalid_input",
     "invalid_confirmation_token": "invalid_input",
     "exceeds_batch_cap": "invalid_input",
+    "no_op": "invalid_input",
     "audit_reason_required": "invalid_input",
     "page_range_required": "invalid_input",
     "invalid_page_range": "invalid_input",

@@ -62,6 +62,9 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
     "pytest-httpx>=0.30.0",
+    # Property-based tests for the parser-like layers: search.py's query
+    # repair and permissions.py's path matcher (a security-relevant fence).
+    "hypothesis>=6.100.0,<7",
     "ruff>=0.5.0",
     "mypy>=1.10.0",
     # OAuth extra is exercised by the test suite, so CI (uv sync --extra dev)

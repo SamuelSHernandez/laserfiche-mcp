@@ -11,6 +11,7 @@ repository-wide search and a single-document search read the same way.
 
 from __future__ import annotations
 
+import bisect
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -51,13 +52,21 @@ def compile_pattern(pattern: str, *, regex: bool, ignore_case: bool) -> re.Patte
 def _window(text: str, start: int, end: int, context_chars: int) -> str:
     """Slice a context window centered on [start, end), marking any elision."""
     if context_chars <= 0:
-        return text[start:end]
-
-    span = end - start
-    slack = max(0, context_chars - span)
-    left = max(0, start - slack // 2)
-    right = min(len(text), left + context_chars)
-    left = max(0, right - context_chars)
+        left, right = start, end
+    else:
+        span = end - start
+        if span >= context_chars:
+            # The match itself already fills (or exceeds) the budget —
+            # never truncate INTO the match. A window that silently cuts
+            # through the middle of what actually matched, with no way to
+            # tell "trimmed for space" from "trimmed the match," is worse
+            # than one that's simply as long as the match.
+            left, right = start, end
+        else:
+            slack = context_chars - span
+            left = max(0, start - slack // 2)
+            right = min(len(text), left + context_chars)
+            left = max(0, right - context_chars)
 
     excerpt = text[left:right].replace("\n", " ").replace("\r", " ").strip()
     excerpt = re.sub(r"\s{2,}", " ", excerpt)
@@ -80,8 +89,6 @@ def _search_unit(
     for index, char in enumerate(text):
         if char == "\n":
             line_starts.append(index + 1)
-
-    import bisect
 
     for found in compiled.finditer(text):
         start, end = found.span()

@@ -77,7 +77,7 @@ Options:
 
 Exposing --http to a network requires LF_HTTP_AUTH_TOKEN (a bearer token
 checked on every request) and TLS terminated by a reverse proxy in front.
-See https://github.com/SamuelSHernandez/laserfiche-mcp#remote-http.
+See https://github.com/SamuelSHernandez/laserfiche-mcp#remote-http-web-clients.
 
 Configuration: run `laserfiche-mcp setup` once, or set LF_* environment
 variables / a .env file in the working directory. (Precedence: env vars,
@@ -762,7 +762,10 @@ def _run_setup() -> int:
             if problem is None:
                 break
             print(f"    {problem}")
-        repo = _prompt("Repository name or ID")
+        repo = _prompt(
+            "Repository name or ID (the repository you pick when signing "
+            "into Laserfiche Web Access)"
+        )
         username = _prompt("Service account username")
         while True:
             password = _prompt("Service account password", secret=True)

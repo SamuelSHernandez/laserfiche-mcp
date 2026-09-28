@@ -12,13 +12,14 @@ the calling tool can return verbatim.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 
-from .. import _app, permissions
+from .. import _app, confirmation, permissions
 from .._app import get_settings
-from ..errors import LaserficheError, classify_lf_error, local_error
+from ..errors import LaserficheError, classify_lf_error, invalid_token_response, local_error
 from ._registry import v2_rename_map
 
 # Every tool that returns text pulled out of a Laserfiche document body
@@ -257,6 +258,34 @@ def check_destructive_scope(operation: str) -> dict[str, Any] | None:
         ),
         required_scope=required_scope,
     )
+
+
+def verify_confirmation_token(
+    confirmation_token: str,
+    operation: str,
+    entry_id: int,
+    current_name: str,
+    *,
+    params: Mapping[str, object] | None = None,
+) -> dict[str, Any] | None:
+    """Verify a destructive tool's execute-leg token. Returns None on
+    success, or the structured error to return verbatim on failure.
+
+    Every destructive multiplex tool (rename_entry, move_entry,
+    delete_entry, delete_edoc, delete_pages) hand-rolled this identical
+    verify-then-reject skeleton — a likely copy-paste trap for whichever
+    tool comes next. One shared helper instead.
+    """
+    ok, reason = confirmation.verify_token(
+        confirmation_token,
+        operation,
+        entry_id,
+        current_name,
+        params=params,
+    )
+    if not ok:
+        return invalid_token_response(operation, entry_id, reason)
+    return None
 
 
 async def check_write_for_entry(operation: str, entry_id: int) -> dict[str, Any]:

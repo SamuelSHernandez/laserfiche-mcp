@@ -39,6 +39,9 @@ Then wire it into your MCP client — see
 [Claude Code](#connect-to-claude-code) below. Prefer environment variables
 over the wizard? See [Configure](#configure). Want a no-terminal install
 instead? See the [Claude Desktop extension](#for-everyone--the-claude-desktop-extension).
+New to MCP, or want the slower walkthrough? See
+[Connecting Claude to a Laserfiche repository](docs/getting-started.md)
+(~7 min read).
 
 ## What you can do with it
 

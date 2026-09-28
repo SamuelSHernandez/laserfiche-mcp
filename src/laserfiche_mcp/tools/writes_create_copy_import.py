@@ -22,6 +22,7 @@ from ._registry import register
 from ._validators import (
     validate_field_names,
     validate_name,
+    validate_required_fields,
     validate_tag_names,
     validate_template_name,
 )
@@ -94,8 +95,11 @@ async def create_folder(
     Optional ``template_name``/``fields`` apply metadata on creation;
     ``auto_rename`` resolves name collisions with a numeric suffix.
 
-    Returns the new folder's entry payload. Pre-server error:
-    ``path_not_allowed``. Server slugs: ``not_found``,
+    Returns the new folder's entry payload. Pre-server errors:
+    ``path_not_allowed``; when ``template_name`` is given,
+    ``missing_required_fields`` lists ``missing``/``field_details`` for
+    that template's required fields not covered by ``fields`` (disable
+    with LF_VALIDATE_REQUIRED_FIELDS=false). Server slugs: ``not_found``,
     ``required_field_missing``, ``auth_failed``.
     """
     require_writes_enabled()
@@ -122,6 +126,18 @@ async def create_folder(
         )
         if field_err is not None:
             return field_err
+    if template_name:
+        # Scoped to template_name only — without a template there's no
+        # well-defined field set to check repo-wide required fields
+        # against for an entry that doesn't exist yet.
+        required_err = await validate_required_fields(
+            "create_folder",
+            None,
+            fields,
+            template_name=template_name,
+        )
+        if required_err is not None:
+            return required_err
     body_fields = user_fields_to_values(fields) if fields else None
     try:
         raw = await _app.get_client().create_child_entry(
@@ -360,8 +376,10 @@ async def import_document(
     clean import. Pre-server errors: ``path_not_allowed`` (destination),
     ``source_path_not_allowed`` (LF_IMPORT_SOURCE_DIRS), ``file_not_found``,
     ``size_exceeds_cap`` (LF_IMPORT_MAX_BYTES, default 25 MB; API caps at
-    100 MB). Server slugs: ``not_found``, ``required_field_missing``,
-    ``auth_failed``.
+    100 MB); when ``template_name`` is given, ``missing_required_fields``
+    lists that template's required fields not covered by ``fields``
+    (disable with LF_VALIDATE_REQUIRED_FIELDS=false). Server slugs:
+    ``not_found``, ``required_field_missing``, ``auth_failed``.
     """
     require_writes_enabled()
     name_err = validate_name("import_document", name, extra={"parent_id": parent_id})
@@ -391,6 +409,17 @@ async def import_document(
         tag_err = await validate_tag_names("import_document", parent_id, tags)
         if tag_err is not None:
             return tag_err
+    if template_name:
+        # Scoped to template_name only — see create_folder's identical
+        # reasoning.
+        required_err = await validate_required_fields(
+            "import_document",
+            None,
+            fields,
+            template_name=template_name,
+        )
+        if required_err is not None:
+            return required_err
 
     settings = get_settings()
     source_ok, source_reason = permissions.local_source_path_allowed(

@@ -114,8 +114,12 @@ async def list_field_definitions(
 
     Use before authoring a field query or field update — returns each
     field's ``name``, ``fieldType``, ``isRequired``, ``isMultiValue``,
-    ``listValues``, etc. For the fields on one template,
-    ``get_template_fields`` is the direct route.
+    ``listValues``, etc., as the server's raw camelCase OData listing
+    (``{"value": [...]}``). For the fields on one template,
+    ``get_template_fields`` is the direct route — and returns a
+    different, normalized snake_case shape
+    (``{"fields": [{"is_required", ...}], ...}``), not this tool's raw
+    passthrough.
 
     On failure returns ``{"mode": "error", "error": <slug>}``.
     """

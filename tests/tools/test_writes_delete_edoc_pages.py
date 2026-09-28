@@ -260,11 +260,10 @@ async def test_delete_pages_classifies_upstream_error(
     result = await server.delete_pages(42, "1-3", confirmation_token=preview["confirmation_token"])
     assert result["mode"] == "error"
     assert result["error"] == "server_error"
-    assert (
-        result["extra"]["page_range"] == "1-3"
-        if "extra" in result
-        else result["page_range"] == "1-3"
-    )
+    # classify_lf_error's `extra` dict is merged into the top-level
+    # response (not nested under an "extra" key) — pin the real shape
+    # instead of hedging between the two.
+    assert result["page_range"] == "1-3"
 
 
 @pytest.mark.asyncio
