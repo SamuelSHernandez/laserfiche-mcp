@@ -17,14 +17,15 @@ in — write documents in a self-hosted
 also a full command-line client (`ls`, `get`, `cat`, `search`, `manifest`,
 `dedupe`, ...) for the deterministic work that needs no model at all.
 
-Current release **v2.3.0** — read and write tools for self-hosted Repository
-API v1 and v2, a one-click Claude Desktop extension, an optional remote HTTP
-transport with per-user OAuth for web clients, and a full CLI (`ls`, `get`,
-`cat`, `search`, `manifest`, `dedupe`, ...) for the deterministic work that
-needs no model at all. Read-only by default; write tools register only with
-`LF_READ_ONLY=false` and are guarded by path fences and a two-step,
-parameter-bound confirmation flow. See the [CHANGELOG](CHANGELOG.md) for
-per-release notes and the [roadmap](#roadmap) for what's next.
+Current release **v2.4.0** — read and write tools for self-hosted Repository
+API v1 and v2, BETA Laserfiche Cloud auth, a one-click Claude Desktop
+extension, an optional remote HTTP transport with per-user OAuth for web
+clients, and a full CLI (`ls`, `get`, `cat`, `search`, `manifest`, `dedupe`,
+...) for the deterministic work that needs no model at all. Read-only by
+default; write tools register only with `LF_READ_ONLY=false` and are
+guarded by path fences and a two-step, parameter-bound confirmation flow.
+See the [CHANGELOG](CHANGELOG.md) for per-release notes and the
+[roadmap](#roadmap) for what's next.
 
 ## Quick start
 

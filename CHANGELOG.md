@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-09-28
+
 A client evaluating a pre-2.3.0 build reported the tool exhausting its
 context after ~5 prompts. An audit of the first fix attempt below found
 the tool catalog — while real, and independently guarded now — was **not**
@@ -23,6 +25,17 @@ a small fraction of a modern context window. The dominant cause is
 50,000 chars (~12–15k tokens) **per call**, with nothing to reclaim that
 text once it's in the conversation — five such reads alone accounts for
 the report.
+
+Separately, an independent 268-agent audit reviewed every module,
+architecture, testing, MCP tool-surface UX/DX, security, observability,
+and doc in this project — 15 dimensions, each finding adversarially
+checked by 3 skeptics before being counted. Full report:
+[`docs/internal/AUDIT_2026-09.md`](https://github.com/SamuelSHernandez/laserfiche-mcp/blob/main/docs/internal/AUDIT_2026-09.md)
+(not shipped in the PyPI sdist, same as the other `docs/internal/*`
+working notes). All 83 confirmed findings (27 high, 39 medium, 17 low)
+are fixed below, except two large architecture items the report itself
+frames as "worth doing eventually" (a `cli.py` package split; collapsing
+the per-operation tool triplication in `server.py`) rather than required.
 
 ### Fixed
 - **`get_document_edoc` / `get_document_text` now attach a `hint` to any
@@ -49,12 +62,71 @@ the report.
   have silently resolved into this dead range and failed to start with
   no indication why; `uv.lock`-based installs were never affected since
   the lockfile already pinned a working version.
+- Four previously-unguarded local I/O/parse failure points (`ops/extract.py`
+  DOCX/PPTX/EML, the duplicate-finder's disk I/O, `import_document`'s file
+  read, malformed API timestamps in `models.py`) now return the structured
+  error contract instead of leaking a raw exception past it.
+- The CLI's `--help`/`--version` crashed when combined with a subcommand
+  (`--help ls` → argparse error instead of help); added explicit
+  validation for `--diagnose`/`--http`/`-v`/`-q` combinations argparse's
+  split top-level/subcommand parsers couldn't catch on their own.
+- The server's onboarding `instructions` text referenced legacy verb-first
+  tool names that haven't been registered by default since 2.3.0 — a
+  fresh install's own onboarding told the model to call tools that don't
+  exist. Now generated from, and pinned by a test against, the live
+  registry.
+- README's Tools tables and `docs/error-contract.md`'s subkind table were
+  documenting 34 of 51 registered tools and missing 14 real error
+  subkinds respectively; both regenerated from the live registry/taxonomy
+  and locked in with a regression test each. `smithery.yaml`'s config
+  schema also structurally blocked the Cloud auth path added below (fixed
+  enums, added the two Cloud secret fields) and advertised the wrong
+  default for `LF_LEGACY_TOOL_NAMES`.
+- `get_document_edoc` buffered the full document body before checking
+  `LF_EDOC_MAX_BYTES`, so the cap did nothing to bound transfer/memory
+  cost for an oversized file. Now probes `Content-Length` first.
+- `create_folder`/`import_document` skipped the required-fields preflight
+  `assign_template` already runs, so a missing required field surfaced as
+  a raw upstream error instead of the friendlier structured
+  `missing_required_fields` response.
+- The HTTP client's retry backoff had no ceiling, jitter, or `Retry-After`
+  support (`LF_RETRY_ATTEMPTS=10` could produce a ~17-minute single call);
+  a success-path `response.json()` could raise raw `ValueError` on a
+  malformed 2xx body; the `$top`-halving retry fired on any HTTP 400 from
+  a definitions endpoint instead of the specific `errorCode` it exists
+  for, wasting up to 8 round trips before a genuine 400 was raised.
+- `search.py`'s `repair_escape_quotes` could corrupt an otherwise-valid
+  query when a value ended in a literal backslash right before its
+  closing quote (common in Windows-style paths) — now covered by
+  property-based tests (`hypothesis`, new dev dependency) alongside
+  `permissions.py`'s path matcher, closing an item tracked in
+  `docs/internal/TODO.md` since the 2.0 audit.
+- `ops/find.py`'s context-excerpt window could silently truncate into a
+  match longer than `context_chars`, with no marker distinguishing
+  "trimmed for space" from "trimmed the match itself."
+- `list_link_definitions(summary_only=true)` always returned an empty
+  `names` list (link definitions carry `sourceLabel`/`targetLabel`, not
+  `name`) — the one definition type this feature didn't work for at all.
+- Tool-call log severity no longer treats a routine `not_found`/
+  `invalid_input` result as loud as a genuine outage or access denial.
+- Assorted smaller fixes: `_SUBKIND_TO_KIND` gaps that self-contradicted
+  responses; `search_natural`'s Mode B failures now carry the standard
+  `kind`/`error`/`request_id` envelope every other tool's failures do;
+  `wait_for_task` recognizes both `canceled`/`cancelled` spellings;
+  several stale docs/docstrings corrected (a dead README anchor, an
+  unlinked `getting-started.md`, a wrong v1 endpoint + a missing endpoint
+  in `client/__init__.py`'s path summary, a drifted `UX_PRINCIPLES.md`
+  worked example).
 
 ### Changed
 - **Instructions field also steers multi-document reads toward
   `search_content`**, tightened to avoid repeating the existing
   search_content guidance two sentences earlier. See
   `src/laserfiche_mcp/_app.py`.
+- The confirmation-token verify/reject skeleton, previously hand-rolled
+  identically in all 5 destructive tools, is now one shared
+  `tools/_helpers.verify_confirmation_token` — the audit flagged the
+  duplication as a likely copy-paste trap for a 6th destructive tool.
 
 ### Added
 - **Laserfiche Cloud auth (`LF_AUTH_MODE=api_key`) — BETA, unverified
@@ -120,6 +192,40 @@ the report.
   guards catalog-size regressions specifically — docstring bloat or the
   legacy-name default flipping back — not the ~5-prompt failure mode as a
   whole, which is the `Fixed` entry above.
+- **`list_folder(include_count=true)`** — opt-in `$count=true`, since the
+  server-side count has a real cost most callers don't need. Previously
+  documented but non-functional: `total_count` was structurally always
+  `null` because the tool never asked the server for it.
+
+### Security
+- **`LF_WRITE_TOOLS_ALLOWED` silently rejected every collapsed/split
+  write tool** (`field_update`, `rename_entry_preview`, and 12 others)
+  even when the operator allowlisted the tool by its own name — the
+  delegate's hardcoded name, not the invoked tool's name, was what
+  reached the allowlist check. Fixed with a name-family table in
+  `tools/_helpers.check_write_permission`.
+- **`move_entry`'s destination path fence failed open** (skipped the
+  check) on a transient lookup error against the destination folder,
+  asymmetric with the source-side check, which already failed closed on
+  the same error class. Now routes through the same `check_write_for_parent`
+  helper both sides use.
+- **A replayed `move_entry` confirmation token silently re-executed** —
+  unlike the other 4 destructive tools, a move without a rename leaves
+  nothing to naturally invalidate the token, so it verified again after
+  a successful execute. Now detected explicitly and refused as `no_op`.
+- **An unescaped `folder_path` in `search_content`'s LookIn clause**
+  could widen or corrupt the generated search command (a folder named
+  e.g. `Q1 "Draft" Folder`). Now escaped identically to the phrase value,
+  mirroring `search_by_name`'s existing correct handling.
+- **`CloudServiceAppStrategy`'s JWT assertion build was unguarded** — a
+  malformed `LF_CLOUD_ACCESS_KEY` or a missing `pyjwt[crypto]` install
+  raised a raw exception on every call instead of failing at startup.
+  The access key's EC private-key fields are now validated eagerly, and
+  the build itself is wrapped in the structured error contract.
+- **Unicode-normalization and drive-root-separator bugs in the write path
+  fence** (`permissions.py`) — an NFC/NFD mismatch on non-ASCII path
+  segments, and a doubled separator at a drive-root allow directory that
+  rejected every legitimate path under it.
 
 ## [2.3.0] - 2026-09-14
 
