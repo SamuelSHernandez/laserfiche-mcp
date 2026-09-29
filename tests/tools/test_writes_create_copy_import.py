@@ -76,6 +76,42 @@ async def test_import_document_file_not_found(
 
 
 @pytest.mark.asyncio
+async def test_import_document_file_read_failure_is_structured(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    """isfile()/getsize() are TOCTOU-prone: a file can pass both checks and
+    still fail to open (PermissionError from a file locked by another app
+    is routine on Windows). Must return a structured error, not a raw
+    exception, on one of the most commonly used write tools."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    target = tmp_path / "locked.txt"
+    target.write_bytes(b"content")
+
+    real_open = open
+
+    def _fake_open(path: object, *args: object, **kwargs: object) -> object:
+        if str(path) == str(target):
+            raise PermissionError("Access is denied")
+        return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "laserfiche_mcp.tools.writes_create_copy_import.open", _fake_open, raising=False
+    )
+
+    result = await server.import_document(100, "locked.txt", str(target))
+    assert result["mode"] == "error"
+    assert result["error"] == "file_read_failed"
+
+
+@pytest.mark.asyncio
 async def test_import_document_size_cap(
     monkeypatch: pytest.MonkeyPatch,
     httpx_mock: HTTPXMock,
@@ -104,7 +140,10 @@ async def test_import_document_happy_path_with_metadata(
     patched_client: LaserficheClient,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    # Not under test here — see test_import_document_with_template_blocks_on_missing_required_field.
+    monkeypatch.setattr(settings, "validate_required_fields", False)
     f = tmp_path / "doc.txt"
     f.write_bytes(b"hello")
     httpx_mock.add_response(
@@ -353,6 +392,18 @@ async def test_create_folder_with_template_validates_then_creates(
         url=f"{_BASE}/Entries/100",
         json={"id": 100, "name": "Parent", "entryType": "Folder", "fullPath": "\\P"},
     )
+    # validate_required_fields' preflight (a new entry, so entry_id=None —
+    # no get_field_values call, just the definitions lookups).
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
+        json={"value": [{"name": "Name", "isRequired": False}]},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
+        json={"value": [{"id": 1, "name": "Personnel", "templateFieldNames": ["Name"]}]},
+    )
     httpx_mock.add_response(
         method="POST",
         url=f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/children?autoRename=false",
@@ -365,6 +416,78 @@ async def test_create_folder_with_template_validates_then_creates(
         fields={"Name": ["v"]},
     )
     assert result["id"] == 999
+
+
+@pytest.mark.asyncio
+async def test_create_folder_with_template_blocks_on_missing_required_field(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """Regression: create_folder used to skip the required-fields preflight
+    entirely (unlike assign_template), so a missing required field surfaced
+    as a raw upstream classification instead of the friendlier local
+    missing/field_details/next_step response."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder", "fullPath": "\\P"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
+        json={"value": [{"name": "Status", "isRequired": True}]},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
+        json={"value": [{"id": 1, "name": "Personnel", "templateFieldNames": ["Status"]}]},
+    )
+
+    result = await server.create_folder(100, "NewFolder", template_name="Personnel")
+
+    assert result["mode"] == "error"
+    assert result["error"] == "missing_required_fields"
+    assert result["missing"] == ["Status"]
+    # No POST to actually create the folder should have fired.
+    assert len(httpx_mock.get_requests()) == 3
+
+
+@pytest.mark.asyncio
+async def test_import_document_with_template_blocks_on_missing_required_field(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    """Same regression as create_folder's — import_document also skipped
+    the required-fields preflight assign_template runs."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    f = tmp_path / "doc.txt"
+    f.write_bytes(b"hello")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
+        json={"value": [{"name": "Status", "isRequired": True}]},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
+        json={"value": [{"id": 1, "name": "Doc", "templateFieldNames": ["Status"]}]},
+    )
+
+    result = await server.import_document(100, "doc.txt", str(f), template_name="Doc")
+
+    assert result["mode"] == "error"
+    assert result["error"] == "missing_required_fields"
+    assert result["missing"] == ["Status"]
 
 
 @pytest.mark.asyncio

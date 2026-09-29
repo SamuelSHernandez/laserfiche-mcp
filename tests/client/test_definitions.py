@@ -6,6 +6,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from laserfiche_mcp.config import Settings
+from laserfiche_mcp.errors import LaserficheError
 from tests.client.conftest import _build_client
 from tests.conftest import _BASE, _BASE_V1
 
@@ -295,7 +296,7 @@ async def test_cached_field_definitions_halves_page_size_on_400(
             method="GET",
             url=f"{_BASE_V1}/FieldDefinitions?%24top={top}&%24skip=0",
             status_code=400,
-            json={"error": {"code": 216, "message": "query parameter not valid"}},
+            json={"errorCode": 216, "title": "query parameter not valid"},
         )
     httpx_mock.add_response(
         method="GET",
@@ -305,6 +306,31 @@ async def test_cached_field_definitions_halves_page_size_on_400(
     async with _build_client(settings) as client:
         result = await client.cached_field_definitions()
     assert "F1" in result
+
+
+@pytest.mark.asyncio
+async def test_cached_field_definitions_other_400_propagates_immediately(
+    httpx_mock: HTTPXMock,
+    lf_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 400 for a different reason (bad filter, permissions, ...) must
+    raise immediately, not be misread as the $top-too-large quirk and
+    ruled out via up to 8 wasted page-size-halving round trips."""
+    monkeypatch.setenv("LF_MAX_RESULTS_DEFAULT", "25")
+    monkeypatch.setenv("LF_MAX_RESULTS_CEILING", "200")
+    settings = Settings()  # type: ignore[call-arg]
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE_V1}/FieldDefinitions?%24top=200&%24skip=0",
+        status_code=400,
+        json={"errorCode": 999, "title": "some other problem"},
+    )
+    async with _build_client(settings) as client:
+        with pytest.raises(LaserficheError):
+            await client.cached_field_definitions()
+    # Only the one request should have been made — no halving retries.
+    assert len(httpx_mock.get_requests()) == 1
 
 
 @pytest.mark.asyncio

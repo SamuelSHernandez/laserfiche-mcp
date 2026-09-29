@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import pytest
+from mcp.server.auth.provider import AccessToken
 from pytest_httpx import HTTPXMock
 
 from laserfiche_mcp import server
 from laserfiche_mcp.client import LaserficheClient
+from laserfiche_mcp.tools import _helpers
 from tests.conftest import _BASE
+
+
+def _enable_destructive_scope(
+    monkeypatch: pytest.MonkeyPatch, *, scope: str = "laserfiche.destructive"
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "http_oauth_issuer", "https://idp.example.test")
+    monkeypatch.setattr(settings, "http_oauth_destructive_scope", scope)
+
+
+def _fake_caller(monkeypatch: pytest.MonkeyPatch, scopes: list[str]) -> None:
+    token = AccessToken(
+        token="t", client_id="agent-1", scopes=scopes, expires_at=None, resource="aud"
+    )
+    monkeypatch.setattr(_helpers, "get_access_token", lambda: token)
+
 
 # --- preview/execute happy paths --------------------------------------------
 
@@ -105,6 +123,135 @@ async def test_delete_entry_token_bound_to_entry_id(
     bad_call = await server.delete_entry(99, confirmation_token=token)
     assert bad_call["mode"] == "error"
     assert bad_call["error"] == "invalid_confirmation_token"
+
+
+# --- destructive OAuth scope gate --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_preview_unaffected_by_destructive_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """Preview is read-only and stays open even to a caller lacking the scope."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    _enable_destructive_scope(monkeypatch)
+    _fake_caller(monkeypatch, scopes=[])
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doomed", "entryType": "Document"},
+    )
+
+    preview = await server.delete_entry(42)
+    assert preview["mode"] == "preview"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_execute_refused_without_destructive_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doomed", "entryType": "Document"},
+        is_reusable=True,
+    )
+    preview = await server.delete_entry(42)
+    token = preview["confirmation_token"]
+
+    _enable_destructive_scope(monkeypatch)
+    _fake_caller(monkeypatch, scopes=["laserfiche.read"])
+
+    result = await server.delete_entry(42, confirmation_token=token)
+    assert result["mode"] == "error"
+    assert result["error"] == "destructive_scope_required"
+    assert result["required_scope"] == "laserfiche.destructive"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_execute_allowed_with_destructive_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doomed", "entryType": "Document"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="DELETE",
+        url=f"{_BASE}/Entries/42",
+        status_code=202,
+        json={"token": "op-xyz", "taskId": "task-1"},
+    )
+    preview = await server.delete_entry(42)
+    token = preview["confirmation_token"]
+
+    _enable_destructive_scope(monkeypatch)
+    _fake_caller(monkeypatch, scopes=["laserfiche.destructive"])
+
+    result = await server.delete_entry(42, confirmation_token=token)
+    assert result["mode"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_execute_refused_when_caller_has_no_token_at_all(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """An unattended agent's caller (e.g. stdio) has no access token in scope."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doomed", "entryType": "Document"},
+        is_reusable=True,
+    )
+    preview = await server.delete_entry(42)
+    token = preview["confirmation_token"]
+
+    _enable_destructive_scope(monkeypatch)
+    monkeypatch.setattr(_helpers, "get_access_token", lambda: None)
+
+    result = await server.delete_entry(42, confirmation_token=token)
+    assert result["mode"] == "error"
+    assert result["error"] == "destructive_scope_required"
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_scope_gate_is_noop_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """Default settings (no LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE) never invoke the gate."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Doomed", "entryType": "Document"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="DELETE",
+        url=f"{_BASE}/Entries/42",
+        status_code=202,
+        json={"token": "op-xyz", "taskId": "task-1"},
+    )
+    preview = await server.delete_entry(42)
+    token = preview["confirmation_token"]
+
+    result = await server.delete_entry(42, confirmation_token=token)
+    assert result["mode"] == "executed"
 
 
 # --- folder child-count probe -----------------------------------------------

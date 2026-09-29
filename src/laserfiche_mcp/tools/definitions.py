@@ -84,6 +84,25 @@ def _summarize_definition_list(raw: dict[str, Any]) -> dict[str, Any]:
     return {"count": len(names), "names": [n for n in names if n]}
 
 
+def _summarize_link_definitions(raw: dict[str, Any]) -> dict[str, Any]:
+    """Like ``_summarize_definition_list`` but for link definitions.
+
+    Link definitions carry ``sourceLabel``/``targetLabel`` (links are
+    directed) instead of ``name``/``displayName``, so the shared summarizer
+    always produced an empty ``names`` list for this one definition type —
+    the "what's available?" summary was useless for exactly the case it
+    exists to serve.
+    """
+    items = raw.get("value") or []
+    names: list[str] = []
+    for item in items:
+        source = item.get("sourceLabel") or item.get("SourceLabel") or ""
+        target = item.get("targetLabel") or item.get("TargetLabel") or ""
+        if source or target:
+            names.append(f"{source} -> {target}")
+    return {"count": len(items), "names": names}
+
+
 @register(v2_name="laserfiche_field_definition_list")
 async def list_field_definitions(
     max_results: _DEF_MAX_RESULTS = None,
@@ -95,8 +114,12 @@ async def list_field_definitions(
 
     Use before authoring a field query or field update — returns each
     field's ``name``, ``fieldType``, ``isRequired``, ``isMultiValue``,
-    ``listValues``, etc. For the fields on one template,
-    ``get_template_fields`` is the direct route.
+    ``listValues``, etc., as the server's raw camelCase OData listing
+    (``{"value": [...]}``). For the fields on one template,
+    ``get_template_fields`` is the direct route — and returns a
+    different, normalized snake_case shape
+    (``{"fields": [{"is_required", ...}], ...}``), not this tool's raw
+    passthrough.
 
     On failure returns ``{"mode": "error", "error": <slug>}``.
     """
@@ -281,7 +304,7 @@ async def list_link_definitions(
     except LaserficheError as exc:
         return classify_lf_error("list_link_definitions", exc)
     if summary_only:
-        return _summarize_definition_list(raw)
+        return _summarize_link_definitions(raw)
     return raw
 
 

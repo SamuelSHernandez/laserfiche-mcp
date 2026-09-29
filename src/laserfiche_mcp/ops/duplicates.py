@@ -139,7 +139,12 @@ async def find_duplicates(
                     written, _, digest = await client.export_entry_to_file(
                         entry_id, target, max_bytes=max_bytes
                     )
-                except LaserficheError as exc:
+                except (LaserficheError, OSError) as exc:
+                    # OSError alongside LaserficheError: export_entry_to_file
+                    # streams to local disk (scratch dir mkdir/open/write),
+                    # which can fail independently of the network call —
+                    # AV locks, a full or locked temp dir. One doc's local
+                    # I/O failure shouldn't abort the whole scan.
                     report.skipped.append(
                         {"entry_id": entry_id, "name": doc.get("name"), "reason": str(exc)}
                     )

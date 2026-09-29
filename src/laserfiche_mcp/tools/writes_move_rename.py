@@ -7,15 +7,17 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .. import _app, confirmation
-from ..errors import LaserficheError, classify_lf_error, invalid_token_response
+from ..errors import LaserficheError, classify_lf_error, local_error
 from ._helpers import (
     ToolAbortedError,
+    check_write_for_parent,
     check_write_permission,
     entry_name,
     entry_path,
     entry_type,
     fetch_entry_for_op,
     require_writes_enabled,
+    verify_confirmation_token,
 )
 from ._registry import register
 from ._validators import validate_name
@@ -128,15 +130,15 @@ async def rename_entry(
     if confirmation_token is None:
         return _rename_preview(entry, entry_id, new_name, current_name)
 
-    ok, reason = confirmation.verify_token(
+    token_err = verify_confirmation_token(
         confirmation_token,
         "rename_entry",
         entry_id,
         current_name,
         params={"new_name": new_name},
     )
-    if not ok:
-        return invalid_token_response("rename_entry", entry_id, reason)
+    if token_err is not None:
+        return token_err
 
     try:
         raw = await _app.get_client().patch_entry(entry_id, name=new_name)
@@ -248,8 +250,11 @@ async def move_entry(
     renames in the same operation.
 
     Pre-server errors: ``path_not_allowed`` (source or destination),
-    ``invalid_confirmation_token``. Server slugs: ``not_found``,
-    ``auth_failed``.
+    ``invalid_confirmation_token``, ``no_op`` (the entry is already at the
+    requested destination — most often a replayed confirmation_token
+    after a successful move with no ``new_name``, since tokens aren't
+    tracked as consumed, only checked for expiry and a parameter/entry
+    match). Server slugs: ``not_found``, ``auth_failed``.
     """
     require_writes_enabled()
     if new_name is not None:
@@ -274,28 +279,53 @@ async def move_entry(
     # both legs; the guarantee that the execute leg lands in the SAME
     # destination the user previewed comes from the token's parameter
     # binding on (new_parent_id, new_name), checked below.
+    #
+    # Fetch + check via check_write_for_parent (not a bare get_entry())
+    # so a fetch failure — a genuine 404, but also a transient 429/5xx/
+    # timeout — fails CLOSED with a structured error, symmetric with the
+    # source side above, instead of silently treating "couldn't confirm
+    # the destination's path" as "no fence applies here."
     try:
-        target = await _app.get_client().get_entry(new_parent_id)
-        target_path = target.get("fullPath") or target.get("FullPath") or ""
-    except LaserficheError:
-        target_path = ""
-    if target_path:
-        dest_err = check_write_permission("move_entry", path=target_path)
-        if dest_err:
-            return dest_err
+        target = await check_write_for_parent("move_entry", new_parent_id)
+    except ToolAbortedError as aborted:
+        return aborted.payload
+    target_path = target.get("fullPath") or target.get("FullPath") or ""
 
     if confirmation_token is None:
         return _move_preview(entry, entry_id, new_parent_id, new_name, current_name, target_path)
 
-    ok, reason = confirmation.verify_token(
+    token_err = verify_confirmation_token(
         confirmation_token,
         "move_entry",
         entry_id,
         current_name,
         params={"new_parent_id": new_parent_id, "new_name": new_name},
     )
-    if not ok:
-        return invalid_token_response("move_entry", entry_id, reason)
+    if token_err is not None:
+        return token_err
+
+    # Unlike rename_entry (whose token binds to the OLD name, so a replay
+    # after a successful rename fails token verification naturally) or the
+    # delete tools (the entry is gone/changed after execute), a move
+    # without new_name leaves current_name untouched — so a replayed
+    # token still verifies. Catch it here instead of silently
+    # re-executing a no-op PATCH: confirmation tokens aren't tracked as
+    # "consumed" (the design is deliberately stateless — see
+    # confirmation.py), so this is the only place that can tell "already
+    # done" from "not done yet."
+    current_parent_id = entry.get("parentId") or entry.get("ParentId")
+    if current_parent_id == new_parent_id and (new_name is None or current_name == new_name):
+        return local_error(
+            "move_entry",
+            "no_op",
+            entry_id=entry_id,
+            reason=(
+                f"Entry {entry_id} is already at the requested destination "
+                f"(parent {new_parent_id}"
+                + (f", name {new_name!r}" if new_name else "")
+                + "). Nothing to do."
+            ),
+        )
 
     try:
         raw = await _app.get_client().patch_entry(

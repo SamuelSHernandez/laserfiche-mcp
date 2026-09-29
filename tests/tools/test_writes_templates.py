@@ -214,6 +214,71 @@ async def test_assign_template_validation_passes_when_required_field_already_set
 
 
 @pytest.mark.asyncio
+async def test_assign_template_validation_recognizes_v1_pascalcase_field_values(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A v1 server (the default LF_API_VERSION) returns field values under
+    PascalCase (Value/FieldName/Values) keys, not the v2 camelCase shape.
+    The validator must recognize a required field as already-set either
+    way — a v1-only shape check used to make `already_set` always empty,
+    reintroducing the preflight-over-aggression bug on the default
+    deployment config (every required field looked missing even when
+    already set)."""
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={
+            "id": 42,
+            "name": "Doc",
+            "entryType": "Document",
+            "fullPath": "\\Doc",
+        },
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/TemplateDefinitions?%24top=200&%24skip=0",
+        json={
+            "value": [
+                {"id": 1, "name": "T", "templateFieldNames": ["Type of Document"]},
+            ]
+        },
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/FieldDefinitions?%24top=200&%24skip=0",
+        json={
+            "value": [
+                {
+                    "name": "Type of Document",
+                    "fieldType": "List",
+                    "isRequired": True,
+                    "listValues": ["Digital"],
+                },
+            ]
+        },
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/fields",
+        json={
+            "Value": [
+                {"FieldName": "Type of Document", "Values": [{"Value": "Digital"}]},
+            ]
+        },
+    )
+    httpx_mock.add_response(
+        method="PUT",
+        url=f"{_BASE}/Entries/42/template",
+        json={"id": 42, "templateName": "T"},
+    )
+    result = await server.assign_template(42, "T")
+    assert result.get("mode") != "error"
+
+
+@pytest.mark.asyncio
 async def test_assign_template_validation_accepts_required_field_via_caller_fields(
     monkeypatch: pytest.MonkeyPatch,
     httpx_mock: HTTPXMock,

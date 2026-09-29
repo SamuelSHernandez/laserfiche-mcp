@@ -72,15 +72,61 @@ def test_oauth_succeeds_with_full_config(
     assert settings.client_id == "client-abc"
 
 
-def test_api_key_mode_rejected(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_api_key_mode_without_cloud_deployment_rejected(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """api_key auth only makes sense paired with LF_DEPLOYMENT_MODE=cloud."""
     monkeypatch.setenv("LF_AUTH_MODE", "api_key")
-    with pytest.raises(NotImplementedError, match="api_key"):
+    with pytest.raises(ValueError, match="LF_DEPLOYMENT_MODE=cloud"):
         Settings()  # type: ignore[call-arg]
 
 
-def test_cloud_mode_rejected(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cloud_mode_without_api_key_auth_rejected(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cloud only supports the api_key (service-app JWT) auth flow."""
     monkeypatch.setenv("LF_DEPLOYMENT_MODE", "cloud")
-    with pytest.raises(NotImplementedError, match="Cloud"):
+    with pytest.raises(ValueError, match="LF_DEPLOYMENT_MODE=cloud"):
+        Settings()  # type: ignore[call-arg]
+
+
+def test_api_key_mode_requires_cloud_secrets(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_DEPLOYMENT_MODE", "cloud")
+    monkeypatch.setenv("LF_AUTH_MODE", "api_key")
+    with pytest.raises(ValueError, match="LF_CLOUD_ACCESS_KEY"):
+        Settings()  # type: ignore[call-arg]
+
+
+def test_api_key_mode_loads_with_cloud_secrets(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_DEPLOYMENT_MODE", "cloud")
+    monkeypatch.setenv("LF_AUTH_MODE", "api_key")
+    monkeypatch.setenv("LF_API_VERSION", "v2")
+    monkeypatch.setenv("LF_CLOUD_ACCESS_KEY", "ZmFrZQ==")
+    monkeypatch.setenv("LF_CLOUD_SERVICE_PRINCIPAL_KEY", "spk")
+    monkeypatch.delenv("LF_USERNAME", raising=False)
+    monkeypatch.delenv("LF_PASSWORD", raising=False)
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.auth_mode is AuthMode.API_KEY
+    assert settings.deployment_mode is DeploymentMode.CLOUD
+    assert settings.api_version is ApiVersion.V2
+
+
+def test_api_key_mode_requires_v2_api_version(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cloud's Repository API only exposes the v2 surface — v1 must be rejected."""
+    monkeypatch.setenv("LF_DEPLOYMENT_MODE", "cloud")
+    monkeypatch.setenv("LF_AUTH_MODE", "api_key")
+    monkeypatch.setenv("LF_API_VERSION", "v1")
+    monkeypatch.setenv("LF_CLOUD_ACCESS_KEY", "ZmFrZQ==")
+    monkeypatch.setenv("LF_CLOUD_SERVICE_PRINCIPAL_KEY", "spk")
+    monkeypatch.delenv("LF_USERNAME", raising=False)
+    monkeypatch.delenv("LF_PASSWORD", raising=False)
+    with pytest.raises(ValueError, match="LF_API_VERSION=v2"):
         Settings()  # type: ignore[call-arg]
 
 

@@ -48,11 +48,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import time
 from collections.abc import Mapping
 from typing import Final
+
+logger = logging.getLogger("laserfiche_mcp.confirmation")
 
 DEFAULT_TTL_SECONDS: Final[int] = 300
 
@@ -82,7 +85,8 @@ def _signing_key() -> bytes:
 
             configured = get_settings().confirmation_secret
             secret = configured.get_secret_value() if configured else None
-        except Exception:  # noqa: BLE001 — no valid Settings (e.g. unit tests)
+        except Exception as exc:  # noqa: BLE001 — no valid Settings (e.g. unit tests)
+            logger.debug("no configured Settings available for confirmation secret: %r", exc)
             secret = None
     if secret:
         return hashlib.sha256(_KDF_LABEL + secret.encode("utf-8")).digest()

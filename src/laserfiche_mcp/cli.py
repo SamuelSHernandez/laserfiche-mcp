@@ -77,7 +77,7 @@ Options:
 
 Exposing --http to a network requires LF_HTTP_AUTH_TOKEN (a bearer token
 checked on every request) and TLS terminated by a reverse proxy in front.
-See https://github.com/SamuelSHernandez/laserfiche-mcp#remote-http.
+See https://github.com/SamuelSHernandez/laserfiche-mcp#remote-http-web-clients.
 
 Configuration: run `laserfiche-mcp setup` once, or set LF_* environment
 variables / a .env file in the working directory. (Precedence: env vars,
@@ -128,22 +128,25 @@ def _format_config_error(exc: Exception) -> str:
     return "\n".join(lines)
 
 
+_JSON_HELP = "Emit machine-readable JSON on stdout instead of a text report."
+
+
 def _common_flags_parser() -> argparse.ArgumentParser:
     """Flags every subcommand accepts, in addition to the top-level parser.
 
     ``--config`` and the verbosity flags default to ``SUPPRESS`` here so that
     writing them *before* the subcommand still works: without SUPPRESS, the
     subparser would re-apply its own default and silently overwrite the value
-    the top-level parser already parsed. ``--json`` has a real default because
-    only the subparsers define it.
+    the top-level parser already parsed.
+
+    Deliberately does NOT include ``--json`` — unlike the repository
+    subcommands (``ls``, ``get``, ...), neither ``serve`` nor ``diagnose``
+    reads ``args.json``, so inheriting it here used to mean
+    ``diagnose --json`` silently printed the ordinary text report instead
+    of erroring or doing what it says. Each repository subcommand adds its
+    own ``--json`` individually in ``_add_repository_commands``.
     """
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--json",
-        action="store_true",
-        default=False,
-        help="Emit machine-readable JSON on stdout instead of a text report.",
-    )
     common.add_argument(
         "--config",
         metavar="PATH",
@@ -178,6 +181,7 @@ def _add_repository_commands(
     p_ls = subparsers.add_parser(
         "ls", aliases=["list"], parents=[common], help="List a folder's children."
     )
+    p_ls.add_argument("--json", action="store_true", help=_JSON_HELP)
     p_ls.add_argument("folder", help=entry_help)
     p_ls.add_argument("--limit", type=int, default=100, help="Page size (default 100).")
     p_ls.add_argument("--skip", type=int, default=0, help="Offset into the listing.")
@@ -188,6 +192,7 @@ def _add_repository_commands(
         parents=[common],
         help="Stream a document to a local file.",
     )
+    p_get.add_argument("--json", action="store_true", help=_JSON_HELP)
     p_get.add_argument("entry", help=entry_help)
     p_get.add_argument("--to", metavar="PATH", default=None, help="Destination file or directory.")
     p_get.add_argument("--force", action="store_true", help="Overwrite an existing file.")
@@ -199,12 +204,14 @@ def _add_repository_commands(
         parents=[common],
         help="Print a document's extracted text.",
     )
+    p_cat.add_argument("--json", action="store_true", help=_JSON_HELP)
     p_cat.add_argument("entry", help=entry_help)
     p_cat.add_argument("--pages", default=None, help="Page selection, e.g. '4-9' or '1,3,5-7'.")
     p_cat.add_argument("--max-chars", type=int, default=0, help="Truncate output (0 = no limit).")
     p_cat.add_argument("--max-bytes", type=int, default=None, help="Refuse files above this size.")
 
     p_find = subparsers.add_parser("find", parents=[common], help="Search inside one document.")
+    p_find.add_argument("--json", action="store_true", help=_JSON_HELP)
     p_find.add_argument("entry", help=entry_help)
     p_find.add_argument("pattern", help="Text to find. Literal unless --regex is given.")
     p_find.add_argument("--regex", action="store_true", help="Treat the pattern as a regex.")
@@ -220,6 +227,7 @@ def _add_repository_commands(
     p_search = subparsers.add_parser(
         "search", parents=[common], help="Full-text search with matched passages."
     )
+    p_search.add_argument("--json", action="store_true", help=_JSON_HELP)
     p_search.add_argument("query", help="A phrase, or raw Laserfiche syntax if it starts with '{'.")
     p_search.add_argument("--folder", default=None, help="Restrict to this folder subtree.")
     p_search.add_argument(
@@ -244,6 +252,7 @@ def _add_repository_commands(
     p_manifest = subparsers.add_parser(
         "manifest", parents=[common], help="Walk a tree and write an inventory."
     )
+    p_manifest.add_argument("--json", action="store_true", help=_JSON_HELP)
     p_manifest.add_argument("folder", help=entry_help)
     p_manifest.add_argument("--out", metavar="PATH", default=None, help="File to write.")
     p_manifest.add_argument(
@@ -265,6 +274,7 @@ def _add_repository_commands(
         parents=[common],
         help="Find byte-identical documents.",
     )
+    p_dedupe.add_argument("--json", action="store_true", help=_JSON_HELP)
     p_dedupe.add_argument("folder", help=entry_help)
     p_dedupe.add_argument(
         "--no-recursive", action="store_true", help="Only consider immediate children."
@@ -282,6 +292,7 @@ def _add_repository_commands(
     p_diff = subparsers.add_parser(
         "diff", aliases=["compare"], parents=[common], help="Compare two entries."
     )
+    p_diff.add_argument("--json", action="store_true", help=_JSON_HELP)
     p_diff.add_argument("left", help=entry_help)
     p_diff.add_argument("right", help=entry_help)
     p_diff.add_argument(
@@ -321,6 +332,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Interactive first-run wizard: save connection details, then verify them.",
     )
     _add_repository_commands(subparsers, common)
+
+    # -h/--help and -V/--version must win regardless of what else is on the
+    # command line. Every repository subcommand (ls, get, cat, ...) has a
+    # required positional, so e.g. `laserfiche-mcp --help ls` would
+    # otherwise fail argparse's positional-argument validation — "the
+    # following arguments are required: folder" — instead of showing help.
+    # Parsing just the flag itself (discarding the rest of argv) sidesteps
+    # that: it can never trip over an unrelated subcommand's requirements.
+    if "-h" in argv or "--help" in argv:
+        return parser.parse_args(["--help"])
+    if "-V" in argv or "--version" in argv:
+        return parser.parse_args(["--version"])
 
     return parser.parse_args(argv)
 
@@ -510,10 +533,11 @@ async def _run_diagnose(settings: Settings) -> int:
         print(f"  {label:<32} {status}" + (f"  {detail}" if detail else ""))
 
     print(f"\nlaserfiche-mcp {__version__} — server diagnostic")
-    print(
-        f"  Target: {settings.repo_api_url}{settings.repository_id} "
-        f"(API {settings.api_version.value})"
-    )
+    # HttpUrl doesn't reliably carry a trailing slash (depends on whether
+    # the configured URL had one), so a bare concatenation can glue
+    # repository_id straight onto the path with nothing between them.
+    target_url = str(settings.repo_api_url).rstrip("/")
+    print(f"  Target: {target_url}/{settings.repository_id} (API {settings.api_version.value})")
     print(f"  Auth:   mode={settings.auth_mode.value}, user={settings.username or '(none)'}")
     print()
     print("Endpoint probes:")
@@ -738,7 +762,10 @@ def _run_setup() -> int:
             if problem is None:
                 break
             print(f"    {problem}")
-        repo = _prompt("Repository name or ID")
+        repo = _prompt(
+            "Repository name or ID (the repository you pick when signing "
+            "into Laserfiche Web Access)"
+        )
         username = _prompt("Service account username")
         while True:
             password = _prompt("Service account password", secret=True)
@@ -820,6 +847,44 @@ def _load_config_file(path: str) -> None:
     load_dotenv(path, override=False)
 
 
+def _validate_flag_combinations(args: argparse.Namespace, command: str | None) -> None:
+    """Refuse flag/subcommand combinations argparse's split parsers can't
+    themselves catch, instead of silently picking one and discarding the
+    other.
+
+    ``--diagnose``/``--http`` live on the top-level parser; each
+    repository subcommand (``ls``, ``get``, ...) has its own separate
+    ``-v``/``-q`` mutually-exclusive group (see ``_common_flags_parser``).
+    Because these are different parsers, argparse enforces exclusivity
+    only *within* each one — a flag from the top-level parser and one from
+    a subcommand's parser can both end up set with no error, e.g.
+    ``-v ls 1 -q`` sets both ``verbose`` and ``quiet``.
+    """
+    if args.diagnose and command not in (None, "diagnose", "serve"):
+        print(
+            f"laserfiche-mcp: --diagnose and the '{command}' subcommand can't be "
+            f"combined — --diagnose starts a probe of the configured server, "
+            f"'{command}' is a one-shot repository command; run them separately.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if args.http and command not in (None, "serve"):
+        print(
+            f"laserfiche-mcp: --http starts the HTTP server and can't be "
+            f"combined with the '{command}' subcommand, which runs once and "
+            "exits. Drop --http to run the subcommand, or drop the "
+            "subcommand to start the HTTP server.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if getattr(args, "verbose", 0) and getattr(args, "quiet", False):
+        print(
+            "laserfiche-mcp: -v/--verbose and -q/--quiet can't both be set.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def main(register_writes: Callable[[], None]) -> None:
     """Console-script entrypoint.
 
@@ -838,10 +903,13 @@ def main(register_writes: Callable[[], None]) -> None:
         print(f"laserfiche-mcp {__version__}")
         return
 
+    command = getattr(args, "command", None)
+    _validate_flag_combinations(args, command)
+
     if args.config is not None:
         _load_config_file(args.config)
 
-    if getattr(args, "command", None) == "setup":
+    if command == "setup":
         sys.exit(_run_setup())
 
     _load_user_env_if_unconfigured()
@@ -860,8 +928,6 @@ def main(register_writes: Callable[[], None]) -> None:
     configure_logging(level=log_level, format_=settings.log_format)
 
     _warn_on_unknown_env_keys()
-
-    command = getattr(args, "command", None)
 
     if args.diagnose or command == "diagnose":
         exit_code = asyncio.run(_run_diagnose(settings))

@@ -84,6 +84,51 @@ async def test_search_natural_mode_a_returns_guidance(
 
 
 @pytest.mark.asyncio
+async def test_search_natural_mode_a_works_against_v1_pascalcase_server(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A v1 server (this project's actual default deployment target) returns
+    entry/listing payloads under PascalCase (Id/Value) keys, not v2's
+    camelCase. _sample_folder_templates used to read only the camelCase
+    shape, so on a v1 server folder_path was silently discarded and the
+    fallback root also returned no children — Mode A template
+    auto-discovery was completely broken by default."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/ByPath?fullPath=%5CTest",
+        json={"Id": 100, "Name": "Test", "EntryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=(f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/children?%24top=10&%24skip=0"),
+        json={
+            "Value": [
+                {"Id": 201, "Name": "doc1", "EntryType": "Document"},
+            ]
+        },
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/201",
+        json={"Id": 201, "Name": "doc1", "TemplateName": "Personnel File"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/201/fields",
+        json={"Value": [{"FieldName": "Person Name", "Values": []}]},
+    )
+
+    result = await server.search_natural(question="find John Smith's PAF", folder_path="\\Test")
+
+    assert result["mode"] == "guidance"
+    template_names = {t["template_name"] for t in result["discovered_templates"]}
+    assert "Personnel File" in template_names
+    # No fallback-to-root note should have been needed.
+    assert not any("sampled from the repository root" in n for n in result["notes"])
+
+
+@pytest.mark.asyncio
 async def test_search_natural_mode_a_notes_when_max_results_is_clamped(
     httpx_mock: HTTPXMock,
     patched_client: LaserficheClient,
@@ -134,6 +179,30 @@ async def test_search_natural_mode_b_executes_and_returns_results(
     assert result["entries"][0]["id"] == 999
     assert result["pagination_unknown"] is False
     assert result["effective_max_results"] == 50
+
+
+@pytest.mark.asyncio
+async def test_search_natural_mode_b_results_carry_web_url_when_configured(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LF_WEB_CLIENT_URL_TEMPLATE", "https://lf.example.com/doc/{entry_id}")
+    server._reset_settings_for_tests()
+
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/SimpleSearches",
+        json={"value": [{"id": 999, "name": "found.pdf", "entryType": "Document"}]},
+    )
+
+    result = await server.search_natural(
+        question="x",
+        lf_query='{LF:Name="*Smith*"}',
+        max_results=50,
+    )
+
+    assert result["entries"][0]["web_url"] == "https://lf.example.com/doc/999"
 
 
 @pytest.mark.asyncio
@@ -221,6 +290,13 @@ async def test_search_natural_exhausts_repairs_and_returns_structured_error(
     assert result["attempts"][2]["repair"] == "wildcard_wrap"
     assert result["next_action"] is not None
     assert "grammar" in result["next_action"].lower()
+    # Regression: Mode B failures used to omit the standard error envelope
+    # every other tool's failures carry, and the documented
+    # bad_query_syntax subkind was never actually emitted anywhere.
+    assert result["operation"] == "search_natural"
+    assert result["kind"] == "invalid_input"
+    assert result["error"] == "bad_query_syntax"
+    assert result["request_id"]
 
 
 @pytest.mark.asyncio
@@ -247,6 +323,10 @@ async def test_search_natural_returns_error_immediately_on_non_400(
     assert result["attempts"][0]["status_code"] == 500
     assert result["next_action"] is not None
     assert "non-400" in result["next_action"]
+    assert result["operation"] == "search_natural"
+    assert result["kind"] == "upstream_unavailable"
+    assert result["error"] == "server_error"
+    assert result["request_id"]
 
 
 @pytest.mark.asyncio

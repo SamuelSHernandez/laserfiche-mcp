@@ -74,15 +74,19 @@ _SUBKIND_TO_KIND: dict[str, str] = {
     "path_not_allowed": "permission_denied",
     "path_traversal_blocked": "permission_denied",
     "tool_not_allowed": "permission_denied",
+    "destructive_scope_required": "permission_denied",
+    "source_path_not_allowed": "permission_denied",
     # not_found
     "not_found": "not_found",
     # rate_limited
     "rate_limited": "rate_limited",
     # invalid_input
+    "not_a_folder": "invalid_input",
     "required_field_missing": "invalid_input",
     "missing_required_fields": "invalid_input",
     "invalid_confirmation_token": "invalid_input",
     "exceeds_batch_cap": "invalid_input",
+    "no_op": "invalid_input",
     "audit_reason_required": "invalid_input",
     "page_range_required": "invalid_input",
     "invalid_page_range": "invalid_input",
@@ -94,6 +98,7 @@ _SUBKIND_TO_KIND: dict[str, str] = {
     "invalid_link_type": "invalid_input",
     "unsupported_media_type": "invalid_input",
     "file_not_found": "invalid_input",
+    "file_read_failed": "invalid_input",
     "size_exceeds_cap": "invalid_input",
     "expected_folder_got_document": "invalid_input",
     "bad_query_syntax": "invalid_input",
@@ -111,6 +116,7 @@ _SUBKIND_TO_KIND: dict[str, str] = {
     "pdf_extraction_failed": "invalid_input",
     "not_a_zip": "invalid_input",
     "malformed_docx": "invalid_input",
+    "malformed_eml": "invalid_input",
     "xlsx_open_failed": "invalid_input",
     "msg_open_failed": "invalid_input",
     "extraction_failed": "invalid_input",
@@ -120,6 +126,10 @@ _SUBKIND_TO_KIND: dict[str, str] = {
     "server_error": "upstream_unavailable",
     "method_not_allowed": "upstream_unavailable",
     "endpoint_disabled": "upstream_unavailable",
+    "child_count_probe_failed": "upstream_unavailable",
+    "async_search_unavailable": "upstream_unavailable",
+    "search_timeout": "upstream_unavailable",
+    "search_failed": "upstream_unavailable",
 }
 
 

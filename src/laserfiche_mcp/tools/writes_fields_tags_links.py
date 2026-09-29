@@ -53,10 +53,13 @@ async def set_fields(
 ) -> dict[str, Any]:
     """OVERWRITE all field values on an entry. Destructive — read carefully.
 
-    **Prefer ``merge_fields``** for any "set field X to Y" intent. This
-    tool follows the raw ``PUT /fields`` semantics: any field on the
-    entry that is NOT in ``fields`` is deleted (independent fields) or
-    reset to empty (templated fields). Use this only when you want that
+    **Prefer ``merge_fields``** for any "set field X to Y" intent, or
+    ``field_update`` (``mode="merge"``/``"replace"``), which wraps both
+    this tool and ``merge_fields`` behind one name if you'd rather not
+    choose between them up front. This tool follows the raw
+    ``PUT /fields`` semantics: any field on the entry that is NOT in
+    ``fields`` is deleted (independent fields) or reset to empty
+    (templated fields). Use this only when you want that
     delete-everything-else behavior explicitly — e.g. clearing a stale
     snapshot before assigning a new one.
 
@@ -67,7 +70,10 @@ async def set_fields(
             Example: ``{"Last Name": ["Smith"], "Hire Date": ["2024-01-15"]}``.
             To clear a field, pass an empty list (``"Note": []``).
 
-    Returns: The server's updated field listing on success.
+    Returns: The server's updated field listing on success, passed through
+        verbatim from the API — unlike ``merge_fields``, there is no
+        ``mode`` key in the response; presence/absence of ``mode`` is how
+        to tell the two shapes apart programmatically.
 
     Pre-server errors (returned before the API call):
         - ``path_not_allowed`` — entry's path falls outside
@@ -107,9 +113,12 @@ async def merge_fields(
     **The right default for "set field X to Y".** Reads current values,
     layers ``updates`` on top, PUTs the union — unmentioned fields keep
     their values. An empty list clears one field. Use ``set_fields`` only
-    for overwrite-everything semantics.
+    for overwrite-everything semantics; ``field_update`` wraps both this
+    tool and ``set_fields`` behind one ``mode="merge"``/``"replace"`` name.
 
-    Returns ``{"mode": "executed", "fields_updated", "fields_preserved"}``.
+    Returns ``{"mode": "executed", "fields_updated", "fields_preserved"}``
+    — note the ``mode`` key, absent from ``set_fields``' raw passthrough
+    response; that's how to tell the two shapes apart programmatically.
     Errors: ``path_not_allowed``, ``not_found``,
     ``required_field_missing`` (clearing a required field), ``auth_failed``.
     """
@@ -167,7 +176,9 @@ async def set_tags(
 
     Any tag currently on the entry that is NOT in ``tags`` will be
     removed. **Prefer ``merge_tags``** for additive intents — it adds
-    and removes specific tags without disturbing the rest.
+    and removes specific tags without disturbing the rest — or
+    ``tag_update``, which wraps both this tool and ``merge_tags`` behind
+    one ``add``/``remove``-vs-``replace`` name.
 
     Tags must already exist as repository-level tag definitions (see
     ``list_tag_definitions``); the server rejects unknown tag names.
@@ -177,7 +188,8 @@ async def set_tags(
         tags: Full list of tag names that should be on the entry after
             this call. Pass ``[]`` to clear all tags.
 
-    Returns: The server's updated tag listing.
+    Returns: The server's updated tag listing, passed through verbatim —
+        unlike ``merge_tags``, there is no ``mode`` key in the response.
 
     Pre-server errors (returned before the API call):
         - ``path_not_allowed`` — entry outside the allow list.
@@ -233,7 +245,9 @@ async def merge_tags(
     Tags in ``add`` that are already on the entry are no-ops.
 
     Tags must already exist as repository-level tag definitions (see
-    ``list_tag_definitions``).
+    ``list_tag_definitions``). Use ``set_tags`` only for
+    overwrite-everything semantics; ``tag_update`` wraps both this tool
+    and ``set_tags`` behind one name.
 
     Args:
         entry_id: Integer entry ID.
@@ -315,9 +329,10 @@ async def set_links(
     """OVERWRITE the entry-link list on an entry. Destructive — read carefully.
 
     Any link currently on the entry that is NOT in ``links`` will be
-    removed. There is no ``merge_links`` helper — if you only want to
-    add a link, first call ``get_entry`` (or inspect via the web client)
-    to read the existing links, then call this with the full set.
+    removed. There is no dedicated ``merge_links`` tool, but
+    ``link_update(mode="merge")`` wraps this same tool and does the
+    GET-then-PUT union for you; call it instead if you only want to add a
+    link without disturbing the rest.
 
     Args:
         entry_id: Integer entry ID — the source of each link.
@@ -327,7 +342,8 @@ async def set_links(
             ``Supersedes`` type, ``Attachment``, etc.) and ``targetId``
             is the other entry's ID. Pass ``[]`` to clear all links.
 
-    Returns: The server's updated link listing.
+    Returns: The server's updated link listing, passed through verbatim —
+        unlike ``link_update``, there is no ``mode`` key in the response.
 
     Pre-server errors (returned before the API call):
         - ``path_not_allowed`` — source entry outside the allow list.

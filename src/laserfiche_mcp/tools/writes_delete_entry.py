@@ -15,15 +15,17 @@ from pydantic import Field
 from .. import _app, confirmation
 from .._app import get_settings
 from ..config import Settings
-from ..errors import LaserficheError, classify_lf_error, invalid_token_response, local_error
+from ..errors import LaserficheError, classify_lf_error, local_error
 from ._helpers import (
     ToolAbortedError,
+    check_destructive_scope,
     check_write_permission,
     entry_name,
     entry_path,
     entry_type,
     fetch_entry_for_op,
     require_writes_enabled,
+    verify_confirmation_token,
 )
 from ._registry import register
 
@@ -257,6 +259,12 @@ async def delete_entry(
     ``child_count_probe_failed`` (the batch-cap probe errored — refused,
     fail-closed, rather than assuming the folder is small; retry),
     ``audit_reason_required``. Server slugs: ``not_found``, ``auth_failed``.
+
+    When LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE is configured, executing (not
+    previewing) requires that OAuth scope on the caller's token —
+    ``destructive_scope_required`` if it's missing. Intended so an
+    unattended agent's credentials can preview but never execute; only a
+    human's own token carries the scope.
     """
     require_writes_enabled()
     try:
@@ -288,14 +296,18 @@ async def delete_entry(
             settings,
         )
 
-    ok, reason = confirmation.verify_token(
+    scope_err = check_destructive_scope("delete_entry")
+    if scope_err is not None:
+        return scope_err
+
+    token_err = verify_confirmation_token(
         confirmation_token,
         "delete_entry",
         entry_id,
         current_name,
     )
-    if not ok:
-        return invalid_token_response("delete_entry", entry_id, reason)
+    if token_err is not None:
+        return token_err
 
     cap_err = _delete_entry_check_caps(
         entry_id,

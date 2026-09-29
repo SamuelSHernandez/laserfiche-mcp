@@ -93,13 +93,20 @@ def test_context_window_is_bounded_and_marks_elision() -> None:
 
 
 def test_context_keeps_the_match_when_the_match_exceeds_the_window() -> None:
-    """Truncating the matched text itself would defeat the point."""
+    """Truncating the matched text itself would defeat the point.
+
+    Regression: `context` used to be built from a window clipped to
+    exactly context_chars regardless of the match's own length, so a
+    match longer than context_chars had its own text cut into — with no
+    marker distinguishing "trimmed for space" from "trimmed the match."
+    """
     long_match = "z" * 100
     doc = _flat(f"before {long_match} after")
 
     hits, _ = find_in_text(doc, long_match, context_chars=40)
 
     assert hits[0].matched == long_match
+    assert long_match in hits[0].context
 
 
 def test_newlines_are_flattened_so_one_match_is_one_line() -> None:

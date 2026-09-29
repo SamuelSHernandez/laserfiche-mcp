@@ -15,13 +15,32 @@ user's own account.
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from ..errors import LaserficheError
 from ..models import ContentSearchResult, ContextHit
+
+logger = logging.getLogger("laserfiche_mcp.ops.content_search")
+
+
+class _SearchClient(Protocol):
+    """The async-search client methods this module needs."""
+
+    async def create_search(self, query: str) -> str: ...
+
+    async def get_search_status(self, token: str) -> dict[str, Any]: ...
+
+    async def get_search_results(
+        self, token: str, *, max_results: int = 25, skip: int = 0
+    ) -> dict[str, Any]: ...
+
+    async def get_search_context_hits(self, token: str, row_number: int) -> dict[str, Any]: ...
+
+    async def close_search(self, token: str) -> None: ...
+
 
 # Ceiling on a single status poll's delay, regardless of how long the search
 # runs. Starts at the configured interval and backs off to this.
@@ -58,7 +77,11 @@ def build_search_command(query: str, folder_path: str | None) -> str:
         command = f'{{LF:Basic~="{escaped}"}}'
 
     if folder_path:
-        command = f'{command} & {{LF:LookIn="{folder_path}"}}'
+        # Same escaping as the phrase above — an unescaped `"` in folder_path
+        # would let its value break out of the LookIn value span and widen
+        # or corrupt the clause, e.g. a folder named `Q1 "Draft" Folder`.
+        escaped_folder = folder_path.replace('"', '\\"')
+        command = f'{command} & {{LF:LookIn="{escaped_folder}"}}'
     return command
 
 
@@ -75,7 +98,7 @@ class SearchOutcome:
 
 
 async def await_search(
-    client: Any,
+    client: _SearchClient,
     token: str,
     *,
     timeout_seconds: float,
@@ -129,7 +152,7 @@ async def await_search(
 
 
 async def attach_context_hits(
-    client: Any,
+    client: _SearchClient,
     token: str,
     results: list[ContentSearchResult],
     *,
@@ -169,7 +192,7 @@ async def attach_context_hits(
 
 
 async def run_search(
-    client: Any,
+    client: _SearchClient,
     command: str,
     *,
     page_size: int,
@@ -218,9 +241,14 @@ async def run_search(
     finally:
         # The session's active-search budget is small; never leak a token.
         # A failed close is not worth surfacing over a successful search —
-        # the token expires server-side on its own.
-        with contextlib.suppress(LaserficheError):
+        # the token expires server-side on its own — but it's worth a log
+        # line: this module's own docstring calls a leaked token "a denial
+        # of service against the user's own account," so a silent failure
+        # here has no other trail if the budget does get exhausted.
+        try:
             await client.close_search(token)
+        except LaserficheError as exc:
+            logger.warning("failed to close search token %s: %s", token, exc)
 
     return SearchOutcome(
         results=results,

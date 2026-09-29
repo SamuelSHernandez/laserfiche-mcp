@@ -446,6 +446,14 @@ async def task_wait_or_poll(
     ``0`` = single poll (``get_task_status`` semantics); ``>0`` (default 60)
     = block until terminal or deadline (``wait_for_task`` semantics, adds
     ``timed_out``). Same payloads and errors as the underlying tools.
+
+    Read-only despite its ``laserfiche_task_update`` v2 name — the only
+    ``*_update`` tool in the catalog that doesn't mutate anything; it
+    polls an already-running async operation, never registered behind
+    ``LF_READ_ONLY``. The name follows this module's ``field_update``/
+    ``tag_update``/``template_update`` "collapses a pair of tools" pattern
+    rather than the write-tool naming convention, since ``get_task_status``/
+    ``wait_for_task`` were never write tools to begin with.
     """
     if timeout_seconds <= 0:
         return await get_task_status(operation_token=operation_token)

@@ -295,7 +295,17 @@ def _emit_event(
     for k, v in extras.items():
         if v is not None:
             event[k] = v
-    level = logging.INFO if outcome == "ok" else logging.WARNING
+    if outcome == "ok" or (
+        outcome == "error" and extras.get("error_kind") in ("not_found", "invalid_input")
+    ):
+        # not_found/invalid_input are routine, expected outcomes of normal
+        # agent interaction (a bad entry_id, a malformed query) — not an
+        # operational concern, unlike a genuine outage or access denial.
+        # Logging them at the same WARNING level as those made the two
+        # indistinguishable by severity alone.
+        level = logging.INFO
+    else:
+        level = logging.WARNING
     logger.log(
         level,
         "tool_call %s %s %.2fms",

@@ -283,8 +283,26 @@ async def test_list_link_definitions_summary_only(
             ]
         },
     )
-    # link defs don't have a 'name'; the summary helper falls back to displayName,
-    # which is also absent. Names list will be empty.
+    # Link defs don't have a 'name'/'displayName' — they're directed, with
+    # sourceLabel/targetLabel instead, so the summary is derived from those.
     result = await server.list_link_definitions(summary_only=True)
     assert result["count"] == 2
-    # The link definition has sourceLabel, not name — empty names list is acceptable.
+    assert result["names"] == ["S1 -> ", "S2 -> "]
+
+
+@pytest.mark.asyncio
+async def test_list_link_definitions_summary_only_includes_target_label(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/LinkDefinitions?%24top=25&%24skip=0",
+        json={
+            "value": [
+                {"linkTypeId": 1, "sourceLabel": "Supersedes", "targetLabel": "Superseded by"}
+            ]
+        },
+    )
+    result = await server.list_link_definitions(summary_only=True)
+    assert result["names"] == ["Supersedes -> Superseded by"]

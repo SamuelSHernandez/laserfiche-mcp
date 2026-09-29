@@ -191,6 +191,36 @@ async def test_tool_logger_emits_error_event_with_kind_and_subkind(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "expected_level"),
+    [
+        ("not_found", logging.INFO),
+        ("invalid_input", logging.INFO),
+        ("permission_denied", logging.WARNING),
+        ("rate_limited", logging.WARNING),
+        ("upstream_unavailable", logging.WARNING),
+    ],
+)
+async def test_tool_logger_differentiates_log_level_by_error_kind(
+    captured_logs: Any, kind: str, expected_level: int
+) -> None:
+    """Routine, expected outcomes (a bad entry_id, a malformed query) must
+    not be as loud as a genuine outage or access denial — logging every
+    `mode: "error"` at WARNING made the two indistinguishable by severity
+    alone."""
+
+    @tool_logger
+    async def failing_tool() -> dict[str, Any]:
+        return {"mode": "error", "kind": kind, "error": kind}
+
+    await failing_tool()
+
+    records = [r for r in captured_logs.records if hasattr(r, "lf_event")]
+    assert len(records) == 1
+    assert records[0].levelno == expected_level
+
+
+@pytest.mark.asyncio
 async def test_tool_logger_redacts_credential_kwargs(captured_logs: Any) -> None:
     @tool_logger
     async def importer(file_path: str, password: str) -> dict[str, Any]:

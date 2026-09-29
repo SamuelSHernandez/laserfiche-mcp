@@ -8,6 +8,7 @@ and ``build_http_app`` (host/port/path binding, auth guard, exposure warning).
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 
 import pytest
 from starlette.applications import Starlette
@@ -133,8 +134,23 @@ def test_build_http_app_no_warning_when_exposed_with_token(
 # --- build_http_app: OAuth mode ----------------------------------------------
 
 
+@pytest.fixture
+def _clean_mcp_auth_singleton() -> Iterator[None]:
+    """build_http_app mutates the module-level FastMCP singleton's auth
+    state — reset it in fixture teardown, not after assertions in the test
+    body, so a failing assertion can't skip the reset and leave the
+    singleton dirty for later tests in the same session."""
+    from laserfiche_mcp import _app
+
+    yield
+    _app.mcp.settings.auth = None
+    _app.mcp._token_verifier = None
+
+
 def test_build_http_app_oauth_sets_auth_and_verifier(
-    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    lf_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    _clean_mcp_auth_singleton: None,
 ) -> None:
     monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://idp.example.com")
     monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://lf.example.com/mcp")
@@ -149,13 +165,11 @@ def test_build_http_app_oauth_sets_auth_and_verifier(
     assert str(_app.mcp.settings.auth.issuer_url).rstrip("/") == "https://idp.example.com"
     assert isinstance(_app.mcp._token_verifier, JwtTokenVerifier)
 
-    # Reset shared singleton so later tests aren't affected.
-    _app.mcp.settings.auth = None
-    _app.mcp._token_verifier = None
-
 
 def test_build_http_app_oauth_takes_precedence_over_static_token(
-    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    lf_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    _clean_mcp_auth_singleton: None,
 ) -> None:
     monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://idp.example.com")
     monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://lf.example.com/mcp")
@@ -169,8 +183,6 @@ def test_build_http_app_oauth_takes_precedence_over_static_token(
 
     # OAuth wins: FastMCP auth is configured (not the static-token middleware path).
     assert _app.mcp.settings.auth is not None
-    _app.mcp.settings.auth = None
-    _app.mcp._token_verifier = None
 
 
 def test_build_http_app_static_token_clears_fastmcp_auth(

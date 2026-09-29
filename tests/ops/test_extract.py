@@ -153,6 +153,32 @@ def test_extract_docx_without_document_part_is_malformed(tmp_path: Path) -> None
     assert caught.value.slug == "malformed_docx"
 
 
+def _corrupt_stored_member(path: Path, marker: bytes) -> None:
+    """Flip a byte inside a zip member's stored payload without updating
+    the recorded CRC-32 — triggers zipfile.BadZipFile on read(). Relies on
+    _make_docx/_make_pptx using zipfile's default ZIP_STORED compression,
+    so the marker appears byte-for-byte in the archive."""
+    raw = bytearray(path.read_bytes())
+    idx = raw.find(marker)
+    assert idx != -1, f"marker {marker!r} not found in {path}"
+    raw[idx] ^= 0xFF
+    path.write_bytes(bytes(raw))
+
+
+def test_extract_docx_with_corrupted_member_is_malformed(tmp_path: Path) -> None:
+    """A structurally valid zip whose member data is corrupted (bad CRC)
+    must raise ExtractionError, not a raw zipfile.BadZipFile — the initial
+    ZipFile(path) open only validates the central directory, not every
+    member's content."""
+    target = _make_docx(tmp_path / "corrupt.docx", ["MARKERTEXT"])
+    _corrupt_stored_member(target, b"MARKERTEXT")
+
+    with pytest.raises(extract.ExtractionError) as caught:
+        extract.extract(target)
+
+    assert caught.value.slug == "malformed_docx"
+
+
 def test_extract_pptx_treats_each_slide_as_a_page(tmp_path: Path) -> None:
     target = _make_pptx(tmp_path / "deck.pptx", [["Title", "Subtitle"], ["Second slide"]])
 
@@ -172,6 +198,19 @@ def test_pptx_slides_are_ordered_numerically_not_lexically(tmp_path: Path) -> No
     assert result.pages[0] == "slide 1"
     assert result.pages[1] == "slide 2"
     assert result.pages[10] == "slide 11"
+
+
+def test_extract_pptx_with_corrupted_slide_is_skipped(tmp_path: Path) -> None:
+    """A corrupted individual slide member must be skipped like an
+    unparseable one, not raise a raw zipfile.BadZipFile out of extract() —
+    a partial deck beats failing the whole extraction."""
+    target = _make_pptx(tmp_path / "corrupt.pptx", [["MARKERSLIDE"], ["Second slide"]])
+    _corrupt_stored_member(target, b"MARKERSLIDE")
+
+    result = extract.extract(target)
+
+    assert result.pages == ["", "Second slide"]
+    assert any("skipped" in w for w in result.warnings)
 
 
 # --- text-ish formats -------------------------------------------------------
@@ -223,6 +262,26 @@ def test_extract_eml_includes_headers_and_body(tmp_path: Path) -> None:
     assert "Subject: Renewal notice" in result.text
     assert "The lease renews in March." in result.text
     assert result.backend == "email"
+
+
+def test_extract_eml_with_unknown_charset_is_malformed(tmp_path: Path) -> None:
+    """An EML declaring an unrecognized charset must raise ExtractionError,
+    not a raw LookupError — the email package raises that for get_content()
+    on a body it can't decode."""
+    target = tmp_path / "bad-charset.eml"
+    target.write_bytes(
+        b"From: a@example.test\r\n"
+        b"To: b@example.test\r\n"
+        b"Subject: Test\r\n"
+        b'Content-Type: text/plain; charset="totally-bogus-charset"\r\n'
+        b"\r\n"
+        b"body text\r\n"
+    )
+
+    with pytest.raises(extract.ExtractionError) as caught:
+        extract.extract(target)
+
+    assert caught.value.slug == "malformed_eml"
 
 
 def test_extract_rtf_strips_control_words(tmp_path: Path) -> None:

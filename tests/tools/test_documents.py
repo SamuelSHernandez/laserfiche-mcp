@@ -63,6 +63,7 @@ async def test_get_document_text_on_v2_returns_decoded_text(
         method="POST",
         url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42/Export",
         content=b"hello world",
+        is_reusable=True,
     )
 
     async with LaserficheClient(settings, _StubAuth()) as client:
@@ -90,6 +91,7 @@ async def test_get_document_text_truncates_long_output(
         method="POST",
         url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42/Export",
         content=long_text,
+        is_reusable=True,
     )
 
     async with LaserficheClient(settings, _StubAuth()) as client:
@@ -128,6 +130,7 @@ async def test_get_document_edoc_wraps_laserfiche_error_as_runtime(
         method="GET",
         url=f"{_BASE}/Entries/999/Laserfiche.Repository.Document/edoc",
         status_code=403,
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=999, mode="info")
@@ -148,6 +151,7 @@ async def test_edoc_info_mode_returns_size_and_content_type(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=b"%PDF-1.4 hello",
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="info")
@@ -173,6 +177,7 @@ async def test_edoc_bytes_mode_returns_base64_starting_with_pdf_magic(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=SAMPLE_PDF_BYTES,
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="bytes")
@@ -197,6 +202,7 @@ async def test_edoc_bytes_mode_refuses_oversized_download(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=content,
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(
@@ -209,6 +215,30 @@ async def test_edoc_bytes_mode_refuses_oversized_download(
     assert result["byte_size"] == 5_000
     assert result["max_bytes"] == 1_000
     assert "data_base64" not in result
+
+
+@pytest.mark.asyncio
+async def test_edoc_bytes_mode_oversized_download_never_fetches_the_body(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """The size cap must be enforced from the Content-Length probe alone —
+    a 300 MB document must not be fully downloaded into memory just to
+    discover it's over the cap and get refused. Registering the mock
+    WITHOUT is_reusable=True proves this: a second (full-download) request
+    to the same URL would raise pytest-httpx's own unmatched-request error."""
+    content = b"a" * 5_000
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=content,
+        headers={"content-type": "application/pdf"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="bytes", max_bytes=1_000)
+
+    assert result["error"] == "size_exceeds_cap"
+    assert len(httpx_mock.get_requests()) == 1
 
 
 # --- get_document_edoc: mode='text' -----------------------------------------
@@ -231,6 +261,7 @@ async def test_edoc_text_mode_extracts_known_text_from_pdf_fixture(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=SAMPLE_PDF_BYTES,
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="text")
@@ -254,6 +285,7 @@ async def test_edoc_text_mode_truncates_when_over_char_limit(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=SAMPLE_PDF_BYTES,
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(
@@ -276,6 +308,7 @@ async def test_edoc_text_mode_reports_encrypted_pdf(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=SAMPLE_ENCRYPTED_PDF_BYTES,
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="text")
@@ -295,6 +328,7 @@ async def test_edoc_text_mode_reports_malformed_pdf(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=b"%PDF-1.4\nnot really a pdf",
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="text")
@@ -318,6 +352,7 @@ async def test_edoc_text_mode_normalizes_content_type_casing(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=SAMPLE_PDF_BYTES,
         headers={"content-type": "Application/PDF; charset=binary"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="text")
@@ -357,6 +392,7 @@ async def test_edoc_text_mode_extracts_docx_via_ops(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=_make_docx_bytes(["Offer letter", "Start date: March 1"]),
         headers={"content-type": _DOCX_CT},
+        is_reusable=True,
     )
     httpx_mock.add_response(
         method="GET",
@@ -383,6 +419,7 @@ async def test_edoc_text_mode_survives_windows_hostile_entry_name(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=_make_docx_bytes(["Body text"]),
         headers={"content-type": _DOCX_CT},
+        is_reusable=True,
     )
     httpx_mock.add_response(
         method="GET",
@@ -407,6 +444,7 @@ async def test_edoc_text_mode_corrupt_docx_returns_extraction_slug(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=b"PK\x03\x04 not really a zip",
         headers={"content-type": _DOCX_CT},
+        is_reusable=True,
     )
     httpx_mock.add_response(
         method="GET",
@@ -430,6 +468,7 @@ async def test_edoc_text_mode_image_points_at_search_content(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=b"II*\x00",
         headers={"content-type": "image/tiff"},
+        is_reusable=True,
     )
     httpx_mock.add_response(
         method="GET",
@@ -455,6 +494,7 @@ async def test_edoc_text_mode_octet_stream_pdf_detected_by_name(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=SAMPLE_PDF_BYTES,
         headers={"content-type": "application/octet-stream"},
+        is_reusable=True,
     )
     httpx_mock.add_response(
         method="GET",
@@ -480,6 +520,7 @@ async def test_edoc_text_mode_decodes_plain_text(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=b"hello world",
         headers={"content-type": "text/plain; charset=utf-8"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="text")
@@ -487,6 +528,63 @@ async def test_edoc_text_mode_decodes_plain_text(
     assert result["mode"] == "text"
     assert "error" not in result
     assert result["text"] == wrap_untrusted_document_text("hello world")
+    assert "hint" not in result
+
+
+@pytest.mark.asyncio
+async def test_edoc_text_mode_hints_at_search_content_on_a_large_read(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A read that returns more than _LARGE_READ_HINT_CHARS worth of text
+    carries a `hint` pointing at search_content — the in-band nudge added
+    alongside the instructions-field guidance, since that guidance is easy
+    for a calling model to forget by the fifth document (see CHANGELOG.md
+    Unreleased and the audit referenced there)."""
+    from laserfiche_mcp.tools.documents import _LARGE_READ_HINT_CHARS
+
+    big_text = "x" * (_LARGE_READ_HINT_CHARS + 1)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=big_text.encode("utf-8"),
+        headers={"content-type": "text/plain; charset=utf-8"},
+        is_reusable=True,
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert "search_content" in result["hint"]
+    assert len(result["text"]) > _LARGE_READ_HINT_CHARS
+
+
+@pytest.mark.asyncio
+async def test_get_document_text_hints_at_search_content_on_a_large_read(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same hint applies to the simpler v2-only get_document_text tool."""
+    from laserfiche_mcp.tools.documents import _LARGE_READ_HINT_CHARS
+
+    monkeypatch.setenv("LF_API_VERSION", "v2")
+    server._reset_settings_for_tests()
+    settings = Settings()  # type: ignore[call-arg]
+
+    big_text = ("x" * (_LARGE_READ_HINT_CHARS + 1)).encode("utf-8")
+    httpx_mock.add_response(
+        method="POST",
+        url="https://lf.example.test/LFRepositoryAPI/v2/Repositories/demo/Entries/42/Export",
+        content=big_text,
+        is_reusable=True,
+    )
+
+    async with LaserficheClient(settings, _StubAuth()) as client:
+        from laserfiche_mcp import _app
+
+        monkeypatch.setattr(_app, "get_client", lambda: client)
+        result = await server.get_document_text(entry_id=42)
+
+    assert "search_content" in result["hint"]
 
 
 @pytest.mark.asyncio
@@ -516,6 +614,7 @@ async def test_edoc_text_mode_reports_when_pypdf_is_unavailable(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=SAMPLE_PDF_BYTES,
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="text")
@@ -547,11 +646,16 @@ def _multipage_pdf(page_count: int) -> bytes:
 
 
 def _mock_pdf_edoc(httpx_mock: HTTPXMock, content: bytes, entry_id: int = 42) -> None:
+    # is_reusable: get_document_edoc's bytes/text modes probe Content-Length
+    # via export_entry_meta_only (one GET) before the real download (a
+    # second GET to the identical URL) — both need to be satisfied by this
+    # one registered response.
     httpx_mock.add_response(
         method="GET",
         url=f"{_BASE}/Entries/{entry_id}/Laserfiche.Repository.Document/edoc",
         content=content,
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
 
@@ -585,6 +689,17 @@ def test_parse_page_spec_rejects_malformed_specs(spec: str) -> None:
     pages, error = parse_page_spec(spec)
     assert pages is None
     assert error is not None
+
+
+def test_parse_page_spec_rejects_a_huge_range() -> None:
+    """A spec like "1-999999999" must be rejected, not expanded into a
+    multi-GB set synchronously on the event loop — this runs inside
+    async def get_document_edoc with no executor offload, so an unbounded
+    expansion blocks every other concurrent request for its duration."""
+    pages, error = parse_page_spec("1-999999999")
+    assert pages is None
+    assert error is not None
+    assert "limit" in error.lower()
 
 
 @pytest.mark.asyncio
@@ -707,6 +822,7 @@ async def test_edoc_text_pages_is_rejected_for_non_paginated_entries(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=b"plain text body",
         headers={"content-type": "text/plain"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="text", pages="1-2")
@@ -724,6 +840,7 @@ async def test_edoc_text_char_offset_applies_to_plain_text_entries(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         content=b"abcdefghij",
         headers={"content-type": "text/plain"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="text", char_offset=4)
@@ -753,6 +870,7 @@ async def test_edoc_info_mode_reports_null_size_without_content_length(
         url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
         stream=IteratorStream([b"%PDF-1.4 ", b"chunk two"]),
         headers={"content-type": "application/pdf"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=42, mode="info")
@@ -774,6 +892,7 @@ async def test_edoc_info_mode_surfaces_http_errors_structurally(
         url=f"{_BASE}/Entries/7/Laserfiche.Repository.Document/edoc",
         status_code=404,
         json={"title": "Entry not found"},
+        is_reusable=True,
     )
 
     result = await server.get_document_edoc(entry_id=7, mode="info")

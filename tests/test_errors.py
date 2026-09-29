@@ -8,8 +8,23 @@ coverage that the per-tool tests provide. ``kind_for_subkind`` and
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from laserfiche_mcp import errors
 from laserfiche_mcp.errors import LaserficheError
+
+# Subkinds emitted with a hardcoded `kind` (write_collapses.py /
+# preview_execute_splits.py's own local error-shape helpers), so they
+# never go through kind_for_subkind()/_SUBKIND_TO_KIND — not a gap in the
+# map, just not sourced from it.
+_HARDCODED_KIND_SUBKINDS = {
+    "invalid_mode",
+    "conflicting_modes",
+    "no_op",
+    "fields_ignored_on_remove",
+    "preview_does_not_accept_token",
+    "execute_requires_token",
+}
 
 
 def _err(status: int | None, detail: object | None = None) -> LaserficheError:
@@ -199,3 +214,17 @@ def test_kind_for_subkind_permission_denied_slugs() -> None:
 
 def test_kind_for_subkind_unknown_falls_back_to_upstream_unavailable() -> None:
     assert errors.kind_for_subkind("not_a_real_subkind") == "upstream_unavailable"
+
+
+def test_error_contract_doc_documents_every_known_subkind() -> None:
+    """docs/error-contract.md's subkind tables are the taxonomy an LLM
+    agent reads to decide how to react to a failure — every subkind the
+    server can actually emit must appear there, or the doc silently
+    misrepresents what the tools do. It used to be missing 14 real
+    subkinds, several from tools shipped well before this check existed."""
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "error-contract.md").read_text(
+        encoding="utf-8"
+    )
+    all_subkinds = set(errors._SUBKIND_TO_KIND) | _HARDCODED_KIND_SUBKINDS
+    missing = sorted(k for k in all_subkinds if k not in doc)
+    assert not missing, f"docs/error-contract.md is missing subkind(s): {missing}"

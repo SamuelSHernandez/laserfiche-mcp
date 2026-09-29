@@ -12,7 +12,8 @@ v1 (older self-hosted builds — current default):
   GET    Entries/ByPath?fullPath=...                           — resolve path
   PATCH  Entries/{id}                                          — move/rename/retemplate
   DELETE Entries/{id}                                          — delete (async)
-  POST   Entries/{id}/Folder                                   — create child folder / copy
+  POST   Entries/{id}/Laserfiche.Repository.Folder/children    — create child folder/shortcut/copy
+  POST   Entries/{id}/Laserfiche.Repository.Folder/CopyAsync   — async copy (returns a task token)
   POST   Entries/{id}/{newName}                                — import document (multipart)
   GET    Entries/{id}/Laserfiche.Repository.Folder/children    — list folder
   GET    Entries/{id}/fields                                   — field values

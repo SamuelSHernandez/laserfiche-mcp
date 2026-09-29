@@ -18,9 +18,9 @@ configSchema:
   properties:
     LF_DEPLOYMENT_MODE:
       type: string
-      enum: [self_hosted]
+      enum: [self_hosted, cloud]
       default: self_hosted
-      description: "Currently only self_hosted is supported. Cloud is reserved for v2."
+      description: "self_hosted is the battle-tested path — real deployments run it. cloud (BETA, unverified against a live tenant) targets Laserfiche Cloud's service-app flow; must be set together with LF_AUTH_MODE=api_key and LF_API_VERSION=v2."
     LF_REPO_API_URL:
       type: string
       format: uri
@@ -35,9 +35,9 @@ configSchema:
       description: "LFRepositoryAPI version exposed by your server. Probe with GET {LF_REPO_API_URL}/v1/Repositories vs /v2/Repositories — whichever returns a JSON 200 is your version."
     LF_AUTH_MODE:
       type: string
-      enum: [password, oauth]
+      enum: [password, oauth, api_key]
       default: password
-      description: "Auth strategy. 'password' exchanges username/password for a bearer token via /{api_version}/Repositories/{repo}/Token. 'oauth' uses a client_credentials grant against an LFDS-compatible OAuth server."
+      description: "Auth strategy. 'password' exchanges username/password for a bearer token via /{api_version}/Repositories/{repo}/Token. 'oauth' uses a client_credentials grant against an LFDS-compatible OAuth server. 'api_key' is Laserfiche Cloud's service-app JWT-assertion flow (BETA) — requires LF_DEPLOYMENT_MODE=cloud."
     LF_USERNAME:
       type: string
       description: "Service account username (for password mode)."
@@ -58,7 +58,15 @@ configSchema:
       description: "OAuth client secret (for oauth mode)."
     LF_OAUTH_SCOPE:
       type: string
-      description: "Optional OAuth scope (for oauth mode)."
+      description: "Optional OAuth scope (for oauth mode, and for api_key/Cloud mode)."
+    LF_CLOUD_ACCESS_KEY:
+      type: string
+      format: password
+      description: "Base64-encoded 'access key' JSON blob exported from the Laserfiche Developer Console (App Configuration > Authentication) for an OAuth service app — contains customerId, domain, clientId, and an EC (P-256) signing key. Required for api_key mode."
+    LF_CLOUD_SERVICE_PRINCIPAL_KEY:
+      type: string
+      format: password
+      description: "Service principal key created for the service principal in Laserfiche Account Administration — a separate secret, not part of LF_CLOUD_ACCESS_KEY. Required for api_key mode."
     LF_READ_ONLY:
       type: boolean
       default: true
@@ -105,8 +113,8 @@ configSchema:
       description: "Log line format: human-readable 'text', or 'json' (one JSON object per line, for log pipelines)."
     LF_LEGACY_TOOL_NAMES:
       type: boolean
-      default: true
-      description: "Also register the v1.x verb-first tool aliases (get_entry, set_fields, ...) alongside the laserfiche_* names. Set false to roughly halve the tool catalog the model pays for on every request (the v3.0 behavior, available today)."
+      default: false
+      description: "Also register the v1.x verb-first tool aliases (get_entry, set_fields, ...) alongside the laserfiche_* names. Default false since v2.3.0 (registering both roughly doubled the tool catalog the model pays for on every request). Set true only if an existing integration depends on the legacy names."
     LF_SEARCH_TIMEOUT_SECONDS:
       type: number
       default: 60

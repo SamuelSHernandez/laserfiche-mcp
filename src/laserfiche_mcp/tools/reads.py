@@ -7,8 +7,9 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from .. import _app
-from .._app import clamp_max_results
+from .._app import clamp_max_results, get_settings
 from ..errors import LaserficheError, classify_lf_error
+from ..links import attach_web_url, attach_web_urls
 from ..models import EntryDetail, FieldValue, SearchResults
 from ._registry import register
 
@@ -59,7 +60,12 @@ async def search_entries(
     ``&`` / ``|``.
 
     Returns ``entries`` (id, name, entry_type, full_path), ``total_count``,
-    ``next_link``. On failure returns ``{"mode": "error", "error": <slug>}``
+    ``next_link``. Each entry also carries ``web_url`` — a link into the
+    Laserfiche web client — when LF_WEB_CLIENT_URL_TEMPLATE (and, for
+    folders, LF_WEB_CLIENT_FOLDER_URL_TEMPLATE) is configured; omitted
+    otherwise. Prefer handing the user ``web_url`` over reading the document
+    with ``get_document_edoc`` when they just want to open or download it
+    themselves. On failure returns ``{"mode": "error", "error": <slug>}``
     (``server_error`` is common — this endpoint is fragile on some builds;
     see docs/error-contract.md).
     """
@@ -71,7 +77,9 @@ async def search_entries(
     except LaserficheError as exc:
         return classify_lf_error("search", exc)
 
-    return SearchResults.from_api(raw).model_dump()
+    result = SearchResults.from_api(raw).model_dump()
+    attach_web_urls(result["entries"], settings=get_settings())
+    return result
 
 
 @register(v2_name="laserfiche_entry_search_by_name")
@@ -130,7 +138,9 @@ async def search_by_name(
     except LaserficheError as exc:
         return classify_lf_error("search", exc)
 
-    return SearchResults.from_api(raw).model_dump()
+    result = SearchResults.from_api(raw).model_dump()
+    attach_web_urls(result["entries"], settings=get_settings())
+    return result
 
 
 @register(v2_name="laserfiche_folder_list")
@@ -163,6 +173,18 @@ async def list_folder(
             ge=0,
         ),
     ] = 0,
+    include_count: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Ask the server to also compute total_count — the folder's "
+                "full child count, not just this page's size. Costs an "
+                "extra server-side count on top of the listing, so it's "
+                "opt-in; without it, total_count is always null."
+            ),
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """List the immediate children (documents and subfolders) of a folder.
 
@@ -170,20 +192,25 @@ async def list_folder(
     ID 1. Resolve a path string first with ``get_entry_by_path``; to search
     the whole repository use a search tool instead.
 
-    Returns ``entries``, ``total_count`` (when the build supports ``$count``)
-    and ``next_link``. On failure returns ``{"mode": "error", "error":
-    <slug>, "folder_id": <int>}`` (``not_found``, ``auth_failed``).
+    Returns ``entries`` (each with ``web_url`` when web-client link
+    templates are configured — see ``search_entries``), ``total_count``
+    (null unless ``include_count=true`` was passed and the build supports
+    ``$count``) and ``next_link``. On failure returns ``{"mode": "error",
+    "error": <slug>, "folder_id": <int>}`` (``not_found``, ``auth_failed``).
     """
     try:
         raw = await _app.get_client().list_folder(
             folder_id,
             max_results=clamp_max_results(max_results),
             skip=max(0, skip),
+            include_count=include_count,
         )
     except LaserficheError as exc:
         return classify_lf_error("list_folder", exc, extra={"folder_id": folder_id})
 
-    return SearchResults.from_api(raw).model_dump()
+    result = SearchResults.from_api(raw).model_dump()
+    attach_web_urls(result["entries"], settings=get_settings())
+    return result
 
 
 @register(v2_name="laserfiche_entry_get")
@@ -193,14 +220,18 @@ async def get_entry(entry_id: int) -> dict[str, Any]:
     Does NOT return field values (``get_field_values``) or document content
     (``get_document_edoc``).
 
-    Returns ``EntryDetail``. On failure returns ``{"mode": "error", "error":
-    <slug>, "entry_id": <int>}`` (``not_found``, ``auth_failed``).
+    Returns ``EntryDetail``, including ``web_url`` when a web-client link
+    template is configured (see ``search_entries``). On failure returns
+    ``{"mode": "error", "error": <slug>, "entry_id": <int>}`` (``not_found``,
+    ``auth_failed``).
     """
     try:
         raw = await _app.get_client().get_entry(entry_id)
     except LaserficheError as exc:
         return classify_lf_error("get_entry", exc, entry_id=entry_id)
-    return EntryDetail.from_api(raw).model_dump()
+    result = EntryDetail.from_api(raw).model_dump()
+    attach_web_url(result, settings=get_settings())
+    return result
 
 
 @register(v2_name="laserfiche_entry_get_by_path")
@@ -224,14 +255,18 @@ async def get_entry_by_path(
     Use when the user refers to a location by path. The returned ``id``
     feeds ``list_folder``, ``get_entry``, ``get_field_values``, etc.
 
-    Returns ``EntryDetail``. On failure returns ``{"mode": "error", "error":
-    <slug>, "full_path": <str>}`` (``not_found``, ``auth_failed``).
+    Returns ``EntryDetail``, including ``web_url`` when a web-client link
+    template is configured (see ``search_entries``). On failure returns
+    ``{"mode": "error", "error": <slug>, "full_path": <str>}`` (``not_found``,
+    ``auth_failed``).
     """
     try:
         raw = await _app.get_client().get_entry_by_path(full_path)
     except LaserficheError as exc:
         return classify_lf_error("get_entry_by_path", exc, extra={"full_path": full_path})
-    return EntryDetail.from_api(raw).model_dump()
+    result = EntryDetail.from_api(raw).model_dump()
+    attach_web_url(result, settings=get_settings())
+    return result
 
 
 @register(v2_name="laserfiche_field_values_get")

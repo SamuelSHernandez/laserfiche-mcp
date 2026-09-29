@@ -17,14 +17,15 @@ in — write documents in a self-hosted
 also a full command-line client (`ls`, `get`, `cat`, `search`, `manifest`,
 `dedupe`, ...) for the deterministic work that needs no model at all.
 
-Current release **v2.3.0** — read and write tools for self-hosted Repository
-API v1 and v2, a one-click Claude Desktop extension, an optional remote HTTP
-transport with per-user OAuth for web clients, and a full CLI (`ls`, `get`,
-`cat`, `search`, `manifest`, `dedupe`, ...) for the deterministic work that
-needs no model at all. Read-only by default; write tools register only with
-`LF_READ_ONLY=false` and are guarded by path fences and a two-step,
-parameter-bound confirmation flow. See the [CHANGELOG](CHANGELOG.md) for
-per-release notes and the [roadmap](#roadmap) for what's next.
+Current release **v2.4.0** — read and write tools for self-hosted Repository
+API v1 and v2, BETA Laserfiche Cloud auth, a one-click Claude Desktop
+extension, an optional remote HTTP transport with per-user OAuth for web
+clients, and a full CLI (`ls`, `get`, `cat`, `search`, `manifest`, `dedupe`,
+...) for the deterministic work that needs no model at all. Read-only by
+default; write tools register only with `LF_READ_ONLY=false` and are
+guarded by path fences and a two-step, parameter-bound confirmation flow.
+See the [CHANGELOG](CHANGELOG.md) for per-release notes and the
+[roadmap](#roadmap) for what's next.
 
 ## Quick start
 
@@ -39,6 +40,9 @@ Then wire it into your MCP client — see
 [Claude Code](#connect-to-claude-code) below. Prefer environment variables
 over the wizard? See [Configure](#configure). Want a no-terminal install
 instead? See the [Claude Desktop extension](#for-everyone--the-claude-desktop-extension).
+New to MCP, or want the slower walkthrough? See
+[Connecting Claude to a Laserfiche repository](docs/getting-started.md)
+(~7 min read).
 
 ## What you can do with it
 
@@ -139,6 +143,20 @@ Minimum required variables for self-hosted password-grant auth:
 | `LF_AUTH_MODE`       | `password`                                    |
 | `LF_READ_ONLY`       | `true` (default — see Writes section below)   |
 
+**Optional — web-client links.** Unset by default, so search/read tools
+never emit `web_url`. Cannot be derived from `LF_REPO_API_URL` — copy it by
+hand from your own Laserfiche web client (open a document, copy the browser
+URL, substitute the entry ID with `{entry_id}`). See `.env.example` for
+worked examples. A returned link grants no access by itself: opening it
+still requires the *viewer's own* Laserfiche web-client login and is
+subject to the repository's entry-level ACLs — useful for staff who have
+Laserfiche accounts, useless to an end user who doesn't.
+
+| Variable                            | Default | Purpose                                                                          |
+| ------------------------------------ | ------- | -------------------------------------------------------------------------------- |
+| `LF_WEB_CLIENT_URL_TEMPLATE`         | unset   | URL template for a Document viewer link, e.g. `https://lf.example.com/Laserfiche/DocView.aspx?repo={repo_id}&id={entry_id}` |
+| `LF_WEB_CLIENT_FOLDER_URL_TEMPLATE`  | unset   | Same, for Folder/RecordSeries entries — most web clients browse on a different page than they view a document on |
+
 **Optional write-mode variables** (fences and allowlists default off; the delete batch cap and required-field validation default on — see the [Safety model](#safety-model) section for context):
 
 | Variable                            | Default | Purpose                                                                          |
@@ -185,6 +203,25 @@ verification.
 > `POST /{api_version}/Repositories/{repository_id}/Token` on first
 > request and refreshes it automatically before expiry. The same flow
 > works on both v1 and v2.
+
+> [!WARNING]
+> **Laserfiche Cloud (`LF_DEPLOYMENT_MODE=cloud` / `LF_AUTH_MODE=api_key`) is
+> BETA — never verified against a live Cloud tenant.** It's implemented
+> against Laserfiche's documented service-app flow and cross-checked
+> against Laserfiche's own open-source client library
+> ([`lf-api-client-core-dotnet`](https://github.com/Laserfiche/lf-api-client-core-dotnet)) —
+> the JWT assertion this server builds is unit-tested to be byte-for-byte
+> compatible with that library's own test vector, so the *cryptography* is
+> right. What's unverified is the network round-trip: whether
+> `signin.laserfiche.com` actually accepts that assertion and whether
+> `api.laserfiche.com/repository/v2/...` behaves identically to self-hosted
+> v2 for every endpoint this server wraps. Set `LF_REPO_API_URL` to
+> `https://api.laserfiche.com/repository` (or your tenant's region, e.g.
+> `https://api.eu.laserfiche.com/repository`), `LF_API_VERSION=v2`,
+> `LF_CLOUD_ACCESS_KEY` (the base64 access-key blob from the Developer
+> Console) and `LF_CLOUD_SERVICE_PRINCIPAL_KEY` (from Account
+> Administration) — see `.env.example`. If you have Cloud access and try
+> this, please open an issue with what worked or broke.
 
 ## Connect to Claude Desktop
 
@@ -291,6 +328,28 @@ verified requests still reach Laserfiche via the shared service account, so the
 Laserfiche audit trail shows that account, not the end user. Full details,
 including IdP registration and the security checklist, are in
 [docs/remote-http.md](docs/remote-http.md).
+
+### Unattended agents
+
+The `--http` transport doesn't distinguish a human's chat client from an
+autonomous agent's tool-calling loop — same OAuth flow, same tools. What
+should differ is what each is *allowed* to do unsupervised. Register a
+separate OAuth client for your agent (`client_credentials` grant, no human
+present to click through `authorization_code`), and withhold whichever scope
+you assign to `LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE` from that client's grant.
+The agent can still call `delete_entry`/`delete_edoc`/`delete_pages` to get
+a **preview** — useful for it to reason about and surface to a human — but
+executing refuses with `destructive_scope_required` until a human's own
+token (which does carry the scope) makes the actual call. `move_entry` and
+`rename_entry` are unaffected by this gate: they're reversible, so an
+unattended agent can execute those on its own.
+
+```bash
+LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE="laserfiche.destructive"   # only humans get this scope
+```
+
+This is on top of, not instead of, scoping the agent's own deployment with
+`LF_WRITE_TOOLS_ALLOWED` / `LF_READ_ONLY` — see [Safety model](#safety-model).
 
 ### Connecting a web client
 
@@ -409,6 +468,8 @@ index where that text actually lives.
 | `get_field_values`           | `laserfiche_field_values_get`          | Read all template fields assigned to an entry                            |
 | `get_document_text`          | `laserfiche_document_get_text`         | Server-side extracted text (v2 only; v1 use `get_document_edoc(mode="text")`) |
 | `get_document_edoc`          | `laserfiche_document_get_edoc`         | Inspect edoc (`info`), download bytes (`bytes`), or extract text (`text`) |
+| `compare_entries`            | `laserfiche_entry_compare`             | Diff two entries' metadata and template fields — is this a re-scanned duplicate or a real difference? |
+| `find_duplicate_documents`   | `laserfiche_document_find_duplicates`  | Scan a folder tree for byte-identical documents (size-then-hash, downloads almost nothing on a mostly-distinct tree) |
 | `list_repositories`          | `laserfiche_repository_list`           | List repos for this account; falls back to the configured repo if endpoint disabled |
 | `list_field_definitions`     | `laserfiche_field_definition_list`     | Enumerate all field definitions; pass `summary_only=true` for a `{count, names}` shape |
 | `list_tag_definitions`       | `laserfiche_tag_definition_list`       | Enumerate tag definitions; supports `summary_only`                       |
@@ -418,6 +479,7 @@ index where that text actually lives.
 | `get_audit_reasons`          | `laserfiche_audit_reason_list`         | Audit reasons available to the authenticated user (for delete/export)    |
 | `get_task_status`            | `laserfiche_task_get_status`           | Poll the status of an async operation (delete, copy)                     |
 | `wait_for_task`              | `laserfiche_task_wait`                 | Block until an async operation reaches a terminal state                  |
+| `task_wait_or_poll`          | `laserfiche_task_update`               | Combines the two above: `timeout_seconds=0` polls once, `>0` blocks. Read-only despite the `_update` v2 name — it never mutates anything. |
 
 ### Writes (registered only when `LF_READ_ONLY=false`)
 
@@ -425,11 +487,15 @@ index where that text actually lives.
 | ------------------- | ------------------------------------ | -------------------------------------------------------------------------------- | --------------- |
 | `set_fields`        | `laserfiche_field_set`               | OVERWRITE all field values on an entry (fields not in the body are deleted)      | —               |
 | `merge_fields`      | `laserfiche_field_merge`             | GET-then-PUT helper: update specific fields, preserve the rest                   | —               |
+| `field_update`      | `laserfiche_field_update`            | Collapses the two above: `mode="merge"` (default) or `mode="replace"`            | —               |
 | `set_tags`          | `laserfiche_tag_set`                 | OVERWRITE all tags on an entry                                                   | —               |
 | `merge_tags`        | `laserfiche_tag_merge`               | Add/remove specific tags without touching others                                 | —               |
+| `tag_update`        | `laserfiche_tag_update`              | Collapses the two above: pass `add`/`remove` (merge) or `replace` (overwrite)    | —               |
 | `set_links`         | `laserfiche_link_set`                | OVERWRITE all entry links                                                        | —               |
+| `link_update`       | `laserfiche_link_update`             | Wraps `set_links`; `mode="merge"` does a GET-then-PUT union instead of overwrite | —               |
 | `assign_template`   | `laserfiche_template_assign`         | Assign a template, optionally with initial field values (preflight-validated)    | —               |
 | `remove_template`   | `laserfiche_template_remove`         | Clear the template assignment                                                    | —               |
+| `template_assign_or_remove` | `laserfiche_template_update`  | Collapses the two above: `template_name=<name>` assigns, `template_name=None` clears | —           |
 | `create_folder`     | `laserfiche_folder_create`           | Create a child folder under a parent                                             | —               |
 | `import_document`   | `laserfiche_document_import`         | Multipart upload from a local file path; capped by `LF_IMPORT_MAX_BYTES`         | —               |
 | `copy_entry`        | `laserfiche_entry_copy`              | Async copy via `CopyAsync`; returns an operation token to poll                   | —               |
@@ -449,6 +515,20 @@ different arguments than were previewed fails verification. They expire
 after 5 minutes,
 and are invalidated by server restart (unless `LF_CONFIRMATION_SECRET`
 is set — see [Configure](#configure)).
+
+Each of the 5 two-step tools above is *also* registered as a
+`..._preview` / `..._execute` pair — same behavior, split into two
+single-purpose tool calls instead of one tool branching on whether
+`confirmation_token` is set. Use whichever style your client's model
+handles more reliably — both call the identical underlying logic.
+
+| Tool                    | v2 name                                     |
+| ------------------------ | -------------------------------------------- |
+| `rename_entry_preview` / `rename_entry_execute`     | `laserfiche_entry_rename_preview` / `laserfiche_entry_rename_execute`     |
+| `move_entry_preview` / `move_entry_execute`         | `laserfiche_entry_move_preview` / `laserfiche_entry_move_execute`         |
+| `delete_entry_preview` / `delete_entry_execute`     | `laserfiche_entry_delete_preview` / `laserfiche_entry_delete_execute`     |
+| `delete_edoc_preview` / `delete_edoc_execute`       | `laserfiche_document_edoc_delete_preview` / `laserfiche_document_edoc_delete_execute` |
+| `delete_pages_preview` / `delete_pages_execute`     | `laserfiche_document_pages_delete_preview` / `laserfiche_document_pages_delete_execute` |
 
 ### Using `search_natural`
 
@@ -622,7 +702,8 @@ Tools also have pre-server `mode: error` shapes (`path_not_allowed`,
 `page_range_required`, `invalid_page_range`, `invalid_name`,
 `invalid_field_name`, `invalid_tag_name`, `invalid_template_name`,
 `invalid_link_type`, `file_not_found`, `size_exceeds_cap`,
-`tool_not_allowed`). `list_repositories` returns `mode: fallback`
+`tool_not_allowed`, `destructive_scope_required`). `list_repositories`
+returns `mode: fallback`
 instead of erroring when the server doesn't expose the endpoint — see
 the docstring for the response shape.
 
@@ -646,7 +727,8 @@ except as noted:
 - **Folder-delete batch cap** (`LF_DELETE_FOLDER_MAX_DESCENDANTS`, default 50) — `delete_entry` on a folder with more immediate children refuses unless `force_large_delete=true` is passed alongside the confirmation token. The preview surfaces `exceeds_batch_cap: true` so the LLM can explain the size before re-calling. If the child-count probe itself fails (transient error), the delete fails CLOSED — `child_count_probe_failed: true` on the preview, and execute refuses with `child_count_probe_failed` regardless of `force_large_delete` — rather than assuming an unknown count is safe.
 - **Audit-reason requirement** (`LF_REQUIRE_AUDIT_REASON`, default false) — when true, `delete_entry` refuses without an `audit_reason_id`. Use `get_audit_reasons` to enumerate valid IDs.
 - **Required-field validation** (`LF_VALIDATE_REQUIRED_FIELDS`, default **true**) — `assign_template` lists `FieldDefinitions`, finds `isRequired: true` fields, checks them against what's on the entry and what's in the caller's `fields=`, and returns a structured `missing_required_fields` error before the PUT — instead of the server's opaque `Multistatus response. [9039]`.
-- **Two-step confirmation tokens** (always on for destructive ops) — `rename_entry`, `move_entry`, `delete_entry`, `delete_edoc`, `delete_pages` return a preview + HMAC-signed token on first call; execute on second call. Tokens bind to `(operation, entry_id, entry_name)` plus the operation's execute-relevant parameters (`page_range`, `new_name`, destination), so the execute leg cannot silently swap in different arguments than the user confirmed; they expire after 5 minutes. By default the signing key is random per-process, so a restart invalidates pending tokens; set `LF_CONFIRMATION_SECRET` to derive a stable key instead (tokens survive restarts and verify across instances sharing the secret — for multi-instance deployments).
+- **Two-step confirmation tokens** (always on for destructive ops) — `rename_entry`, `move_entry`, `delete_entry`, `delete_edoc`, `delete_pages` return a preview + HMAC-signed token on first call; execute on second call. Tokens bind to `(operation, entry_id, entry_name)` plus the operation's execute-relevant parameters (`page_range`, `new_name`, destination), so the execute leg cannot silently swap in different arguments than the user confirmed; they expire after 5 minutes. By default the signing key is random per-process, so a restart invalidates pending tokens; set `LF_CONFIRMATION_SECRET` to derive a stable key instead (tokens survive restarts and verify across instances sharing the secret — for multi-instance deployments). This two-step dance is a prompt-level convention, not an enforced one — nothing stops an autonomous caller from confirming its own preview. `LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE` (below) is the actual enforcement point for unattended callers.
+- **Destructive-op OAuth scope** (`LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE`, OAuth mode only, opt-in) — executing `delete_entry` / `delete_edoc` / `delete_pages` requires this scope on the caller's token; previews don't. Lets one deployment serve both a human (whose token carries the scope) and an unattended agent (whose `client_credentials` token doesn't) — see [Unattended agents](#unattended-agents). `move_entry` / `rename_entry` are reversible and not gated by this.
 
 ### Recommended starting config for write mode
 
@@ -670,9 +752,13 @@ fence regardless of which tools are registered.
 - **Server-side audit logging** — sidecar file with rotation, capturing
   every write tool call with the authenticated user, target entry, and
   outcome.
-- **Cloud** — Laserfiche Cloud support (`signin.laserfiche.com`
-  JWT-signed `client_credentials` flow plus the `api.laserfiche.com`
-  v2-only endpoint surface).
+- **Cloud verification** — `LF_DEPLOYMENT_MODE=cloud` / `LF_AUTH_MODE=api_key`
+  is implemented (service-app JWT-assertion flow against
+  `signin.laserfiche.com`, routed through the existing `api.laserfiche.com/repository/v2/...`
+  client) but has never been exercised against a live tenant — see the
+  Configure section's Cloud warning. Needed: someone with Cloud access to
+  confirm the token exchange and a handful of Repository API calls actually
+  succeed end to end.
 - **v3.0** — Remove the verb-first deprecation aliases (`get_entry`,
   `set_fields`, ...). Only the `laserfiche_{resource}_{verb}` names
   remain.
@@ -687,8 +773,8 @@ fence regardless of which tools are registered.
   the per-process lifespan client and schema caches become per-instance.
   The cacheable `tools/list` in the new spec also raises the value of a
   small catalog (`LF_LEGACY_TOOL_NAMES=false`).
-- **Beyond** — Workflow trigger tools, MCP resource links for edocs, and
-  per-viewer table summaries for spreadsheet entries.
+- **Beyond** — Workflow trigger tools, and per-viewer table summaries for
+  spreadsheet entries.
 
 ## Development
 
@@ -727,7 +813,7 @@ quirks, real PDF extraction, transport-level rejections).
 Issues and PRs welcome — particularly:
 
 - Endpoint corrections for Repository API Server builds the v1 / v2 wire format hasn't been validated against
-- Laserfiche Cloud client + JWT-signed `client_credentials` assertion flow
+- **Confirming Cloud auth (`LF_AUTH_MODE=api_key`) against a real Laserfiche Cloud tenant** — implemented and unit-tested against the documented flow, but nobody has run it against a live account yet
 - Server-side audit logging for write-mode deployments (sidecar file + rotation)
 - Text extraction for more document formats (`ops/extract.py`)
 

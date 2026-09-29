@@ -13,11 +13,16 @@ checks (which apply uniformly across every write tool), and the
 
 from __future__ import annotations
 
+import logging
+import re
+from pathlib import Path
+
 import pytest
 from pytest_httpx import HTTPXMock
 
 from laserfiche_mcp import server
 from laserfiche_mcp.client import LaserficheClient
+from laserfiche_mcp.tools._registry import all_tools
 from tests.conftest import _BASE
 
 
@@ -30,6 +35,79 @@ def test_mcp_instructions_document_the_confirm_token_contract() -> None:
     lower = text.lower()
     assert "confirmation_token" in lower
     assert "preview" in lower
+
+
+def test_mcp_instructions_steer_multi_document_reads_to_search_content() -> None:
+    """The instructions field must tell the calling model to prefer
+    search_content over opening documents one by one when checking many
+    of them for the same fact — reading N full documents into a
+    conversation that never reclaims context is what exhausted a client's
+    context after ~5 prompts on a pre-2.3.0 build (see CHANGELOG.md and
+    the catalog-budget tests below). Guidance alone doesn't force the
+    calling model's hand, but it's the cheapest lever the server has."""
+    text = server.mcp.instructions
+    assert text is not None
+    lower = text.lower()
+    assert "search_content" in lower
+    assert "one by one" in lower or "individually" in lower
+
+
+def test_mcp_instructions_only_names_registered_v2_tools() -> None:
+    """Every ``laserfiche_*``-shaped identifier in the onboarding text must
+    be a tool that's actually registered by default.
+
+    Regression: the instructions text used to reference legacy verb-first
+    names (``search_content``, ``get_entry``, ...), which register only
+    when an operator opts in with ``LF_LEGACY_TOOL_NAMES=true`` (default
+    false since v2.3.0) — so a fresh default install's own onboarding
+    text told the model to call tools that returned unknown-tool errors.
+    v2 names are always registered (see ``server._register_one``), so
+    this pins the text to referencing only those.
+    """
+    text = server.mcp.instructions
+    assert text is not None
+    v2_names = {spec.v2_name for spec in all_tools()}
+    mentioned = set(re.findall(r"laserfiche_[a-z_]+", text))
+    assert mentioned, "expected at least one laserfiche_* tool name in the instructions"
+    unknown = mentioned - v2_names
+    assert not unknown, f"instructions reference unregistered tool name(s): {sorted(unknown)}"
+
+
+def test_readme_tools_section_mentions_every_registered_v2_name() -> None:
+    """The README's Tools section is the operator-facing catalog reference —
+    every registered tool's v2 name must appear there (in a table row, or
+    the preview/execute explanatory prose for the 10 split tools). It used
+    to document only 34 of 51 registered tools; an operator scoping
+    LF_WRITE_TOOLS_ALLOWED from that table would unknowingly block a third
+    of the write surface."""
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    tools_section = text.split("## Tools", 1)[1].split("\n## ", 1)[0]
+    v2_names = {spec.v2_name for spec in all_tools()}
+    missing = sorted(name for name in v2_names if name not in tools_section)
+    assert not missing, f"README's ## Tools section is missing: {missing}"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_warns_when_destructive_scope_configured_without_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE without LF_HTTP_OAUTH_ISSUER means the
+    destructive-scope gate silently has no effect — must warn at startup,
+    consistent with http_transport.py's loopback warning for the same
+    "configured X but it has no effect" class of misconfiguration."""
+    from laserfiche_mcp import _app
+
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "http_oauth_destructive_scope", "laserfiche.destructive")
+    monkeypatch.setattr(settings, "http_oauth_issuer", None)
+
+    with caplog.at_level(logging.WARNING, logger="laserfiche_mcp"):
+        async with _app._lifespan(_app.mcp) as ctx:
+            assert "client" in ctx
+
+    assert any("LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE" in r.message for r in caplog.records)
 
 
 # --- _clamp_max_results (re-exported from _app) -----------------------------
@@ -395,3 +473,102 @@ async def test_legacy_gate_halves_registration(monkeypatch: pytest.MonkeyPatch) 
     server._register_one(spec)
     names = {t.name for t in await server.mcp.list_tools()}
     assert names == {spec.v2_name, spec.legacy_name}
+
+
+# --- Catalog size budget -----------------------------------------------------
+#
+# A client evaluating a pre-2.3.0 build reported the tool exhausting its
+# context after ~5 prompts. The catalog (doubled naming schemes stacked on
+# untrimmed docstrings — see the "Breaking" and "Changed" sections of the
+# 2.3.0 CHANGELOG entry) was a real, measurable contributor, though an
+# audit of this fix found it was NOT the dominant cause — a single
+# get_document_edoc(mode="text") read can return up to 50,000 chars, and
+# reading several documents that way in one conversation costs far more
+# than the catalog ever did (see documents.py's _LARGE_READ_HINT_CHARS and
+# _with_multi_doc_hint for the fix aimed at that actual mechanism). These
+# two tests guard only the catalog-size piece: docstring/schema bloat
+# creeping back in, and the legacy-name gate (server._legacy_names_enabled
+# / server._register_one) drifting from its documented ~2x cost. Neither
+# test is a general "can't reopen silently" claim about the ~5-prompt
+# failure as a whole — see docs/internal/TODO.md for the broader
+# reliability backlog this sits inside of.
+
+
+def _catalog_char_total(tools: list) -> int:
+    """Sum of name + description + JSON schema length across a tool list.
+
+    A character count, not a token count — cheap, dependency-free (no
+    tiktoken), and monotonic with the actual token cost, which is all a
+    regression guard needs. Don't read the absolute number as "the token
+    cost"; read the trend.
+    """
+    import json
+
+    return sum(
+        len(t.name) + len(t.description or "") + len(json.dumps(t.inputSchema)) for t in tools
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_catalog_char_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default (LF_LEGACY_TOOL_NAMES unset) read-only catalog must stay
+    well under its post-2.3.0-trim size.
+
+    Measured at 30,783 chars the day this test was added (22 tools).
+    Ceiling below gives ~25% headroom for legitimate new tools/params
+    before it fails — if you're raising this number, that's fine, just do
+    it with your eyes open about what it costs every session."""
+    from mcp.server.fastmcp import FastMCP
+
+    from laserfiche_mcp.tools._registry import all_tools
+
+    monkeypatch.setenv("LF_LEGACY_TOOL_NAMES", "false")
+    monkeypatch.setattr(server, "mcp", FastMCP("budget-test"))
+    for spec in (s for s in all_tools() if not s.is_write):
+        server._register_one(spec)
+    total = _catalog_char_total(await server.mcp.list_tools())
+    assert total < 38_000, (
+        f"Read-only catalog grew to {total} chars (budget: 38,000) with "
+        "LF_LEGACY_TOOL_NAMES=false — this test forces that value, so it "
+        "guards docstring/schema bloat only, not the default itself (see "
+        "test_all_tools_registered / test_legacy_names_enabled_parsing "
+        "for that). If the growth is deliberate, bump the ceiling with "
+        "eyes open about the per-session cost."
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_names_still_roughly_double_catalog_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canary for the exact mechanism the 2.3.0 Breaking change fixed:
+    opting into LF_LEGACY_TOOL_NAMES=true should cost roughly what it
+    always cost (~2x the read-only catalog), not silently more or less.
+
+    Registers through the real gate (``server._register_one`` /
+    ``server._legacy_names_enabled``) rather than hand-building both name
+    sets, so a bug in the gate itself — not just a docstring change —
+    would also show up here."""
+    from mcp.server.fastmcp import FastMCP
+
+    from laserfiche_mcp.tools._registry import all_tools
+
+    read_specs = [s for s in all_tools() if not s.is_write]
+
+    monkeypatch.setenv("LF_LEGACY_TOOL_NAMES", "false")
+    monkeypatch.setattr(server, "mcp", FastMCP("ratio-test-off"))
+    for spec in read_specs:
+        server._register_one(spec)
+    off_total = _catalog_char_total(await server.mcp.list_tools())
+
+    monkeypatch.setenv("LF_LEGACY_TOOL_NAMES", "true")
+    monkeypatch.setattr(server, "mcp", FastMCP("ratio-test-on"))
+    for spec in read_specs:
+        server._register_one(spec)
+    on_total = _catalog_char_total(await server.mcp.list_tools())
+
+    ratio = on_total / off_total
+    assert 1.8 < ratio < 2.2, (
+        f"LF_LEGACY_TOOL_NAMES=true catalog is {ratio:.2f}x the default "
+        "catalog (expected ~2x, since every tool gains a same-size alias)."
+    )

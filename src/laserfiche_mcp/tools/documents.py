@@ -21,6 +21,38 @@ from ._registry import register
 
 __all__ = ["get_document_edoc", "get_document_text", "parse_page_spec"]
 
+_LARGE_READ_HINT_CHARS = 15_000
+"""Above this many returned chars (~4k tokens), a text-mode read is large
+enough that reading several documents this way in one conversation is the
+likely path to exhausting context — see the ``hint`` this triggers below."""
+
+
+def _with_multi_doc_hint(result: dict[str, Any]) -> dict[str, Any]:
+    """Attach a contextual nudge toward ``search_content`` to a large
+    text-mode read.
+
+    The server's ``instructions`` field says this once, at session start —
+    easy for a calling model to have forgotten by the fifth document. This
+    repeats it at the moment it's actually relevant: right after a read
+    that just added a meaningful chunk of text to the conversation, text
+    that stays there for the rest of the session with nothing to reclaim
+    it. Applies only to a successful read (``result`` carries ``"text"``);
+    error dicts are untouched.
+    """
+    text = result.get("text")
+    if isinstance(text, str) and len(text) > _LARGE_READ_HINT_CHARS:
+        return {
+            **result,
+            "hint": (
+                f"This read added {len(text):,} characters to the "
+                "conversation. If you're checking several documents for "
+                "the same fact or keyword, use search_content instead — "
+                "it returns only the matching passages, not whole "
+                "documents."
+            ),
+        }
+    return result
+
 
 @register(v2_name="laserfiche_document_get_text")
 async def get_document_text(
@@ -58,12 +90,14 @@ async def get_document_text(
     truncated = len(text) > max_chars
     if truncated:
         text = text[:max_chars]
-    return {
-        "entry_id": entry_id,
-        "text": wrap_untrusted_document_text(text),
-        "char_count": len(text),
-        "truncated": truncated,
-    }
+    return _with_multi_doc_hint(
+        {
+            "entry_id": entry_id,
+            "text": wrap_untrusted_document_text(text),
+            "char_count": len(text),
+            "truncated": truncated,
+        }
+    )
 
 
 def _extract_pdf_text(
@@ -533,6 +567,11 @@ async def get_document_edoc(
 ) -> dict[str, Any]:
     """Inspect (info), read as text, or download (bytes) a document's edoc.
 
+    If the user just wants to open or download the document themselves,
+    hand them ``web_url`` from a search/get-entry result instead of calling
+    this — reading the edoc pulls the whole payload through this tool call.
+    Use this when you need to reason over the document's actual contents.
+
     ``mode="info"`` (default) reads only the response headers — size and
     content-type, no body transferred; safe on any size. ``byte_size`` is
     null when the server omits Content-Length.
@@ -583,6 +622,17 @@ async def get_document_edoc(
     else:
         page_spec = None
 
+    # Probe Content-Length first (headers only, no body transferred) so the
+    # cap actually bounds transfer/memory cost — checking only after a full
+    # download defeats the point of the cap for anything over it: a 300 MB
+    # document was fully buffered in memory before being refused.
+    try:
+        declared_size, _ = await client.export_entry_meta_only(entry_id, part="Edoc")
+    except LaserficheError as exc:
+        return classify_lf_error("get_document_edoc", exc, entry_id=entry_id)
+    if declared_size is not None and declared_size > effective_cap:
+        return _edoc_size_cap_response(entry_id, mode, declared_size, effective_cap, None)
+
     try:
         content, content_type = await client.export_entry_with_meta(entry_id, part="Edoc")
     except LaserficheError as exc:
@@ -590,6 +640,10 @@ async def get_document_edoc(
 
     byte_size = len(content)
 
+    # Second check: the server may not have declared Content-Length above
+    # (declared_size is None), so this is the only cap enforcement for that
+    # case — kept as a safety net even though the probe already caught the
+    # common case.
     if byte_size > effective_cap:
         return _edoc_size_cap_response(entry_id, mode, byte_size, effective_cap, content_type)
 
@@ -603,7 +657,24 @@ async def get_document_edoc(
     if ct_lower == "application/pdf" or (
         ct_lower.startswith("text/") and ct_lower not in ("text/html", "text/rtf")
     ):
-        return _edoc_text_response(
+        return _with_multi_doc_hint(
+            _edoc_text_response(
+                entry_id,
+                content,
+                byte_size,
+                content_type,
+                text_char_limit,
+                page_spec=page_spec,
+                char_offset=char_offset,
+            )
+        )
+
+    # Everything else — office formats, mail, HTML, and the octet-stream
+    # labels self-hosted servers put on most edocs — goes through the same
+    # extractors the CLI uses.
+    return _with_multi_doc_hint(
+        await _edoc_extract_via_ops(
+            client,
             entry_id,
             content,
             byte_size,
@@ -612,17 +683,4 @@ async def get_document_edoc(
             page_spec=page_spec,
             char_offset=char_offset,
         )
-
-    # Everything else — office formats, mail, HTML, and the octet-stream
-    # labels self-hosted servers put on most edocs — goes through the same
-    # extractors the CLI uses.
-    return await _edoc_extract_via_ops(
-        client,
-        entry_id,
-        content,
-        byte_size,
-        content_type,
-        text_char_limit,
-        page_spec=page_spec,
-        char_offset=char_offset,
     )

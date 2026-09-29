@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import random
 import warnings
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -27,6 +28,32 @@ from ..observability import redact
 logger = logging.getLogger("laserfiche_mcp.client")
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# Ceiling on a single retry's delay, regardless of attempt count — without
+# it, LF_RETRY_ATTEMPTS=10's uncapped exponential backoff (2^0 + 2^1 + ...
+# + 2^9 seconds) can turn one failing call into a ~17-minute wait.
+_MAX_RETRY_DELAY_SECONDS = 30.0
+
+
+def _retry_delay(attempt: int, *, retry_after: str | None = None) -> float:
+    """Backoff delay for retry ``attempt`` (0-indexed).
+
+    Honors a server-supplied ``Retry-After`` (seconds form only — an
+    HTTP-date value is rare enough here, and stale enough by the time it'd
+    matter, that falling back to the capped exponential default is fine)
+    over the exponential default. Otherwise: capped exponential backoff
+    with jitter (50%-100% of the capped value), so many concurrent callers
+    retrying the same transient failure don't all wake up and hammer the
+    server in lockstep.
+    """
+    if retry_after is not None:
+        try:
+            return min(float(retry_after), _MAX_RETRY_DELAY_SECONDS)
+        except ValueError:
+            pass
+    base = min(float(2**attempt), _MAX_RETRY_DELAY_SECONDS)
+    return base * (0.5 + random.random() / 2)
+
+
 _CacheValueT = TypeVar("_CacheValueT")
 # Bound to ``_CoreClient`` so subclasses' ``__aenter__`` reports the concrete
 # subclass type (e.g. ``LaserficheClient``) instead of ``_CoreClient``.
@@ -131,9 +158,9 @@ class _CoreClient:
                 last_exc = exc
                 if attempt + 1 >= attempts:
                     break
-                delay = 2**attempt
+                delay = _retry_delay(attempt)
                 logger.warning(
-                    "Network error on %s %s (attempt %d/%d): %s; retrying in %ds",
+                    "Network error on %s %s (attempt %d/%d): %s; retrying in %.1fs",
                     request.method,
                     self._redact_url(request.url),
                     attempt + 1,
@@ -145,9 +172,9 @@ class _CoreClient:
                 continue
 
             if response.status_code in _RETRYABLE_STATUS and attempt + 1 < attempts:
-                delay = 2**attempt
+                delay = _retry_delay(attempt, retry_after=response.headers.get("retry-after"))
                 logger.warning(
-                    "Retryable status %d on %s %s (attempt %d/%d); retrying in %ds",
+                    "Retryable status %d on %s %s (attempt %d/%d); retrying in %.1fs",
                     response.status_code,
                     request.method,
                     self._redact_url(request.url),
@@ -191,7 +218,13 @@ class _CoreClient:
 
         if not response.content:
             return {}
-        return cast(dict[str, Any], response.json())
+        try:
+            return cast(dict[str, Any], response.json())
+        except ValueError as exc:
+            raise LaserficheError(
+                f"Laserfiche API returned a 2xx response for {method} {url} with an "
+                f"unparseable body: {exc!r}"
+            ) from exc
 
     async def _request_bytes(
         self,
@@ -258,7 +291,9 @@ class _CoreClient:
         try:
             response = await self._http.send(request, stream=True)
         except httpx.HTTPError as exc:
-            raise LaserficheError(f"Network error probing {method} {url}: {exc!r}") from exc
+            raise LaserficheError(
+                f"Network error probing {method} {self._redact_url(httpx.URL(url))}: {exc!r}"
+            ) from exc
 
         try:
             if response.status_code >= 400:
@@ -332,7 +367,9 @@ class _CoreClient:
         try:
             response = await self._http.send(request, stream=True)
         except httpx.HTTPError as exc:
-            raise LaserficheError(f"Network error streaming {method} {url}: {exc!r}") from exc
+            raise LaserficheError(
+                f"Network error streaming {method} {self._redact_url(httpx.URL(url))}: {exc!r}"
+            ) from exc
 
         partial = dest.with_name(dest.name + ".part")
         digest = hashlib.sha256()
@@ -376,6 +413,16 @@ class _CoreClient:
                         )
                     digest.update(chunk)
                     handle.write(chunk)
+        except OSError as exc:
+            # Local disk failure (AV lock, full/locked scratch dir) — distinct
+            # from the network/HTTP failures above, but callers only guard
+            # against LaserficheError, so an uncaught OSError here escapes
+            # the structured error contract entirely.
+            partial.unlink(missing_ok=True)
+            raise LaserficheError(
+                f"Local disk error writing {method} {self._redact_url(httpx.URL(url))} "
+                f"to {dest}: {exc!r}"
+            ) from exc
         except BaseException:
             partial.unlink(missing_ok=True)
             raise

@@ -73,6 +73,16 @@ Wildcards:
 _NAME_VALUE_RE = re.compile(r'\{LF:Name="((?:\\"|[^"])*)"\}')
 
 
+def _closer_follows(query: str, pos: int) -> bool:
+    """True if ``pos`` looks like right after a value's closing quote:
+    optional whitespace, then one of ``}&|,`` or end-of-string."""
+    n = len(query)
+    j = pos
+    while j < n and query[j] == " ":
+        j += 1
+    return j == n or query[j] in "}&|,"
+
+
 def repair_escape_quotes(query: str) -> str | None:
     """Escape unescaped ``"`` inside ``="..."`` value spans.
 
@@ -110,6 +120,20 @@ def repair_escape_quotes(query: str) -> str | None:
 
         # in_value
         if c == "\\" and i + 1 < n:
+            if query[i + 1] == '"' and _closer_follows(query, i + 2):
+                # Ambiguous otherwise: `\"` here could be an escaped quote
+                # inside the value, or a literal backslash (paths are full
+                # of them) immediately followed by the value's REAL closing
+                # quote — e.g. a Windows path ending in `\`. The lookahead
+                # says this `"` terminates the span, so don't consume it as
+                # part of an escape pair; let the closing-quote branch below
+                # handle it on the next character. Getting this wrong left
+                # `in_value` stuck True, so every later `"` in the query
+                # read as "internal" and got wrongly escaped, corrupting
+                # unrelated clauses after this one.
+                out.append(c)
+                i += 1
+                continue
             # Already-escaped char — pass through untouched.
             out.append(c)
             out.append(query[i + 1])
@@ -118,10 +142,7 @@ def repair_escape_quotes(query: str) -> str | None:
 
         if c == '"':
             # Could be the closing quote or an internal quote.
-            j = i + 1
-            while j < n and query[j] == " ":
-                j += 1
-            if j == n or query[j] in "}&|,":
+            if _closer_follows(query, i + 1):
                 out.append('"')
                 in_value = False
                 i += 1

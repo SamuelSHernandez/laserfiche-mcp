@@ -16,6 +16,7 @@ Public surface:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -25,6 +26,8 @@ from mcp.server.fastmcp import FastMCP
 from .auth import build_auth_strategy
 from .client import LaserficheClient
 from .config import Settings
+
+logger = logging.getLogger("laserfiche_mcp")
 
 _settings: Settings | None = None
 
@@ -49,6 +52,17 @@ def reset_settings_for_tests() -> None:
 async def _lifespan(_: FastMCP) -> AsyncIterator[dict[str, Any]]:
     """Open one shared LaserficheClient for the server's lifetime."""
     settings = get_settings()
+    if settings.http_oauth_destructive_scope and not settings.oauth_enabled:
+        # Consistent with http_transport.py's loopback warning: loudly
+        # flag a "configured X but it has no effect" misconfiguration
+        # instead of the destructive-scope gate silently no-opping.
+        logger.warning(
+            "LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE is set but LF_HTTP_OAUTH_ISSUER "
+            "is not — the destructive-scope gate has no effect until OAuth "
+            "Resource Server mode is also configured. Under stdio or "
+            "LF_HTTP_AUTH_TOKEN, LF_WRITE_TOOLS_ALLOWED is the only "
+            "available fence."
+        )
     auth = build_auth_strategy(settings)
     async with LaserficheClient(settings, auth) as client:
         yield {"client": client}
@@ -56,22 +70,40 @@ async def _lifespan(_: FastMCP) -> AsyncIterator[dict[str, Any]]:
 
 mcp = FastMCP(
     "laserfiche-mcp",
+    # Tool names below are the v2 laserfiche_{resource}_{verb} names, which are
+    # ALWAYS registered (see server._register_one) — unlike the legacy verb-
+    # first names (search_content, get_entry, ...), which register only when
+    # the operator opts in with LF_LEGACY_TOOL_NAMES=true. Referencing a
+    # legacy-only name here would tell the model to call a tool that mostly
+    # isn't registered.
     instructions=(
         "Tools for searching and reading documents in a Laserfiche repository. "
-        "Use search_content whenever the question is about what documents SAY — "
-        "it returns the matched passages (page + excerpt) from the OCR index, "
-        "usually answering without downloading anything. Use search_natural to "
-        "author a query when you need the server's templates and field names; "
-        "list_folder for a known location; get_entry / get_field_values once "
-        "you have an entry ID. To read more of a specific document, prefer "
-        "get_document_edoc(mode='text', pages=...) — never mode='bytes' for "
-        "anything large. Destructive write tools (delete_entry, delete_edoc, "
-        "delete_pages, and similar) use a two-step preview-then-confirm "
-        "contract: call once without confirmation_token to get back a preview "
-        "plus a short-lived signed token, surface that preview to the user, "
-        "then call again with the same arguments and confirmation_token to "
-        "execute — a call with a different argument than the preview, or an "
-        "expired/reused token, is rejected."
+        "Use laserfiche_entry_search_content whenever the question is about "
+        "what documents SAY — it returns the matched passages (page + excerpt) "
+        "from the OCR index, usually answering without downloading anything. "
+        "Use laserfiche_entry_search_natural to author a query when you need "
+        "the server's templates and field names; laserfiche_folder_list for a "
+        "known location; laserfiche_entry_get / laserfiche_field_values_get "
+        "once you have an entry ID. To read more of a specific document, "
+        "prefer laserfiche_document_get_edoc(mode='text', pages=...) — never "
+        "mode='bytes' for anything large. Reading documents one by one to "
+        "check the same fact across many of them is the single biggest way "
+        "to exhaust context — each full-text read stays in the conversation "
+        "and is never reclaimed; use laserfiche_entry_search_content there "
+        "instead. When the user just wants to open or download a document "
+        "themselves, hand them the `web_url` field from a search/get-entry "
+        "result (present only when the operator has configured "
+        "LF_WEB_CLIENT_URL_TEMPLATE) instead of reading the document through "
+        "laserfiche_document_get_edoc — opening it still requires the user's "
+        "own Laserfiche web-client login. "
+        "Destructive write tools (laserfiche_entry_delete, "
+        "laserfiche_document_edoc_delete, laserfiche_document_pages_delete, "
+        "and similar) use a two-step preview-then-confirm contract: call once "
+        "without confirmation_token to get back a preview plus a short-lived "
+        "signed token, surface that preview to the user, then call again "
+        "with the same arguments and confirmation_token to execute — a call "
+        "with a different argument than the preview, or an expired/reused "
+        "token, is rejected."
     ),
     lifespan=_lifespan,
 )

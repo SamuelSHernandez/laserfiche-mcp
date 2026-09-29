@@ -34,6 +34,26 @@ def test_escape_quotes_handles_and_combinator() -> None:
     assert out == r'{LF:Name="o\"hare"} & {LF:LookIn="\Imports"}'
 
 
+def test_escape_quotes_value_ending_in_backslash_closes_correctly() -> None:
+    """A value ending in a literal backslash (Laserfiche paths are full of
+    them) right before its closing quote must not be misread as an
+    escaped-quote-as-content pair — that used to leave the state machine
+    stuck "in a value," so it wrongly escaped the next clause's own
+    opening quote instead of leaving an already-valid query untouched."""
+    query = r'{LF:LookIn="\Imports\2024\"} & {LF:Name="Smith"}'
+    assert repair_escape_quotes(query) is None
+
+
+def test_escape_quotes_value_ending_in_backslash_with_real_internal_quote() -> None:
+    """Same trailing-backslash shape, but this time the value genuinely
+    does contain an internal quote earlier on — that one must still be
+    escaped, and the trailing backslash still must not swallow the
+    closing quote or corrupt the following clause."""
+    query = r'{LF:Basic~="say "hi" then \"} & {LF:Name="Smith"}'
+    out = repair_escape_quotes(query)
+    assert out == r'{LF:Basic~="say \"hi\" then \"} & {LF:Name="Smith"}'
+
+
 # --- repair_wildcard_name ---------------------------------------------------
 
 

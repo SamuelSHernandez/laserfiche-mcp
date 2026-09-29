@@ -83,6 +83,43 @@ async def test_field_update_replace_calls_set_fields(
 
 
 @pytest.mark.asyncio
+async def test_field_update_allowlisted_by_its_own_name(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    _writes_on: None,
+) -> None:
+    """LF_WRITE_TOOLS_ALLOWED=field_update must actually allow it.
+
+    Regression for the allowlist family bug: field_update(mode="merge")
+    delegates by calling merge_fields(...) directly, so
+    check_write_permission used to see the delegate's hardcoded
+    "merge_fields" operation name instead of the invoked tool's own
+    name — allowlisting exactly what this tool's own docstring
+    recommends used to still fail with tool_not_allowed.
+    """
+    monkeypatch.setattr(server._get_settings(), "write_tools_allowed", "field_update")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "x", "entryType": "Document", "fullPath": "\\d\\x"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/fields",
+        json={"value": [{"fieldName": "Status", "values": ["Old"]}]},
+    )
+    httpx_mock.add_response(
+        method="PUT",
+        url=f"{_BASE}/Entries/42/fields",
+        json={"value": []},
+    )
+
+    result = await field_update(entry_id=42, updates={"Status": ["New"]})
+    assert result["mode"] == "executed"
+
+
+@pytest.mark.asyncio
 async def test_field_update_invalid_mode(
     patched_client: LaserficheClient,
     _writes_on: None,

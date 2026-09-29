@@ -118,7 +118,11 @@ class _WritesMixin(_CoreClient):
         ``entry_type`` controls intent:
           * ``"Folder"`` — create a new folder
           * ``"Shortcut"`` — create a shortcut (pass ``source_id``)
-          * ``"Document"`` and a ``source_id`` — copy an existing entry
+
+        This is the synchronous create/shortcut route; its
+        ``PostEntryChildrenEntryType`` enum does NOT accept ``"Document"``.
+        To copy an existing entry (including documents), use
+        :meth:`copy_entry_async` instead.
         """
         body: dict[str, Any] = {"entryType": entry_type, "name": name}
         if template_name is not None:

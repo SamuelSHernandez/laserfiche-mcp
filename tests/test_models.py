@@ -52,6 +52,23 @@ def test_entry_summary_pascalcase() -> None:
     assert summary.entry_type is EntryType.DOCUMENT
 
 
+def test_entry_summary_tolerates_blank_timestamp() -> None:
+    """A blank creationTime/lastModifiedTime must not raise ValidationError
+    out of from_api() — every read tool relies on that not happening, since
+    an uncaught pydantic error bypasses the structured error contract."""
+    summary = EntrySummary.from_api(
+        {
+            "id": 1,
+            "name": "x",
+            "entryType": "Document",
+            "creationTime": "",
+            "lastModifiedTime": "not-a-real-timestamp",
+        }
+    )
+    assert summary.creation_time is None
+    assert summary.last_modified_time is None
+
+
 def test_entry_summary_unknown_type_coerced() -> None:
     summary = EntrySummary.from_api(
         {

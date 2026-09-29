@@ -68,6 +68,15 @@ def test_folder_path_composes_with_raw_syntax() -> None:
     assert out == '{LF:Name="*.pdf"} & {LF:LookIn="\\HR"}'
 
 
+def test_quotes_in_folder_path_are_escaped() -> None:
+    """A folder name containing `"` must not break out of the LookIn value
+    span — mirrors the phrase-escaping test above. Regression: folder_path
+    used to be interpolated verbatim, so a folder named e.g. `Q1 "Draft"
+    Folder` would corrupt the generated search command."""
+    out = build_search_command("x", 'Q1 "Draft" Folder')
+    assert out == '{LF:Basic~="x"} & {LF:LookIn="Q1 \\"Draft\\" Folder"}'
+
+
 # --- happy path -------------------------------------------------------------
 
 
@@ -113,6 +122,42 @@ async def test_returns_context_hits_for_matching_entries(
     # top-level notice flags this rather than wrapping every short hit.
     assert "content_notice" in result
     assert "untrusted" in result["content_notice"].lower()
+
+
+@pytest.mark.asyncio
+async def test_results_carry_web_url_when_configured(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LF_WEB_CLIENT_URL_TEMPLATE", "https://lf.example.com/doc/{entry_id}")
+    server._reset_settings_for_tests()
+
+    _mock_search_lifecycle(
+        httpx_mock,
+        results=[{"id": 7, "name": "lease.pdf", "entryType": "Document", "rowNumber": 1}],
+    )
+    httpx_mock.add_response(method="DELETE", url=f"{_BASE}/Searches/{_TOKEN}")
+
+    result = await server.search_content(query="unpaid balance", hits_for_top=0)
+
+    assert result["results"][0]["web_url"] == "https://lf.example.com/doc/7"
+
+
+@pytest.mark.asyncio
+async def test_results_omit_web_url_when_unconfigured(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    _mock_search_lifecycle(
+        httpx_mock,
+        results=[{"id": 7, "name": "lease.pdf", "entryType": "Document", "rowNumber": 1}],
+    )
+    httpx_mock.add_response(method="DELETE", url=f"{_BASE}/Searches/{_TOKEN}")
+
+    result = await server.search_content(query="unpaid balance", hits_for_top=0)
+
+    assert "web_url" not in result["results"][0]
 
 
 @pytest.mark.asyncio
@@ -222,6 +267,11 @@ async def test_missing_searches_endpoint_points_at_search_entries(
     assert result["mode"] == "error"
     assert result["error"] == "async_search_unavailable"
     assert "search_entries" in result["hint"]
+    # Regression: `kind` used to stay whatever classify_lf_error derived
+    # from the raw HTTP status (here "not_found" from the 404) even after
+    # `error` was overridden to "async_search_unavailable" — a
+    # self-contradictory envelope. Must be re-derived from the override.
+    assert result["kind"] == "upstream_unavailable"
 
 
 @pytest.mark.asyncio
