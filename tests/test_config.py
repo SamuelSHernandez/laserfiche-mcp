@@ -130,6 +130,30 @@ def test_api_key_mode_requires_v2_api_version(
         Settings()  # type: ignore[call-arg]
 
 
+def test_oauth_passthrough_requires_http_oauth_issuer(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Passthrough reuses the caller's own verified token — meaningless without
+    --http OAuth Resource Server mode to produce one."""
+    monkeypatch.setenv("LF_AUTH_MODE", "oauth_passthrough")
+    monkeypatch.delenv("LF_USERNAME", raising=False)
+    monkeypatch.delenv("LF_PASSWORD", raising=False)
+    with pytest.raises(ValueError, match="LF_HTTP_OAUTH_ISSUER"):
+        Settings()  # type: ignore[call-arg]
+
+
+def test_oauth_passthrough_with_oauth_issuer_loads(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_AUTH_MODE", "oauth_passthrough")
+    monkeypatch.delenv("LF_USERNAME", raising=False)
+    monkeypatch.delenv("LF_PASSWORD", raising=False)
+    monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://lfds.example.test")
+    monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://mcp.example.test/mcp")
+    settings = Settings()  # type: ignore[call-arg]
+    assert settings.auth_mode is AuthMode.OAUTH_PASSTHROUGH
+
+
 def test_invalid_log_level(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LF_LOG_LEVEL", "VERBOSE")
     with pytest.raises(ValueError, match="LF_LOG_LEVEL"):
