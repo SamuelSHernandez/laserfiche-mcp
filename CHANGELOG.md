@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-09-30
+
 ### Added
 - **True on-behalf-of auth (`LF_AUTH_MODE=oauth_passthrough`) — BETA, unverified
   against a live LFDS tenant.** Prompted by a prospective adopter asking
