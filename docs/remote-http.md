@@ -86,15 +86,52 @@ In this mode the server is an **OAuth 2.1 Resource Server**:
    `aud`, `iss`, `exp`, and any required scopes. Valid → the request proceeds;
    anything else → `401`.
 
-**This is authentication, not delegation.** A verified user is allowed to use the
-connector; the Laserfiche calls themselves still run as the configured service
-account (`LF_USERNAME` / OAuth `client_credentials`). Laserfiche's own audit
-trail therefore shows the service account, not the end user. True on-behalf-of
-(user identity flowing into Laserfiche) is a larger, LFDS-dependent follow-up.
+**By default this is authentication, not delegation.** A verified user is
+allowed to use the connector; the Laserfiche calls themselves still run as the
+configured service account (`LF_USERNAME` / OAuth `client_credentials`).
+Laserfiche's own audit trail therefore shows the service account, not the end
+user. See **True on-behalf-of** below for the opt-in that changes this.
 
 You must register the web client in your IdP: allow claude.ai's redirect URI (or
 enable dynamic client registration), and expose a scope matching
 `LF_HTTP_OAUTH_REQUIRED_SCOPES` / an audience matching `LF_HTTP_OAUTH_AUDIENCE`.
+
+### True on-behalf-of (`LF_AUTH_MODE=oauth_passthrough`) — beta
+
+Add `LF_AUTH_MODE=oauth_passthrough` on top of the OAuth Resource Server setup
+above, and this server stops using a shared service account entirely: every
+Laserfiche call reuses the calling user's own already-verified bearer token.
+No `LF_USERNAME`/`LF_PASSWORD` or other static credential is needed or used.
+
+```bash
+LF_REPO_API_URL=... LF_REPOSITORY_ID=... LF_AUTH_MODE=oauth_passthrough \
+LF_HTTP_OAUTH_ISSUER="https://your-lfds.example.com" \
+LF_HTTP_PUBLIC_URL="https://lf.example.com/mcp" \
+LF_HTTP_OAUTH_AUDIENCE="api://laserfiche-mcp" \
+  laserfiche-mcp --http --host 0.0.0.0
+```
+
+**Whether this actually grants per-user Laserfiche access depends entirely on
+your identity provider:**
+
+- If `LF_HTTP_OAUTH_ISSUER` is Laserfiche's own **LFDS**, and the tokens it
+  issues carry an audience/resource already valid for the Repository API, the
+  forwarded token works as-is — Laserfiche's own audit trail shows the calling
+  user, and its own ACLs apply per-user. This is genuine on-behalf-of.
+- If `LF_HTTP_OAUTH_ISSUER` points at a *different* IdP (Entra, Okta, Auth0,
+  Google) — the common case when it's only gating who may use the connector —
+  that token authenticates fine at the MCP server but Laserfiche will reject
+  it outright on the first real call. Passthrough mode cannot invent
+  Laserfiche permissions the caller's token was never granted; use the
+  service-account modes instead in that setup.
+
+There is deliberately no fallback to the service account when a passthrough
+call fails — a silent fallback would defeat the point (every call would
+quietly run as the shared account again after all), so a rejected or missing
+token surfaces as a clear tool error instead. **Never verified against a live
+LFDS tenant** — if you try it, please open an issue with what worked or broke,
+including whether your LFDS token's audience needed a token-exchange step
+first.
 
 ## Local verification
 
@@ -154,12 +191,14 @@ Both need a **public HTTPS URL**. Two common paths:
 
 ## Known limitations
 
-- **Edge auth, not on-behalf-of.** OAuth mode authenticates the *user at the
-  connector*, but Laserfiche operations still run as the shared service account,
-  so Laserfiche's audit trail shows that account rather than the end user. Full
-  on-behalf-of (per-user Laserfiche identity + audit) requires LFDS to mint
-  per-user tokens plus a token-exchange path — a larger, customer-dependent
-  follow-up.
+- **Edge auth by default, not on-behalf-of.** OAuth mode authenticates the
+  *user at the connector*, but Laserfiche operations still run as the shared
+  service account by default, so Laserfiche's audit trail shows that account
+  rather than the end user. `LF_AUTH_MODE=oauth_passthrough` (see above) opts
+  into real on-behalf-of, but it's beta and its success depends on whether
+  your LFDS/IdP issues tokens whose audience is already valid against the
+  Repository API — some tenants will need a token-exchange step this server
+  doesn't implement yet.
 - **No built-in rate limiting.** Put it behind a proxy that provides this if
   exposed.
 - **Stateful sessions.** The Streamable HTTP transport keeps per-session state;

@@ -35,6 +35,7 @@ class AuthMode(str, Enum):
     PASSWORD = "password"
     OAUTH = "oauth"  # client_credentials grant (LFDS or compatible)
     API_KEY = "api_key"  # Cloud service-app JWT-assertion flow (beta, see module docstring)
+    OAUTH_PASSTHROUGH = "oauth_passthrough"  # per-caller token reuse (beta, see auth.py)
 
 
 class ApiVersion(str, Enum):
@@ -443,6 +444,10 @@ class Settings(BaseSettings):
                 missing.append("LF_CLOUD_ACCESS_KEY")
             if not self.cloud_service_principal_key:
                 missing.append("LF_CLOUD_SERVICE_PRINCIPAL_KEY")
+        # AuthMode.OAUTH_PASSTHROUGH needs no static credentials here — the
+        # bearer token comes from each request's own verified caller, not
+        # from configuration. Its prerequisite (oauth_enabled) is checked
+        # below instead of in this missing-fields block.
 
         if missing:
             raise ValueError(
@@ -456,6 +461,15 @@ class Settings(BaseSettings):
                 "LF_DEPLOYMENT_MODE=cloud requires LF_API_VERSION=v2 — "
                 "Laserfiche Cloud's Repository API only exposes the v2 "
                 f"surface (got LF_API_VERSION={self.api_version.value})."
+            )
+
+        if self.auth_mode is AuthMode.OAUTH_PASSTHROUGH and self.http_oauth_issuer is None:
+            raise ValueError(
+                "LF_AUTH_MODE=oauth_passthrough requires LF_HTTP_OAUTH_ISSUER "
+                "to also be set — passthrough reuses the calling MCP client's "
+                "own verified bearer token, which only exists when the "
+                "--http transport is running in OAuth Resource Server mode. "
+                "It has no meaning under stdio or LF_HTTP_AUTH_TOKEN."
             )
 
         if self.max_results_default > self.max_results_ceiling:

@@ -160,12 +160,29 @@ SimpleSearches has a server-side row cap. The async flow handles very
 large result sets via paged operation tokens. Not blocking — most
 users hit `search_natural` which already pages within the cap.
 
-### Per-user OAuth-on-behalf-of (ACL)
+### Per-user OAuth-on-behalf-of (ACL) — shipped in beta (`LF_AUTH_MODE=oauth_passthrough`)
 Cloud claims "respecting organizational access controls and
-redactions." Ours inherits the LF service account's permissions —
-correct, but only as fine-grained as that account. Per-user ACL flow
-would mean OAuth-on-behalf-of (the requesting human's identity flows
-to LF). Real engineering, longer term.
+redactions." Ours inherits the LF service account's permissions by
+default — correct, but only as fine-grained as that account.
+`LF_AUTH_MODE=oauth_passthrough` (`PassthroughTokenStrategy` in
+`auth.py`) now reuses the calling MCP client's own verified bearer
+token instead — real per-user delegation *when* the IdP behind
+`LF_HTTP_OAUTH_ISSUER` is LFDS and its tokens carry an audience already
+valid for the Repository API. Still open:
+- **Never verified against a live LFDS tenant.** Everything below this
+  point is what remains once someone with LFDS access confirms the
+  passthrough token round-trip actually works.
+- **Token-exchange fallback.** If a tenant's LFDS-issued token's
+  audience *isn't* already valid for the Repository API (e.g. it's
+  scoped only to the MCP resource server), passthrough 401s on the
+  first real call. A proper on-behalf-of/token-exchange grant
+  (RFC 8693) would cover that case — not implemented.
+- **Non-LFDS IdPs** (Entra, Okta, Auth0, Google) authenticating the MCP
+  connector can never work with passthrough — Laserfiche has no way to
+  recognize a token it didn't issue. Passthrough mode raises a clear
+  error rather than silently falling back to the service account, but
+  there's no detection at *startup* time for "this IdP will never work
+  here" — only at first real call.
 
 ### Redaction-aware reads
 If the LF server has redaction layers configured on documents, the

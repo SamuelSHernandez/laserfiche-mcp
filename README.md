@@ -814,6 +814,7 @@ Issues and PRs welcome — particularly:
 
 - Endpoint corrections for Repository API Server builds the v1 / v2 wire format hasn't been validated against
 - **Confirming Cloud auth (`LF_AUTH_MODE=api_key`) against a real Laserfiche Cloud tenant** — implemented and unit-tested against the documented flow, but nobody has run it against a live account yet
+- **Confirming true on-behalf-of (`LF_AUTH_MODE=oauth_passthrough`, see [docs/remote-http.md](docs/remote-http.md)) against a real LFDS tenant** — reuses the calling user's own verified OAuth token instead of a shared service account; whether it works end-to-end depends on your LFDS's token audience, which nobody has confirmed against a live instance yet
 - Server-side audit logging for write-mode deployments (sidecar file + rotation)
 - Text extraction for more document formats (`ops/extract.py`)
 

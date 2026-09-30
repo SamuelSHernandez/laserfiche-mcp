@@ -17,6 +17,7 @@ from pytest_httpx import HTTPXMock
 from laserfiche_mcp.auth import (
     CloudServiceAppStrategy,
     OAuthClientCredentialsStrategy,
+    PassthroughTokenStrategy,
     PasswordGrantStrategy,
     _decode_cloud_access_key,
     build_auth_strategy,
@@ -537,3 +538,53 @@ def test_build_auth_strategy_cloud(lf_env: dict[str, str], monkeypatch: pytest.M
     settings = Settings()  # type: ignore[call-arg]
     strategy = build_auth_strategy(settings)
     assert isinstance(strategy, CloudServiceAppStrategy)
+
+
+# --- PassthroughTokenStrategy (delegated / on-behalf-of, beta) --------------
+
+
+def _fake_access_token(token: str = "caller-jwt") -> object:
+    from mcp.server.auth.provider import AccessToken
+
+    return AccessToken(token=token, client_id="caller-client", scopes=["laserfiche.read"])
+
+
+@pytest.mark.asyncio
+async def test_passthrough_strategy_forwards_the_caller_verified_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laserfiche_mcp.auth as auth_module
+
+    monkeypatch.setattr(auth_module, "get_access_token", lambda: _fake_access_token("abc123"))
+    strategy = PassthroughTokenStrategy()
+
+    request = httpx.Request("GET", "https://lf.example.test/api")
+    await strategy.apply(request)
+    assert request.headers["Authorization"] == "Bearer abc123"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_strategy_raises_without_a_verified_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laserfiche_mcp.auth as auth_module
+
+    monkeypatch.setattr(auth_module, "get_access_token", lambda: None)
+    strategy = PassthroughTokenStrategy()
+
+    with pytest.raises(LaserficheError, match="oauth_passthrough"):
+        await strategy.apply(httpx.Request("GET", "https://lf.example.test/api"))
+
+
+def test_build_auth_strategy_oauth_passthrough(
+    lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LF_AUTH_MODE", "oauth_passthrough")
+    monkeypatch.delenv("LF_USERNAME", raising=False)
+    monkeypatch.delenv("LF_PASSWORD", raising=False)
+    monkeypatch.setenv("LF_HTTP_OAUTH_ISSUER", "https://lfds.example.test")
+    monkeypatch.setenv("LF_HTTP_PUBLIC_URL", "https://mcp.example.test/mcp")
+
+    settings = Settings()  # type: ignore[call-arg]
+    strategy = build_auth_strategy(settings)
+    assert isinstance(strategy, PassthroughTokenStrategy)

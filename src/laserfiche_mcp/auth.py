@@ -23,6 +23,15 @@ The supported flows are:
   live Cloud tenant**; treat as beta until someone with Cloud access
   confirms it end-to-end.
 
+* **OAuth passthrough (delegated / on-behalf-of)** — reuses the calling MCP
+  client's own already-verified bearer token as the credential for outbound
+  Laserfiche calls, instead of a single shared service account. Implemented
+  as :class:`PassthroughTokenStrategy`. Only meaningful under ``--http`` with
+  OAuth Resource Server mode (``LF_HTTP_OAUTH_ISSUER``) enabled — see that
+  class's docstring for the audience caveat that determines whether this
+  actually works against a given tenant. **Never verified against a live
+  LFDS tenant**; treat as beta.
+
 References:
   https://developer.laserfiche.com/docs/api/server/authentication/
   https://developer.laserfiche.com/docs/api/authentication/guide_oauth-service/
@@ -39,6 +48,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 import httpx
+from mcp.server.auth.middleware.auth_context import get_access_token
 from pydantic import SecretStr
 
 from ._pyjwt_support import require_pyjwt
@@ -395,6 +405,58 @@ class CloudServiceAppStrategy(AuthStrategy):
             self._expires_at = time.time() + expires_in
 
 
+class PassthroughTokenStrategy(AuthStrategy):
+    """Reuses the calling MCP client's own verified bearer token for outbound
+    Laserfiche Repository API calls, instead of one shared service account.
+
+    Requires ``--http`` running in OAuth Resource Server mode
+    (``LF_HTTP_OAUTH_ISSUER``, see ``oauth.py``). That mode already verifies
+    each caller's token (signature, audience, issuer, expiry) before a tool
+    call runs, and ``mcp.server.fastmcp`` wires ``AuthContextMiddleware`` into
+    the Streamable HTTP app whenever a ``TokenVerifier`` is configured — see
+    ``http_transport.py:_configure_oauth`` — so the verified
+    :class:`~mcp.server.auth.provider.AccessToken` for the request currently
+    being handled is always available from ``get_access_token()``, scoped per
+    request via Python's ``contextvars`` (concurrent callers don't cross
+    contaminate). This class is intentionally stateless: unlike the other
+    strategies above it caches nothing, because the right token to use
+    changes on every call depending on who's currently calling.
+
+    **Whether this produces genuine per-user Laserfiche access, or just a
+    401 on the first real call, depends entirely on the authorization server
+    behind LF_HTTP_OAUTH_ISSUER:**
+
+    * If it's Laserfiche's own LFDS, and the tokens it issues carry an
+      audience/resource already valid for the Repository API, the token
+      forwarded here works as-is — this is genuine delegation: Laserfiche's
+      own audit trail shows the calling user, and its own ACLs apply.
+    * If LF_HTTP_OAUTH_ISSUER points at a *different* identity provider
+      (Entra, Okta, Auth0, Google) — the common case when it's just
+      authenticating who may use the MCP connector — that token authenticates
+      fine *here* but Laserfiche will reject it outright: passthrough mode
+      cannot invent Laserfiche permissions the caller's token was never
+      granted. In that case, use the shared-service-account modes above
+      instead.
+
+    There is no fallback to a service account on failure by design — a
+    silent fallback would defeat the point (every call would quietly run as
+    the shared account again), so a missing/rejected token surfaces as a
+    clear error instead.
+    """
+
+    async def apply(self, request: httpx.Request) -> None:
+        token = get_access_token()
+        if token is None:
+            raise LaserficheError(
+                "LF_AUTH_MODE=oauth_passthrough has no verified caller token "
+                "to use for this request. This mode only works for calls "
+                "made under `--http` with LF_HTTP_OAUTH_ISSUER configured "
+                "(OAuth Resource Server mode) — stdio and unauthenticated "
+                "--http requests have no per-caller token to pass through."
+            )
+        request.headers["Authorization"] = f"Bearer {token.token}"
+
+
 def build_auth_strategy(settings: Settings) -> AuthStrategy:
     """Factory: pick the right strategy for the configured auth_mode."""
     if settings.auth_mode is AuthMode.PASSWORD:
@@ -436,5 +498,9 @@ def build_auth_strategy(settings: Settings) -> AuthStrategy:
             verify_ssl=settings.verify_ssl,
             timeout_seconds=settings.request_timeout_seconds,
         )
+
+    if settings.auth_mode is AuthMode.OAUTH_PASSTHROUGH:
+        # Validated upstream: http_oauth_issuer is set (config._validate).
+        return PassthroughTokenStrategy()
 
     raise NotImplementedError(f"Unsupported auth mode: {settings.auth_mode}")  # pragma: no cover

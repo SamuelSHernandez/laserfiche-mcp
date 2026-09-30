@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **True on-behalf-of auth (`LF_AUTH_MODE=oauth_passthrough`) — BETA, unverified
+  against a live LFDS tenant.** Prompted by a prospective adopter asking
+  whether repository access could be scoped to each chatting user's own
+  Laserfiche privileges instead of one shared service account. Until now,
+  `--http`'s OAuth Resource Server mode (`LF_HTTP_OAUTH_ISSUER`) only
+  authenticated *who may call the MCP connector* — every Laserfiche call
+  still ran as the configured service account (`LF_USERNAME` / OAuth
+  `client_credentials`), as `oauth.py` and `docs/remote-http.md` already
+  documented. `LF_AUTH_MODE=oauth_passthrough` closes that gap: the new
+  stateless `PassthroughTokenStrategy` (`auth.py`) reuses the calling
+  client's own already-verified bearer token — read per-request via the MCP
+  SDK's `get_access_token()`, which `mcp.server.fastmcp` scopes through
+  `contextvars` so concurrent callers under `--http` never cross-contaminate
+  — instead of a shared credential. No new plumbing was needed in
+  `client/_core.py` or the server lifespan: `AuthStrategy.apply()` already
+  runs fresh on every outbound call, so a single shared, stateless strategy
+  instance naturally picks up whichever caller's token is live for that
+  specific request. Requires `--http` + `LF_HTTP_OAUTH_ISSUER` (enforced by
+  `config.py`); raises a clear error rather than silently falling back to a
+  service account when no verified caller token is present.
+  **What's unverified**: whether this produces genuine per-user Laserfiche
+  access depends on the identity provider behind `LF_HTTP_OAUTH_ISSUER` — it
+  only works when that's Laserfiche's own LFDS *and* its tokens carry an
+  audience already valid for the Repository API; other IdPs (Entra, Okta,
+  Auth0, Google) authenticate the connector but Laserfiche will reject the
+  forwarded token outright. See `docs/remote-http.md`'s "True on-behalf-of"
+  section.
+
 ## [2.4.0] - 2026-09-28
 
 A client evaluating a pre-2.3.0 build reported the tool exhausting its
