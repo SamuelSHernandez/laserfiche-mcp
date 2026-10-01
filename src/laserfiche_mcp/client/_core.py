@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json as jsonlib
 import logging
 import random
 import warnings
@@ -28,6 +29,41 @@ from ..observability import redact
 logger = logging.getLogger("laserfiche_mcp.client")
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+# A v2 ``POST /Entries/{id}/Export`` can answer with a small JSON pointer
+# (``{"@odata.context": ..., "value": "<download url>"}``) instead of the file
+# body — seen for entries with no electronic document. The pointer is tiny;
+# anything bigger is a real JSON document and must not be treated as one.
+_POINTER_MAX_BYTES = 8192
+_POINTER_KEYS = frozenset({"@odata.context", "value"})
+
+
+def _is_json_content_type(content_type: str | None) -> bool:
+    if not content_type:
+        return False
+    mime = content_type.split(";")[0].strip().lower()
+    return mime == "application/json" or mime.endswith("+json")
+
+
+def _extract_download_pointer(content: bytes, content_type: str | None) -> str | None:
+    """Return the Download URL if ``content`` is a v2 Export pointer, else None.
+
+    Deliberately strict (JSON content-type, small, an object whose only keys
+    are ``@odata.context``/``value``, ``value`` a non-empty string) so a
+    genuine JSON edoc is never mistaken for a pointer.
+    """
+    if not _is_json_content_type(content_type) or len(content) > _POINTER_MAX_BYTES:
+        return None
+    try:
+        data = jsonlib.loads(content)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or "value" not in data or not set(data) <= _POINTER_KEYS:
+        return None
+    value = data["value"]
+    return value if isinstance(value, str) and value.strip() else None
+
+
 # Ceiling on a single retry's delay, regardless of attempt count — without
 # it, LF_RETRY_ATTEMPTS=10's uncapped exponential backoff (2^0 + 2^1 + ...
 # + 2^9 seconds) can turn one failing call into a ~17-minute wait.
@@ -242,11 +278,15 @@ class _CoreClient:
         url: str,
         *,
         json: dict[str, Any] | None = None,
+        follow_download_pointer: bool = False,
     ) -> tuple[bytes, str | None]:
         """Like ``_request_bytes`` but also surfaces the response Content-Type.
 
         Needed by edoc modes that branch on document type (PDF vs text vs
         binary) instead of trusting the file extension on the entry.
+
+        With ``follow_download_pointer``, a v2 Export pointer response is
+        followed with one authenticated GET and the real body is returned.
         """
         if self._http is None:
             raise RuntimeError("LaserficheClient must be used as an async context manager.")
@@ -263,7 +303,154 @@ class _CoreClient:
                 status_code=response.status_code,
                 detail=detail,
             )
-        return response.content, response.headers.get("content-type")
+        if 300 <= response.status_code < 400:
+            raise self._redirect_error(response)
+        content_type = response.headers.get("content-type")
+        if follow_download_pointer:
+            pointer = _extract_download_pointer(response.content, content_type)
+            if pointer is not None:
+                target = self._resolve_download_url(pointer, request.url)
+                followed = await self._send(self._download_request(target))
+                if followed.status_code >= 400:
+                    try:
+                        detail = followed.json()
+                    except ValueError:
+                        detail = followed.text
+                    raise LaserficheError(
+                        f"Laserfiche API error {followed.status_code}: {detail}",
+                        status_code=followed.status_code,
+                        detail=detail,
+                    )
+                if 300 <= followed.status_code < 400:
+                    raise self._redirect_error(followed)
+                return followed.content, followed.headers.get("content-type")
+        return response.content, content_type
+
+    def _redirect_error(self, response: httpx.Response) -> LaserficheError:
+        """A 3xx on a download is never a body — fail loudly instead of returning b""."""
+        location = response.headers.get("location", "<none>")
+        return LaserficheError(
+            f"Laserfiche returned an unexpected redirect ({response.status_code}) for "
+            f"{response.request.method} {self._redact_url(response.request.url)} "
+            f"-> {location}. Downloads are not redirected; check the configured "
+            "LF_REPO_API_URL (http vs https, trailing path, or a proxy login page).",
+            status_code=response.status_code,
+        )
+
+    def _resolve_download_url(self, pointer: str, request_url: httpx.URL | str) -> httpx.URL:
+        """Turn a pointer's ``value`` into the URL we will actually fetch.
+
+        Only the path and query are taken from the server's URL; scheme, host
+        and port always come from the configured API URL. That survives a
+        server advertising its internal hostname behind a reverse proxy, and
+        guarantees the Authorization header is never sent to a host the
+        operator did not configure.
+        """
+        joined = httpx.URL(urljoin(str(request_url), pointer.strip()))
+        if joined.scheme not in ("http", "https"):
+            raise LaserficheError(
+                f"Laserfiche Export returned a download pointer with an unsupported "
+                f"scheme {joined.scheme!r}."
+            )
+        base = httpx.URL(self._base_url) if self._base_url else httpx.URL(str(request_url))
+        # An empty query must be omitted entirely, or httpx emits a dangling "?".
+        return base.copy_with(path=joined.path, query=joined.query or None, fragment=None)
+
+    def _download_request(self, url: httpx.URL) -> httpx.Request:
+        assert self._http is not None
+        # The client default is ``Accept: application/json``; the Download
+        # endpoint serves file bytes, so accept anything.
+        return self._http.build_request("GET", url, headers={"Accept": "*/*"})
+
+    async def _open_stream(self, request: httpx.Request, *, label: str) -> httpx.Response:
+        """Send ``request`` streamed with auth, raising on HTTP errors.
+
+        Returns an open response; the caller must close it.
+        """
+        assert self._http is not None
+        await self._auth.apply(request)
+        try:
+            response = await self._http.send(request, stream=True)
+        except httpx.HTTPError as exc:
+            raise LaserficheError(
+                f"Network error {label} {request.method} {self._redact_url(request.url)}: {exc!r}"
+            ) from exc
+        if response.status_code >= 400:
+            try:
+                # Error bodies are small — read this one so the message is useful.
+                await response.aread()
+                try:
+                    detail: object = response.json()
+                except ValueError:
+                    detail = response.text
+            finally:
+                await response.aclose()
+            raise LaserficheError(
+                f"Laserfiche API error {response.status_code}: {detail}",
+                status_code=response.status_code,
+                detail=detail,
+            )
+        if 300 <= response.status_code < 400:
+            error = self._redirect_error(response)
+            await response.aclose()
+            raise error
+        return response
+
+    async def _open_export_stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None,
+        label: str,
+        follow_download_pointer: bool,
+    ) -> httpx.Response:
+        """Open a streamed response, transparently following a v2 download pointer.
+
+        Returns an open, successful response positioned at the real file body.
+        When the first response might be a pointer (small JSON), its body is
+        peeked and a pointer is followed with one authenticated GET. Anything
+        else — including a genuine small JSON document — is replayed by
+        re-issuing the (read-only) request, so no body bytes are lost.
+        """
+        assert self._http is not None
+        request = self._http.build_request(method, url, json=json)
+        response = await self._open_stream(request, label=label)
+        if not follow_download_pointer or not _is_json_content_type(
+            response.headers.get("content-type")
+        ):
+            return response
+
+        declared = response.headers.get("content-length")
+        if declared is not None and declared.isdigit() and int(declared) > _POINTER_MAX_BYTES:
+            return response  # too big to be a pointer — a genuine JSON edoc
+
+        pointer: str | None = None
+        try:
+            buffered = bytearray()
+            async for chunk in response.aiter_bytes():
+                buffered.extend(chunk)
+                if len(buffered) > _POINTER_MAX_BYTES:
+                    break
+            else:
+                pointer = _extract_download_pointer(
+                    bytes(buffered), response.headers.get("content-type")
+                )
+        except httpx.HTTPError as exc:
+            raise LaserficheError(
+                f"Network error {label} {request.method} "
+                f"{self._redact_url(request.url)}: connection failed while reading "
+                f"the response body: {exc!r}"
+            ) from exc
+        finally:
+            await response.aclose()
+
+        if pointer is None:
+            replay = self._http.build_request(method, url, json=json)
+            return await self._open_stream(replay, label=label)
+
+        target = self._resolve_download_url(pointer, request.url)
+        return await self._open_stream(self._download_request(target), label=label)
 
     async def _request_meta_only(
         self,
@@ -271,6 +458,7 @@ class _CoreClient:
         url: str,
         *,
         json: dict[str, Any] | None = None,
+        follow_download_pointer: bool = False,
     ) -> tuple[int | None, str | None]:
         """Open a response, read its headers, and close without buffering the body.
 
@@ -286,30 +474,33 @@ class _CoreClient:
         if self._http is None:
             raise RuntimeError("LaserficheClient must be used as an async context manager.")
 
-        request = self._http.build_request(method, url, json=json)
-        await self._auth.apply(request)
+        response = await self._open_export_stream(
+            method,
+            url,
+            json=json,
+            label="probing",
+            follow_download_pointer=follow_download_pointer,
+        )
         try:
-            response = await self._http.send(request, stream=True)
-        except httpx.HTTPError as exc:
-            raise LaserficheError(
-                f"Network error probing {method} {self._redact_url(httpx.URL(url))}: {exc!r}"
-            ) from exc
-
-        try:
-            if response.status_code >= 400:
-                # Error bodies are small — read this one so the message is useful.
-                await response.aread()
-                try:
-                    detail: object = response.json()
-                except ValueError:
-                    detail = response.text
-                raise LaserficheError(
-                    f"Laserfiche API error {response.status_code}: {detail}",
-                    status_code=response.status_code,
-                    detail=detail,
-                )
             raw_length = response.headers.get("content-length")
             length = int(raw_length) if raw_length is not None and raw_length.isdigit() else None
+            if length is None:
+                # No Content-Length (chunked, or an empty reply that omits it —
+                # what a real v1 server sends for a scanned entry with no
+                # edoc). Peek at the first bytes so "empty" is reported as 0
+                # rather than "unknown"; a non-empty body stays None.
+                try:
+                    async for chunk in response.aiter_bytes():
+                        if chunk:
+                            break
+                    else:
+                        length = 0
+                except httpx.HTTPError as exc:
+                    raise LaserficheError(
+                        f"Network error probing {method} "
+                        f"{self._redact_url(httpx.URL(url))}: connection failed while "
+                        f"reading the response body: {exc!r}"
+                    ) from exc
             return length, response.headers.get("content-type")
         finally:
             await response.aclose()
@@ -339,6 +530,7 @@ class _CoreClient:
         json: dict[str, Any] | None = None,
         max_bytes: int | None = None,
         chunk_size: int = 65536,
+        follow_download_pointer: bool = False,
     ) -> tuple[int, str | None, str]:
         """Stream a response body straight to disk. Returns (bytes, type, sha256).
 
@@ -362,32 +554,19 @@ class _CoreClient:
         if self._http is None:
             raise RuntimeError("LaserficheClient must be used as an async context manager.")
 
-        request = self._http.build_request(method, url, json=json)
-        await self._auth.apply(request)
-        try:
-            response = await self._http.send(request, stream=True)
-        except httpx.HTTPError as exc:
-            raise LaserficheError(
-                f"Network error streaming {method} {self._redact_url(httpx.URL(url))}: {exc!r}"
-            ) from exc
+        response = await self._open_export_stream(
+            method,
+            url,
+            json=json,
+            label="streaming",
+            follow_download_pointer=follow_download_pointer,
+        )
 
         partial = dest.with_name(dest.name + ".part")
         digest = hashlib.sha256()
         written = 0
 
         try:
-            if response.status_code >= 400:
-                await response.aread()
-                try:
-                    detail: object = response.json()
-                except ValueError:
-                    detail = response.text
-                raise LaserficheError(
-                    f"Laserfiche API error {response.status_code}: {detail}",
-                    status_code=response.status_code,
-                    detail=detail,
-                )
-
             content_type = response.headers.get("content-type")
             declared = response.headers.get("content-length")
             if (
@@ -413,6 +592,15 @@ class _CoreClient:
                         )
                     digest.update(chunk)
                     handle.write(chunk)
+        except httpx.HTTPError as exc:
+            # The connection dropped or the body was cut short mid-download
+            # (e.g. RemoteProtocolError on a Content-Length mismatch). Callers
+            # only guard LaserficheError, so don't let httpx's types escape.
+            partial.unlink(missing_ok=True)
+            raise LaserficheError(
+                f"Network error streaming {method} {self._redact_url(httpx.URL(url))}: "
+                f"connection failed mid-download: {exc!r}"
+            ) from exc
         except OSError as exc:
             # Local disk failure (AV lock, full/locked scratch dir) — distinct
             # from the network/HTTP failures above, but callers only guard

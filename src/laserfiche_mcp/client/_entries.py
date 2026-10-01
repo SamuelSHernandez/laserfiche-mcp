@@ -175,6 +175,7 @@ class _EntriesMixin(_CoreClient):
             "POST",
             self._repo_path(f"Entries/{entry_id}/Export"),
             json={"part": part},
+            follow_download_pointer=True,
         )
 
     async def export_entry_with_meta(
@@ -204,6 +205,7 @@ class _EntriesMixin(_CoreClient):
             "POST",
             self._repo_path(f"Entries/{entry_id}/Export"),
             json={"part": part},
+            follow_download_pointer=True,
         )
 
     async def export_entry_to_file(
@@ -244,4 +246,5 @@ class _EntriesMixin(_CoreClient):
             dest,
             json={"part": part},
             max_bytes=max_bytes,
+            follow_download_pointer=True,
         )
