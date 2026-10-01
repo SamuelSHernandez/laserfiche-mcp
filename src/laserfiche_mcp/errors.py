@@ -78,6 +78,11 @@ _SUBKIND_TO_KIND: dict[str, str] = {
     "source_path_not_allowed": "permission_denied",
     # not_found
     "not_found": "not_found",
+    # The entry exists but carries no electronic file / no extractable text
+    # (typically scanned pages only). Not an upstream fault — a 'not found'
+    # for the thing that was asked for.
+    "no_electronic_document": "not_found",
+    "no_extracted_text": "not_found",
     # rate_limited
     "rate_limited": "rate_limited",
     # invalid_input

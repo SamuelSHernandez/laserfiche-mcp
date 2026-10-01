@@ -86,6 +86,24 @@ async def get_document_text(
     except LaserficheError as exc:
         return classify_lf_error("get_document_text", exc, entry_id=entry_id)
 
+    if not content.strip():
+        return {
+            "mode": "error",
+            "operation": "get_document_text",
+            "kind": kind_for_subkind("no_extracted_text"),
+            "error": "no_extracted_text",
+            "request_id": get_request_id_or_new(),
+            "entry_id": entry_id,
+            "message": (
+                "The server returned no extracted text for this entry — it has no "
+                "text layer (for example a scan that has not been OCR'd) or no document."
+            ),
+            "hint": (
+                "Try search_content, which reads Laserfiche's OCR index, or "
+                "get_document_edoc(mode='info') to see whether the entry has a file."
+            ),
+        }
+
     text = content.decode("utf-8", errors="replace")
     truncated = len(text) > max_chars
     if truncated:
@@ -222,6 +240,28 @@ def _edoc_error(
     }
 
 
+_NO_EDOC_MESSAGE = (
+    "This entry has no electronic document: the server returned an empty file. "
+    "That is what a scanned document (page images only, no native file) looks like."
+)
+_NO_EDOC_HINT = (
+    "Scanned pages have no file to read. Use search_content, which reads "
+    "Laserfiche's OCR index, or open the entry in the Laserfiche client."
+)
+
+
+def _no_edoc_error(entry_id: int, requested_mode: str, content_type: str | None) -> dict[str, Any]:
+    return _edoc_error(
+        entry_id,
+        requested_mode,
+        "no_electronic_document",
+        content_type=content_type,
+        byte_size=0,
+        message=_NO_EDOC_MESSAGE,
+        hint=_NO_EDOC_HINT,
+    )
+
+
 def _edoc_info_response(
     entry_id: int,
     byte_size: int | None,
@@ -233,6 +273,11 @@ def _edoc_info_response(
         "mode": "info",
         "byte_size": byte_size,
         "content_type": content_type,
+        **(
+            {"has_electronic_document": False, "warning": _NO_EDOC_MESSAGE}
+            if byte_size == 0
+            else {}
+        ),
         "hint": (
             "Headers only — the document body was never transferred. "
             "Use mode='text' for extracted text (prefer this: it is far "
@@ -630,6 +675,8 @@ async def get_document_edoc(
         declared_size, _ = await client.export_entry_meta_only(entry_id, part="Edoc")
     except LaserficheError as exc:
         return classify_lf_error("get_document_edoc", exc, entry_id=entry_id)
+    if declared_size == 0:
+        return _no_edoc_error(entry_id, mode, None)
     if declared_size is not None and declared_size > effective_cap:
         return _edoc_size_cap_response(entry_id, mode, declared_size, effective_cap, None)
 
@@ -639,6 +686,8 @@ async def get_document_edoc(
         return classify_lf_error("get_document_edoc", exc, entry_id=entry_id)
 
     byte_size = len(content)
+    if byte_size == 0:
+        return _no_edoc_error(entry_id, mode, content_type)
 
     # Second check: the server may not have declared Content-Length above
     # (declared_size is None), so this is the only cap enforcement for that
