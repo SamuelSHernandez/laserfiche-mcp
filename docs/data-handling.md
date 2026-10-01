@@ -110,7 +110,7 @@ Ordered by how much protection they give:
 
 2. **Stay read-only.** The default (`LF_READ_ONLY=true`) means nothing can be
    changed or deleted. Only turn it off with the write-mode fences in place — see
-   the [Safety model](../README.md#safety-model).
+   the [Safety model](safety.md).
 
 3. **Segment by repository.** Don't connect your most sensitive repositories if
    they don't need AI access. Connect a purpose-built one.
@@ -138,7 +138,7 @@ Ordered by how much protection they give:
 
 ## Related
 
-- [Safety model](../README.md#safety-model) — write-mode guardrails
+- [Safety model](safety.md) — write-mode guardrails
 - [SECURITY.md](../SECURITY.md) — reporting a vulnerability
 - [Desktop extension guide](desktop-extension.md) — install & configuration
 - [Remote HTTP & OAuth](remote-http.md) — per-user auth for web deployments

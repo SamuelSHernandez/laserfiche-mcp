@@ -133,6 +133,28 @@ LFDS tenant** — if you try it, please open an issue with what worked or broke,
 including whether your LFDS token's audience needed a token-exchange step
 first.
 
+## Unattended agents
+
+The `--http` transport doesn't distinguish a human's chat client from an
+autonomous agent's tool-calling loop — same OAuth flow, same tools. What
+should differ is what each is *allowed* to do unsupervised. Register a
+separate OAuth client for your agent (`client_credentials` grant, no human
+present to click through `authorization_code`), and withhold whichever scope
+you assign to `LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE` from that client's grant.
+The agent can still call `delete_entry`/`delete_edoc`/`delete_pages` to get
+a **preview** — useful for it to reason about and surface to a human — but
+executing refuses with `destructive_scope_required` until a human's own
+token (which does carry the scope) makes the actual call. `move_entry` and
+`rename_entry` are unaffected by this gate: they're reversible, so an
+unattended agent can execute those on its own.
+
+```bash
+LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE="laserfiche.destructive"   # only humans get this scope
+```
+
+This is on top of, not instead of, scoping the agent's own deployment with
+`LF_WRITE_TOOLS_ALLOWED` / `LF_READ_ONLY` — see [Safety model](safety.md).
+
 ## Local verification
 
 ```bash

@@ -102,5 +102,5 @@ The script validates `manifest.json` and packs the project into `dist/` with the
 ### Limitations
 
 - **Password auth only in the form.** OAuth environments use the classic config path (above).
-- **Fine-grained write controls aren't in the form.** The form has a **Read-only** toggle (on by default); turning it off enables the write tools with their *default* guardrails. The finer controls — path fences, write-tool allowlists, audit-reason requirements, delete caps — are only configurable via `LF_*` environment variables in the classic config path. Read the [Safety model](../README.md#safety-model) before turning read-only off.
+- **Fine-grained write controls aren't in the form.** The form has a **Read-only** toggle (on by default); turning it off enables the write tools with their *default* guardrails. The finer controls — path fences, write-tool allowlists, audit-reason requirements, delete caps — are only configurable via `LF_*` environment variables in the classic config path. Read the [Safety model](safety.md) before turning read-only off.
 - **First launch needs internet** to fetch dependencies. Fully offline machines should use a pre-provisioned environment instead.

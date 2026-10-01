@@ -73,19 +73,18 @@ def test_mcp_instructions_only_names_registered_v2_tools() -> None:
     assert not unknown, f"instructions reference unregistered tool name(s): {sorted(unknown)}"
 
 
-def test_readme_tools_section_mentions_every_registered_v2_name() -> None:
-    """The README's Tools section is the operator-facing catalog reference —
-    every registered tool's v2 name must appear there (in a table row, or
-    the preview/execute explanatory prose for the 10 split tools). It used
+def test_tools_doc_mentions_every_registered_v2_name() -> None:
+    """docs/tools.md is the operator-facing catalog reference — every
+    registered tool's v2 name must appear there (in a table row, or the
+    preview/execute explanatory prose for the 10 split tools). It used
     to document only 34 of 51 registered tools; an operator scoping
     LF_WRITE_TOOLS_ALLOWED from that table would unknowingly block a third
     of the write surface."""
-    readme = Path(__file__).resolve().parents[1] / "README.md"
-    text = readme.read_text(encoding="utf-8")
-    tools_section = text.split("## Tools", 1)[1].split("\n## ", 1)[0]
+    tools_doc = Path(__file__).resolve().parents[1] / "docs" / "tools.md"
+    text = tools_doc.read_text(encoding="utf-8")
     v2_names = {spec.v2_name for spec in all_tools()}
-    missing = sorted(name for name in v2_names if name not in tools_section)
-    assert not missing, f"README's ## Tools section is missing: {missing}"
+    missing = sorted(name for name in v2_names if name not in text)
+    assert not missing, f"docs/tools.md is missing: {missing}"
 
 
 @pytest.mark.asyncio

@@ -229,15 +229,15 @@ non-mutating — a sample of the most commonly used reads:
 | `get_document_edoc` | Return edoc metadata, raw bytes, or extracted text — `mode=info|bytes|text` |
 | `get_document_text` | v2-only Laserfiche-extracted text (v1: use `get_document_edoc(mode="text")`) |
 
-See the [README's Tools section](../README.md#tools) for the full read
+See the [Tools reference](tools.md) for the full read
 catalog (definition listings, audit reasons, async task polling, etc.)
 plus every tool's `laserfiche_{resource}_{verb}` v2 name.
 
 A separate **write surface** — create, copy, import, rename, move,
 metadata writes, and the destructive ops with two-step confirmation
 tokens — shipped in v1.2 and is fully wired through v2.0. It registers
-only when `LF_READ_ONLY=false`. Read the **Safety model** section in the
-[README](../README.md#safety-model) before you flip it on; path-prefix
+only when `LF_READ_ONLY=false`. Read the [Safety model](safety.md) before you
+flip it on; path-prefix
 fences and a per-tool allowlist are how you keep blast radius small.
 
 ## Search syntax in 60 seconds
@@ -293,8 +293,8 @@ or write to me directly.
 
 This tutorial leaves `LF_READ_ONLY=true`, which is also the package
 default. When you're ready to let Claude create, modify, or delete
-entries, flip `LF_READ_ONLY` to `false` and read the **Safety model**
-section in the [README](../README.md#safety-model) before you do.
+entries, flip `LF_READ_ONLY` to `false` and read the
+[Safety model](safety.md) before you do.
 Path-prefix fences (`LF_WRITE_PATHS_ALLOW`), batch caps on folder
 deletes, two-step confirmation tokens on destructive operations, the
 client-side name pre-flight (`LF_VALIDATE_NAMES`), and the per-tool

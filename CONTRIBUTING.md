@@ -25,6 +25,23 @@ uv run mypy src
 CI runs the same commands across Python 3.10–3.13 on every push and
 pull request.
 
+### Opt-in integration tests
+
+The default suite mocks the Repository API. If you have a reachable
+repository, also run the integration tests before tagging a release — they
+catch what mocks can't (server-side query quirks, real PDF extraction,
+transport-level rejections):
+
+```bash
+LF_INTEGRATION_TEST=1 uv run pytest tests/test_integration.py
+```
+
+They read the same `LF_*` variables the server uses. Optional overrides:
+
+- `LF_INTEGRATION_FOLDER_PATH` — folder for the `search_natural` test (default: repository root)
+- `LF_INTEGRATION_PDF_ENTRY_ID` — a known PDF entry; if unset, the edoc tests skip
+- `LF_INTEGRATION_SAFE_QUERY` — a query that returns results on your repo (default: `{LF:Name="*"}`)
+
 ### Windows line-ending note
 
 The repo's [`.gitattributes`](.gitattributes) normalizes all text
@@ -45,23 +62,19 @@ content change — just line endings.
 
 ## Where help is most welcome
 
+- **Real-server confirmation.** Several features are implemented and
+  unit-tested but have never run against the real thing:
+  - Laserfiche **Cloud** auth (`LF_AUTH_MODE=api_key`) against a live tenant.
+  - True on-behalf-of auth (`LF_AUTH_MODE=oauth_passthrough`, see
+    [`docs/remote-http.md`](docs/remote-http.md)) against a live LFDS tenant.
+  - **Repository API v2** servers — the v2 wire format (for example the
+    Export download pointer) is covered by mocks and a fake server only.
 - **Endpoint corrections** for Repository API Server builds the v1 / v2
-  wire format hasn't been validated against. The current wire format is
-  exercised against a live v1 server; v2-build divergences are still
-  possible.
-- **Laserfiche Cloud client** — needs the JWT-signed `client_credentials`
-  assertion flow that `signin.laserfiche.com` requires, plus the
-  `api.laserfiche.com` v2-only endpoint surface.
-- **v2.x follow-ups** deferred from the v2.0 audit (see
-  [`docs/internal/TODO.md`](docs/internal/TODO.md)): write-tool collapses
-  (`field_update(mode)`, `tag_update(add, remove)`, ...), preview/execute
-  splits of the 5 destructive tools, structured JSON logging
-  (`LF_LOG_FORMAT=json`) with a `redact()` helper, and parameter-
-  description polish so docs flow into the JSON schema the LLM sees.
-- **Server-side audit logging** for write-mode deployments (sidecar
-  file + rotation).
-- **Async-search support** for result sets larger than the
-  SimpleSearches endpoint can return synchronously.
+  wire format hasn't been validated against.
+- **Server-side audit logging** for write-mode deployments (sidecar file +
+  rotation).
+- **Text extraction** for more document formats (`ops/extract.py`).
+- Open follow-ups are tracked in [`docs/internal/TODO.md`](docs/internal/TODO.md).
 
 ## PR expectations
 
