@@ -133,6 +133,14 @@ LFDS tenant** — if you try it, please open an issue with what worked or broke,
 including whether your LFDS token's audience needed a token-exchange step
 first.
 
+### Reverse proxies and the `Host` header
+
+The server rejects requests whose `Host` header isn't a loopback name or the
+host of `LF_HTTP_PUBLIC_URL` (`421 Invalid Host header`) — this is MCP's
+DNS-rebinding protection. Set `LF_HTTP_PUBLIC_URL` to the exact public URL
+clients use and make sure your proxy forwards the original `Host` header
+(nginx: `proxy_set_header Host $host;`).
+
 ## Unattended agents
 
 The `--http` transport doesn't distinguish a human's chat client from an
@@ -197,6 +205,8 @@ Both need a **public HTTPS URL**. Two common paths:
    and forwards to `127.0.0.1:8000`. Point the connector at `https://your-host/mcp`.
 
 ## Security checklist before exposing to a network
+
+- If writes are enabled, set `LF_IMPORT_SOURCE_DIRS`; unset, `import_document` can read any file the server process can.
 
 - [ ] An auth mode is configured: OAuth (`LF_HTTP_OAUTH_ISSUER`) for multi-user,
       or at least a long random `LF_HTTP_AUTH_TOKEN` for single-tenant.

@@ -22,13 +22,24 @@ from urllib.parse import urljoin
 import httpx
 
 from ..auth import AuthStrategy
-from ..config import ApiVersion, Settings
+from ..config import ApiVersion, AuthMode, Settings
 from ..errors import LaserficheError
 from ..observability import redact
 
 logger = logging.getLogger("laserfiche_mcp.client")
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+# Methods that are safe to re-send when the first attempt's outcome is unknown
+# (the request may have reached the server before the connection failed). For
+# anything else — POST/PATCH/DELETE: import, copy, create, delete — a blind
+# retry can duplicate the effect or mask its success behind a 409/404, so only
+# failures that provably happened before the server saw the request are retried.
+# Read-only POSTs (Export, searches) opt back in with ``retry_ambiguous=True``.
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT"})
+
+# Transport errors raised before any request bytes reach the server.
+_NOT_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
 # A v2 ``POST /Entries/{id}/Export`` can answer with a small JSON pointer
 # (``{"@odata.context": ..., "value": "<download url>"}``) instead of the file
@@ -88,6 +99,17 @@ def _retry_delay(attempt: int, *, retry_after: str | None = None) -> float:
             pass
     base = min(float(2**attempt), _MAX_RETRY_DELAY_SECONDS)
     return base * (0.5 + random.random() / 2)
+
+
+class EdocTooLarge(LaserficheError):  # noqa: N818 - reads as a condition, not an error
+    """A download passed its byte cap mid-stream (server sent no Content-Length)."""
+
+    def __init__(self, observed: int, limit: int) -> None:
+        super().__init__(
+            f"size_exceeds_cap: download passed {limit} bytes (at least {observed} received)."
+        )
+        self.observed = observed
+        self.limit = limit
 
 
 _CacheValueT = TypeVar("_CacheValueT")
@@ -170,13 +192,28 @@ class _CoreClient:
         host = self._settings.repo_api_url.host if self._settings.repo_api_url else None
         return cast(str, redact(str(url), host=host, repo_id=self._repository_id or None))
 
-    async def _send(self, request: httpx.Request) -> httpx.Response:
-        """Apply auth, send, and retry on transient failures."""
+    async def _send(
+        self,
+        request: httpx.Request,
+        *,
+        retry_ambiguous: bool | None = None,
+    ) -> httpx.Response:
+        """Apply auth, send, and retry on transient failures.
+
+        ``retry_ambiguous`` controls whether failures where the server may
+        already have acted (read/protocol errors, timeouts after the request
+        was sent, 5xx replies) are retried. ``None`` derives it from the HTTP
+        method: only idempotent methods retry. 429 and connect-phase failures
+        are always retried — the server provably did not process the request.
+        """
         if self._http is None:
             raise RuntimeError("LaserficheClient must be used as an async context manager.")
 
         attempts = max(1, self._settings.retry_attempts + 1)
         last_exc: Exception | None = None
+        safe_to_replay = (
+            request.method in _IDEMPOTENT_METHODS if retry_ambiguous is None else retry_ambiguous
+        )
 
         for attempt in range(attempts):
             try:
@@ -192,6 +229,13 @@ class _CoreClient:
                 httpx.TimeoutException,
             ) as exc:
                 last_exc = exc
+                if not safe_to_replay and not isinstance(exc, _NOT_SENT_ERRORS):
+                    raise LaserficheError(
+                        f"Network error on {request.method} {self._redact_url(request.url)}: "
+                        f"{exc!r}. The request may have been received and applied, so it "
+                        "was NOT retried automatically — outcome unknown. Check the "
+                        "entry's current state before repeating this operation."
+                    ) from exc
                 if attempt + 1 >= attempts:
                     break
                 delay = _retry_delay(attempt)
@@ -207,7 +251,11 @@ class _CoreClient:
                 await asyncio.sleep(delay)
                 continue
 
-            if response.status_code in _RETRYABLE_STATUS and attempt + 1 < attempts:
+            if (
+                response.status_code in _RETRYABLE_STATUS
+                and (safe_to_replay or response.status_code == 429)
+                and attempt + 1 < attempts
+            ):
                 delay = _retry_delay(attempt, retry_after=response.headers.get("retry-after"))
                 logger.warning(
                     "Retryable status %d on %s %s (attempt %d/%d); retrying in %.1fs",
@@ -234,12 +282,13 @@ class _CoreClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        retry_ambiguous: bool | None = None,
     ) -> dict[str, Any]:
         if self._http is None:
             raise RuntimeError("LaserficheClient must be used as an async context manager.")
 
         request = self._http.build_request(method, url, params=params, json=json)
-        response = await self._send(request)
+        response = await self._send(request, retry_ambiguous=retry_ambiguous)
 
         if response.status_code >= 400:
             try:
@@ -279,6 +328,7 @@ class _CoreClient:
         *,
         json: dict[str, Any] | None = None,
         follow_download_pointer: bool = False,
+        retry_ambiguous: bool | None = None,
     ) -> tuple[bytes, str | None]:
         """Like ``_request_bytes`` but also surfaces the response Content-Type.
 
@@ -292,7 +342,7 @@ class _CoreClient:
             raise RuntimeError("LaserficheClient must be used as an async context manager.")
 
         request = self._http.build_request(method, url, json=json)
-        response = await self._send(request)
+        response = await self._send(request, retry_ambiguous=retry_ambiguous)
         if response.status_code >= 400:
             try:
                 detail = response.json()
@@ -325,6 +375,82 @@ class _CoreClient:
                     raise self._redirect_error(followed)
                 return followed.content, followed.headers.get("content-type")
         return response.content, content_type
+
+    async def _request_bytes_capped(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None = None,
+        max_bytes: int,
+        follow_download_pointer: bool = False,
+    ) -> tuple[bytes, str | None]:
+        """Buffer a response, aborting as soon as it passes ``max_bytes``.
+
+        Unlike :meth:`_request_bytes_with_meta`, memory use is bounded by the
+        cap even when the server omits Content-Length. Streamed, so ``_send``'s
+        retry loop can't wrap it; this method retries the whole (read-only)
+        download itself on transient failures, with the same backoff policy.
+        Raises :class:`EdocTooLarge` over the cap (never retried).
+        """
+        attempts = max(1, self._settings.retry_attempts + 1)
+        for attempt in range(attempts):
+            try:
+                return await self._download_capped_once(
+                    method,
+                    url,
+                    json=json,
+                    max_bytes=max_bytes,
+                    follow_download_pointer=follow_download_pointer,
+                )
+            except EdocTooLarge:
+                raise
+            except LaserficheError as exc:
+                transient = exc.status_code is None or exc.status_code in _RETRYABLE_STATUS
+                if not transient or attempt + 1 >= attempts:
+                    raise
+                logger.warning(
+                    "Transient failure downloading %s %s (attempt %d/%d): %s; retrying",
+                    method,
+                    self._redact_url(httpx.URL(url)),
+                    attempt + 1,
+                    attempts,
+                    exc,
+                )
+                await asyncio.sleep(_retry_delay(attempt))
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _download_capped_once(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None,
+        max_bytes: int,
+        follow_download_pointer: bool,
+    ) -> tuple[bytes, str | None]:
+        response = await self._open_export_stream(
+            method,
+            url,
+            json=json,
+            label="downloading",
+            follow_download_pointer=follow_download_pointer,
+        )
+        buffered = bytearray()
+        try:
+            content_type = response.headers.get("content-type")
+            async for chunk in response.aiter_bytes():
+                buffered.extend(chunk)
+                if len(buffered) > max_bytes:
+                    raise EdocTooLarge(len(buffered), max_bytes)
+        except httpx.HTTPError as exc:
+            raise LaserficheError(
+                f"Network error downloading {method} {self._redact_url(httpx.URL(url))}: "
+                f"connection failed mid-download: {exc!r}"
+            ) from exc
+        finally:
+            await response.aclose()
+        return bytes(buffered), content_type
 
     def _redirect_error(self, response: httpx.Response) -> LaserficheError:
         """A 3xx on a download is never a body — fail loudly instead of returning b""."""
@@ -511,10 +637,16 @@ class _CoreClient:
         self,
         entry: tuple[_CacheValueT, float] | None,
     ) -> _CacheValueT | None:
-        """Return the cached value if not expired, else None."""
+        """Return the cached value if not expired, else None.
+
+        Never serves from cache under ``oauth_passthrough``: the client is
+        shared across callers, but schema visibility is per-user there, so a
+        definition list fetched with one caller's token must not answer
+        another caller's lookup.
+        """
         import time
 
-        if entry is None:
+        if entry is None or self._settings.auth_mode is AuthMode.OAUTH_PASSTHROUGH:
             return None
         value, expiry = entry
         if time.monotonic() >= expiry:

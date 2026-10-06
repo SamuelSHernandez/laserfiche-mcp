@@ -255,6 +255,30 @@ class Settings(BaseSettings):
         "fetch when mode is 'bytes' or 'text'. Larger entries return a "
         "structured cap error instead of being downloaded.",
     )
+    image_warn_tokens: int = Field(
+        default=1000,
+        ge=0,
+        description="Estimated token cost above which get_document_image "
+        "refuses to return an image until the caller passes "
+        "acknowledge_cost=true, so the user is told first. 0 gates every "
+        "image read. One image costs at most ~1,600 tokens (larger ones are resized "
+        "by the API first), so the default of 1000 warns for photos and page scans "
+        "but not for small screenshots or icons. Values above ~1,600 disable the gate.",
+    )
+    image_max_bytes: int = Field(
+        default=5_000_000,
+        ge=1,
+        description="Maximum size in bytes of an image returned to the model "
+        "(Claude accepts up to 5 MB per image). With Pillow installed larger "
+        "images are downscaled to fit; without it they are refused.",
+    )
+    image_max_edge: int = Field(
+        default=1568,
+        ge=64,
+        description="Longest edge in pixels that images are downscaled to when "
+        "Pillow is installed. 1568 is where Claude's own resizing starts, so "
+        "going larger only costs bandwidth.",
+    )
     import_max_bytes: int = Field(
         default=25_000_000,
         ge=1,

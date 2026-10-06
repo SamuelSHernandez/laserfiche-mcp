@@ -67,6 +67,10 @@
       "description": "Read all template field values on an entry"
     },
     {
+      "name": "laserfiche_document_get_image",
+      "description": "Show an image entry to Claude (warns before token-heavy reads)"
+    },
+    {
       "name": "laserfiche_document_get_edoc",
       "description": "Read document metadata, bytes, or extracted text"
     },

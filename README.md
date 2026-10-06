@@ -53,6 +53,11 @@ Behind that, it can:
   matching *passages* (page number plus surrounding text) straight from
   Laserfiche's OCR index, so most "what does it say about X?" questions are
   answered without downloading anything.
+- **Look at images.** Claude can view picture files in the repository (PNG, JPEG,
+  GIF, WebP) to describe, label and tag them against your own tag and template
+  standard. Images cost tokens, so you're warned of the estimated cost and asked
+  first; for scans of text it tries Laserfiche's OCR before looking at the picture.
+  Optional `laserfiche-mcp[images]` adds downscaling.
 
 **Read things**
 - Browse folders, look up entries by ID or path, and read metadata, template

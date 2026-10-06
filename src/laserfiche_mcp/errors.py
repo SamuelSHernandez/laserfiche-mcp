@@ -115,6 +115,8 @@ _SUBKIND_TO_KIND: dict[str, str] = {
     # should change approach (mode="bytes", search_content), which is the
     # "fix and re-call" semantics of invalid_input.
     "unsupported_format": "invalid_input",
+    "image_too_large": "invalid_input",
+    "unsupported_image_format": "invalid_input",
     "legacy_office_format": "invalid_input",
     "pdf_encrypted": "invalid_input",
     "pdf_open_failed": "invalid_input",

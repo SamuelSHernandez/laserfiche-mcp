@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`laserfiche_document_get_image`** — lets Claude *see* an image stored in the
+  repository (PNG, JPEG, GIF, WebP) so it can describe, classify and label it;
+  the existing tag/field/template tools then record the result. Images cost
+  context, so reads above `LF_IMAGE_WARN_TOKENS` (default 1000 est. tokens) return a
+  `cost_warning` with the estimate instead of the image, and send it only when
+  the call is repeated with `acknowledge_cost=true`. The warning also reports
+  whether Laserfiche already holds OCR text for the entry (v2), which is far
+  cheaper to read. New optional extra `laserfiche-mcp[images]` (Pillow)
+  downscales large images and converts BMP/TIFF; without it, PNG/JPEG/GIF/WebP
+  under `LF_IMAGE_MAX_BYTES` work as-is. New settings: `LF_IMAGE_WARN_TOKENS`,
+  `LF_IMAGE_MAX_BYTES`, `LF_IMAGE_MAX_EDGE`.
+- `get_document_edoc` on an image now routes to OCR (`search_content`) first and
+  `get_document_image` second, instead of a dead-end `unsupported_format`.
+
+### Fixed
+- `--http` behind a reverse proxy no longer returns `421 Invalid Host header`:
+  the host of `LF_HTTP_PUBLIC_URL` is added to the DNS-rebinding allow-list.
+- A non-ASCII `Authorization` header now yields 401 instead of 500.
+- Writes (import, copy, create, delete, rename, move) are no longer blindly
+  retried after an ambiguous failure (timeout after send, 5xx). They return an
+  "outcome unknown" error instead of risking duplicates or a masked success.
+  Connect failures and 429 still retry; reads (incl. Export/search POSTs) are
+  unchanged.
+- `oauth_passthrough`: the schema-definition cache is bypassed so one caller's
+  field/template/tag visibility can't answer another caller's lookup.
+- Edoc downloads are aborted at `LF_EDOC_MAX_BYTES` mid-stream when the server
+  omits `Content-Length`; OOXML packages declaring >256 MiB uncompressed are
+  refused.
+- JSON tool-call logs omit content-bearing arguments (`fields`, `comment`,
+  `query`, ...).
+
+### Security
+- Raised the `pypdf` floor to 6.19 (memory/CPU DoS advisories on crafted PDFs)
+  and refreshed the lock (mcp, starlette, pyjwt, cryptography, anyio, idna,
+  pydantic-settings, python-multipart). CI now runs `pip-audit`.
+
 ## [2.5.0] - 2026-09-30
 
 ### Added

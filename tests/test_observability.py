@@ -408,3 +408,20 @@ def test_configure_logging_replaces_existing_handlers() -> None:
     configure_logging(level="INFO", format_="text")
     root = logging.getLogger()
     assert len(root.handlers) == 1
+
+
+async def test_tool_logger_omits_content_arguments(caplog):  # type: ignore[no-untyped-def]
+    import logging
+
+    from laserfiche_mcp.observability import tool_logger
+
+    @tool_logger
+    async def sample(entry_id: int, fields: dict, comment: str) -> dict:  # type: ignore[type-arg]
+        return {"ok": True}
+
+    with caplog.at_level(logging.INFO, logger="laserfiche_mcp.tools"):
+        await sample(entry_id=5, fields={"SSN": ["123-45-6789"]}, comment="private note")
+    event = caplog.records[-1].lf_event
+    assert event["args"]["entry_id"] == 5
+    assert event["args"]["fields"] == "<omitted>"
+    assert event["args"]["comment"] == "<omitted>"

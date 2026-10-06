@@ -53,6 +53,7 @@ from .tools import (  # noqa: F401
     definitions,
     documents,
     duplicates,
+    images,
     natural_search,
     preview_execute_splits,
     reads,

@@ -13,6 +13,7 @@ from pydantic import Field
 
 from .. import _app
 from .._app import get_settings
+from ..client import EdocTooLarge
 from ..errors import LaserficheError, classify_lf_error, kind_for_subkind
 from ..observability import get_request_id_or_new
 from ..ops.pages import parse_page_spec
@@ -262,6 +263,16 @@ def _no_edoc_error(entry_id: int, requested_mode: str, content_type: str | None)
     )
 
 
+_IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"})
+
+
+def _looks_like_image(content_type: str | None, name: str | None) -> bool:
+    if (content_type or "").lower().startswith("image/"):
+        return True
+    suffix = _Path(name or "").suffix.lstrip(".").lower()
+    return suffix in _IMAGE_EXTENSIONS
+
+
 def _edoc_info_response(
     entry_id: int,
     byte_size: int | None,
@@ -291,6 +302,14 @@ def _edoc_info_response(
                 else " byte_size is null because the server answered without "
                 "a Content-Length header."
             )
+            + (
+                " This is an image: mode='text' can't read it. To see it, use "
+                "get_document_image (costs tokens — you'll get a cost warning "
+                "to relay to the user); if it's a scan of text, try "
+                "get_document_text / search_content for the OCR first."
+                if (content_type or "").lower().startswith("image/")
+                else ""
+            )
         ),
     }
 
@@ -301,8 +320,14 @@ def _edoc_size_cap_response(
     byte_size: int,
     effective_cap: int,
     content_type: str | None,
+    *,
+    at_least: bool = False,
 ) -> dict[str, Any]:
-    """Refused-by-size response shared by ``mode='bytes'`` and ``mode='text'``."""
+    """Refused-by-size response shared by ``mode='bytes'`` and ``mode='text'``.
+
+    ``at_least`` marks a size that is only a lower bound (the download was
+    aborted at the cap because the server declared no Content-Length).
+    """
     return _edoc_error(
         entry_id,
         mode,
@@ -311,7 +336,8 @@ def _edoc_size_cap_response(
         max_bytes=effective_cap,
         content_type=content_type,
         message=(
-            f"Edoc is {byte_size} bytes, which exceeds the {effective_cap}-byte cap. "
+            f"Edoc is {'at least ' if at_least else ''}{byte_size} bytes, which exceeds "
+            f"the {effective_cap}-byte cap. "
             "Pass max_bytes=<larger value> or raise LF_EDOC_MAX_BYTES "
             "if you really need this document."
         ),
@@ -461,12 +487,20 @@ async def _edoc_extract_via_ops(
         target.write_bytes(content)
         extracted = ops_extract.extract(target, content_type=content_type, filename=name or None)
     except ops_extract.ExtractionError as exc:
-        hint = (
-            "For scanned images there is no text layer to extract — use "
-            "search_content, which reads Laserfiche's OCR index."
-            if exc.slug in ("unsupported_format",)
-            else "Use mode='bytes' for client-side handling if the raw file is needed."
-        )
+        if exc.slug == "unsupported_format" and _looks_like_image(content_type, name):
+            hint = (
+                "This is an image, so there is no text layer to extract. If Laserfiche has "
+                "OCR'd it, search_content (or get_document_text on v2 servers) returns that "
+                "text cheaply. To actually look at the picture, call get_document_image — "
+                "it costs tokens, so tell the user first."
+            )
+        elif exc.slug == "unsupported_format":
+            hint = (
+                "For scanned images there is no text layer to extract — use "
+                "search_content, which reads Laserfiche's OCR index."
+            )
+        else:
+            hint = "Use mode='bytes' for client-side handling if the raw file is needed."
         return _edoc_error(
             entry_id,
             "text",
@@ -681,7 +715,13 @@ async def get_document_edoc(
         return _edoc_size_cap_response(entry_id, mode, declared_size, effective_cap, None)
 
     try:
-        content, content_type = await client.export_entry_with_meta(entry_id, part="Edoc")
+        content, content_type = await client.export_entry_with_meta(
+            entry_id, part="Edoc", max_bytes=effective_cap
+        )
+    except EdocTooLarge as exc:
+        return _edoc_size_cap_response(
+            entry_id, mode, exc.observed, effective_cap, None, at_least=True
+        )
     except LaserficheError as exc:
         return classify_lf_error("get_document_edoc", exc, entry_id=entry_id)
 

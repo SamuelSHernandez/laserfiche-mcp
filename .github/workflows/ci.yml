@@ -40,3 +40,19 @@ jobs:
 
       - name: Run pytest
         run: uv run pytest -v
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # Audits the locked, resolved dependency set (incl. extras) against the
+      # PyPI advisory database; fails the build on any known vulnerability.
+      - name: pip-audit
+        run: |
+          uv export --frozen --no-hashes --no-emit-project --all-extras > requirements-audit.txt
+          uvx pip-audit --strict --no-deps --disable-pip -r requirements-audit.txt

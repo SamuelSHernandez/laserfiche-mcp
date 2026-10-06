@@ -22,6 +22,7 @@
 | `get_entry_by_path`          | `laserfiche_entry_get_by_path`         | Resolve a full path to an entry                                          |
 | `get_field_values`           | `laserfiche_field_values_get`          | Read all template fields assigned to an entry                            |
 | `get_document_text`          | `laserfiche_document_get_text`         | Server-side extracted text (v2 only; v1 use `get_document_edoc(mode="text")`) |
+| `get_document_image`         | `laserfiche_document_get_image`        | Show an image entry (PNG/JPEG/GIF/WebP) to the model so it can describe/label it. **Token-heavy**: over `LF_IMAGE_WARN_TOKENS` it returns a `cost_warning` first and needs `acknowledge_cost=true` |
 | `get_document_edoc`          | `laserfiche_document_get_edoc`         | Inspect edoc (`info`), download bytes (`bytes`), or extract text (`text`) |
 | `compare_entries`            | `laserfiche_entry_compare`             | Diff two entries' metadata and template fields — is this a re-scanned duplicate or a real difference? |
 | `find_duplicate_documents`   | `laserfiche_document_find_duplicates`  | Scan a folder tree for byte-identical documents (size-then-hash, downloads almost nothing on a mostly-distinct tree) |

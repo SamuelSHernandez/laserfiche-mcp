@@ -597,3 +597,31 @@ async def test_import_document_rejects_invalid_name(
     )
     assert result["mode"] == "error"
     assert result["error"] == "invalid_name"
+
+
+@pytest.mark.asyncio
+async def test_copy_entry_ambiguous_timeout_is_not_replayed_and_reports_unknown_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    import httpx
+
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_exception(
+        httpx.ReadTimeout("reply lost"),
+        method="POST",
+        url=f"{_BASE}/Entries/100/Laserfiche.Repository.Folder/CopyAsync?autoRename=true",
+    )
+
+    result = await server.copy_entry(42, 100, "Copy", auto_rename=True)
+
+    assert result["mode"] == "error"
+    assert "outcome unknown" in str(result)
+    posts = [r for r in httpx_mock.get_requests() if r.method == "POST"]
+    assert len(posts) == 1
