@@ -6,8 +6,8 @@ Only the latest minor release receives security fixes.
 
 | Version  | Supported          |
 | -------- | ------------------ |
-| 2.5.x    | :white_check_mark: |
-| < 2.5    | :x: (superseded; upgrade to the latest release) |
+| 2.6.x    | :white_check_mark: |
+| < 2.6    | :x: (superseded; upgrade to the latest release) |
 | 0.1.x    | :x: (yanked from PyPI) |
 
 > For **what Claude sees and where document content goes**, see

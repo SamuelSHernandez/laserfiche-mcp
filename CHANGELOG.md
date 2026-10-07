@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-10-07
+
 ### Added
 - **`laserfiche_document_get_image`** — lets Claude *see* an image stored in the
   repository (PNG, JPEG, GIF, WebP) so it can describe, classify and label it;
