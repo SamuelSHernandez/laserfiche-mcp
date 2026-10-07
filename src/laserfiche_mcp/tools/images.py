@@ -78,7 +78,7 @@ async def _ocr_text_available(client: Any, entry_id: int) -> bool | None:
     return bool(size > 0)
 
 
-@register(v2_name="laserfiche_document_get_image")
+@register(v2_name="laserfiche_document_get_image", structured_output=False)
 async def get_document_image(
     entry_id: Annotated[
         int,

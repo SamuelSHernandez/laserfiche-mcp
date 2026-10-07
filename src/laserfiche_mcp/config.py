@@ -128,7 +128,8 @@ class Settings(BaseSettings):
         description="Trust the operating system's certificate store instead of the "
         "built-in list of public CAs. Set this when the Laserfiche server uses a "
         "certificate from your organisation's internal CA (which is already installed "
-        "on managed machines) — it is the safe alternative to LF_VERIFY_SSL=false.",
+        "on managed machines; Windows store / Linux CA directory — on macOS use "
+        "LF_CA_BUNDLE instead) — it is the safe alternative to LF_VERIFY_SSL=false.",
     )
     ca_bundle: str | None = Field(
         default=None,

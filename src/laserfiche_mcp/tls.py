@@ -8,8 +8,9 @@ checking off completely and leaves the connection open to impersonation. This
 module gives operators the safe alternatives:
 
 * ``LF_USE_SYSTEM_CA=true`` — trust the operating system's certificate store
-  (Windows certificate store, macOS keychain, the distro's CA directory), which
-  already holds the internal CA on a managed machine.
+  (the Windows certificate store; on Linux the distribution's CA directory), which
+  already holds the internal CA on a managed machine. Python does not read the macOS
+  keychain: on a Mac, export the CA certificate to a PEM file and use LF_CA_BUNDLE.
 * ``LF_CA_BUNDLE=<path>`` — additionally trust the CA certificate(s) in a PEM file.
   Combines with the setting above or with the built-in public CAs.
 

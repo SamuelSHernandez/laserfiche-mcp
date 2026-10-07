@@ -189,12 +189,11 @@ def sensitive_source_reason(file_path: str) -> str | None:
         if seg in _SENSITIVE_DIR_NAMES:
             return f"it is inside a {seg!r} credentials directory"
     lowered = list(parts)
-    if lowered and lowered[0].endswith(":"):  # drop a Windows drive letter
-        lowered = lowered[1:]
     for tree in _SENSITIVE_TREES:
         n = len(tree)
-        # Windows trees may sit under any drive/profile, so match anywhere; the
-        # POSIX roots (proc/sys/dev) only count when they are the first segment.
+        # Windows trees may sit under any drive/profile, so match anywhere. The
+        # POSIX roots (proc/sys/dev) only count as the FIRST segment — which on
+        # Windows is a drive letter ("c:"), so C:\dev\docs is never mistaken for /dev.
         starts = (0,) if tree[0] in ("proc", "sys", "dev") else range(len(lowered) - n + 1)
         if any(tuple(lowered[i : i + n]) == tree for i in starts if i >= 0):
             return f"it is under a protected system location ({'/'.join(tree)})"

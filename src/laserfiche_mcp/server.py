@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from . import permissions
 from ._app import (
@@ -115,9 +116,12 @@ def _register_one(spec: ToolSpec) -> None:
     same wrapped function under both names gives one log line per call.
     """
     wrapped = tool_logger(safe_tool(spec.fn))
+    options: dict[str, Any] = {}
+    if spec.structured_output is not None:
+        options["structured_output"] = spec.structured_output
     if _legacy_names_enabled():
-        mcp.tool(name=spec.legacy_name)(wrapped)
-    mcp.tool(name=spec.v2_name)(wrapped)
+        mcp.tool(name=spec.legacy_name, **options)(wrapped)
+    mcp.tool(name=spec.v2_name, **options)(wrapped)
 
 
 def _register_read_tools() -> None:

@@ -203,3 +203,38 @@ async def test_capped_download_v1_and_pointer_paths() -> None:
     assert (await client.export_entry_with_meta(7, part="Edoc", max_bytes=100))[0] == b"x" * 50
     with pytest.raises(EdocTooLarge):
         await client.export_entry_with_meta(7, part="Edoc", max_bytes=10)
+
+
+async def test_capped_download_does_not_retry_permanent_non_network_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A status-less LaserficheError that did not come from a network failure (a bad
+    download-pointer scheme, an auth failure) is permanent: raise at once, no retries."""
+    client = await _client(lambda req: httpx.Response(200, content=b"x"))
+    calls: list[int] = []
+
+    async def always_fails(*args: object, **kwargs: object) -> tuple[bytes, str | None]:
+        calls.append(1)
+        raise LaserficheError("download pointer has an unsupported scheme")
+
+    monkeypatch.setattr(client, "_download_capped_once", always_fails)
+    with pytest.raises(LaserficheError, match="unsupported scheme"):
+        await client.export_entry_with_meta(7, part="Edoc", max_bytes=1000)
+    assert len(calls) == 1
+
+
+async def test_capped_download_still_retries_network_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = await _client(lambda req: httpx.Response(200, content=b"x"))
+    calls: list[int] = []
+
+    async def flaky(*args: object, **kwargs: object) -> tuple[bytes, str | None]:
+        calls.append(1)
+        if len(calls) < 3:
+            raise LaserficheError("Network error mid-download") from httpx.ReadError("cut")
+        return b"ok", "application/pdf"
+
+    monkeypatch.setattr(client, "_download_capped_once", flaky)
+    assert (await client.export_entry_with_meta(7, part="Edoc", max_bytes=1000))[0] == b"ok"
+    assert len(calls) == 3

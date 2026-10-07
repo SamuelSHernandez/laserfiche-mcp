@@ -419,7 +419,13 @@ class _CoreClient:
             except EdocTooLarge:
                 raise
             except LaserficheError as exc:
-                transient = exc.status_code is None or exc.status_code in _RETRYABLE_STATUS
+                # Retry network failures (the client wraps httpx errors, keeping them as
+                # __cause__) and retryable HTTP statuses. Other status-less errors (a bad
+                # download-pointer scheme, an auth failure) are permanent: raise at once.
+                transient = (
+                    isinstance(exc.__cause__, httpx.HTTPError)
+                    or exc.status_code in _RETRYABLE_STATUS
+                )
                 if not transient or attempt + 1 >= attempts:
                     raise
                 logger.warning(

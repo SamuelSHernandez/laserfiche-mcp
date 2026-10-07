@@ -197,5 +197,14 @@ async def test_tool_is_registered_and_returns_image_content_through_fastmcp(
 
     blocks = await server.mcp.call_tool("laserfiche_document_get_image", {"entry_id": 42})
 
-    kinds = [b.type for b in blocks]  # type: ignore[union-attr]
+    # A plain list of content blocks: NOT a (blocks, structured) tuple. FastMCP infers
+    # structured output from the return annotation differently on Python 3.10 vs
+    # 3.11+, which on 3.10 sent the image twice; the tool pins structured_output=False.
+    assert isinstance(blocks, list)
+    kinds = [b.type for b in blocks]
     assert kinds == ["image", "text"]
+
+
+async def test_image_tool_declares_no_output_schema_on_any_python_version() -> None:
+    tools = {t.name: t for t in await server.mcp.list_tools()}
+    assert tools["laserfiche_document_get_image"].outputSchema is None

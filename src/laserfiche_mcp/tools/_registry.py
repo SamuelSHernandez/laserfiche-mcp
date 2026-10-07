@@ -39,6 +39,11 @@ class ToolSpec:
     is_write: bool
     """If true, registration is gated behind ``LF_READ_ONLY=false`` and the
     ``LF_WRITE_TOOLS_ALLOWED`` allowlist."""
+    structured_output: bool | None = None
+    """Passed to FastMCP as ``structured_output``. ``None`` lets FastMCP infer it from the
+    return annotation; ``False`` pins "return the content blocks as-is" for tools that
+    return MCP content (images). Without it, inference differs across Python versions
+    (3.10 wraps ``-> Any`` in a duplicated ``result`` structure; 3.11+ does not)."""
 
 
 _REGISTRY: list[ToolSpec] = []
@@ -48,6 +53,7 @@ def register(
     *,
     v2_name: str,
     is_write: bool = False,
+    structured_output: bool | None = None,
 ) -> Callable[[ToolFn], ToolFn]:
     """Record this tool's metadata in the package-level registry.
 
@@ -73,6 +79,7 @@ def register(
                 legacy_name=fn.__name__,
                 v2_name=v2_name,
                 is_write=is_write,
+                structured_output=structured_output,
             )
         )
         return fn

@@ -377,6 +377,7 @@ def test_parse_tool_allowlist_returns_none_when_empty() -> None:
 # --- import-source: credential blocklist and '*' sentinel --------------------
 
 import os  # noqa: E402
+import sys  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -397,7 +398,6 @@ import pytest  # noqa: E402
         "/home/u/cert.pfx",
         "/home/u/vault.kdbx",
         "/home/u/id_ed25519",
-        "/proc/self/environ",
         r"C:\Users\u\.ssh\id_rsa",
         r"C:\Users\u\AppData\Roaming\Microsoft\Credentials\ABC",
         r"C:\Windows\System32\config\SAM",
@@ -422,6 +422,26 @@ def test_sensitive_source_paths_are_blocked(path: str) -> None:
     ],
 )
 def test_ordinary_documents_are_not_blocked(path: str) -> None:
+    assert permissions.sensitive_source_reason(path) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX system roots only exist on POSIX")
+@pytest.mark.parametrize("path", ["/proc/self/environ", "/sys/kernel/x", "/dev/sda"])
+def test_posix_system_roots_are_blocked_on_posix(path: str) -> None:
+    assert permissions.sensitive_source_reason(path) is not None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"C:\dev\docs\file.pdf",  # a folder merely NAMED dev, on a drive
+        r"D:\proc\notes.docx",
+        r"C:\sys\report.xlsx",
+        r"C:\Users\u\development\dev\spec.docx",
+    ],
+)
+def test_windows_folders_named_like_posix_roots_are_not_blocked(path: str) -> None:
+    """Regression: the drive letter used to be stripped, so C:\\dev\\... matched /dev."""
     assert permissions.sensitive_source_reason(path) is None
 
 
