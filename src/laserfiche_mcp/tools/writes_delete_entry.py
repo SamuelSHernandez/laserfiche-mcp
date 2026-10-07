@@ -23,6 +23,7 @@ from ._helpers import (
     entry_name,
     entry_path,
     entry_type,
+    entry_version,
     fetch_entry_for_op,
     require_writes_enabled,
     verify_confirmation_token,
@@ -74,7 +75,9 @@ def _delete_entry_preview(
     settings: Settings,
 ) -> dict[str, Any]:
     """Build the ``mode: preview`` response for ``delete_entry``."""
-    token = confirmation.create_token("delete_entry", entry_id, current_name)
+    token = confirmation.create_token(
+        "delete_entry", entry_id, current_name, version=entry_version(entry)
+    )
 
     if entry_kind == "Folder":
         descent = (
@@ -305,6 +308,7 @@ async def delete_entry(
         "delete_entry",
         entry_id,
         current_name,
+        version=entry_version(entry),
     )
     if token_err is not None:
         return token_err

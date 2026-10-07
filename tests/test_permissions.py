@@ -372,3 +372,80 @@ def test_parse_tool_allowlist_returns_none_when_empty() -> None:
     assert permissions.parse_tool_allowlist(None) is None
     assert permissions.parse_tool_allowlist("") is None
     assert permissions.parse_tool_allowlist("   ") is None
+
+
+# --- import-source: credential blocklist and '*' sentinel --------------------
+
+import os  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/home/u/.ssh/id_rsa",
+        "/home/u/.ssh/anything.txt",
+        "/home/u/.aws/credentials",
+        "/home/u/.gnupg/pubring.kbx",
+        "/srv/app/.env",
+        "/srv/app/.env.production",
+        "/home/u/.netrc",
+        "/home/u/.git-credentials",
+        "/home/u/.claude.json",
+        "/home/u/server.key",
+        "/home/u/cert.pfx",
+        "/home/u/vault.kdbx",
+        "/home/u/id_ed25519",
+        "/proc/self/environ",
+        r"C:\Users\u\.ssh\id_rsa",
+        r"C:\Users\u\AppData\Roaming\Microsoft\Credentials\ABC",
+        r"C:\Windows\System32\config\SAM",
+    ],
+)
+def test_sensitive_source_paths_are_blocked(path: str) -> None:
+    assert permissions.sensitive_source_reason(path) is not None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/home/u/Documents/report.pdf",
+        "/home/u/Downloads/images.png",
+        "/srv/app/.env.example",
+        "/srv/app/.env.sample",
+        "/srv/app/environment.txt",
+        "/home/u/notes/ssh-howto.docx",
+        "/home/u/keys-inventory.xlsx",
+        "/home/u/ca.pem",
+        r"C:\Users\u\Documents\Contract 2024.docx",
+    ],
+)
+def test_ordinary_documents_are_not_blocked(path: str) -> None:
+    assert permissions.sensitive_source_reason(path) is None
+
+
+def test_blocklist_follows_symlinks(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    secret_dir = tmp_path / ".ssh"
+    secret_dir.mkdir()
+    secret = secret_dir / "id_rsa"
+    secret.write_text("PRIVATE")
+    link = tmp_path / "harmless-looking.txt"
+    try:
+        os.symlink(secret, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not permitted on this system")
+    assert permissions.sensitive_source_reason(str(link)) is not None
+
+
+def test_star_sentinel_allows_any_path_explicitly() -> None:
+    ok, reason = permissions.local_source_path_allowed("/anywhere/doc.txt", "*")
+    assert ok and reason is None
+    ok, _ = permissions.local_source_path_allowed("/anywhere/doc.txt", "/srv/imports,*")
+    assert ok
+
+
+def test_star_does_not_disable_the_blocklist() -> None:
+    # '*' only lifts the directory fence; credential files stay refused.
+    assert permissions.local_source_path_allowed("/home/u/.ssh/id_rsa", "*")[0] is True
+    assert permissions.sensitive_source_reason("/home/u/.ssh/id_rsa") is not None

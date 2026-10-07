@@ -627,3 +627,91 @@ async def test_copy_entry_ambiguous_timeout_is_not_replayed_and_reports_unknown_
     assert "state" in result["reason"]  # tells the model to verify before retrying
     posts = [r for r in httpx_mock.get_requests() if r.method == "POST"]
     assert len(posts) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fence", [None, "*"])
+async def test_import_document_refuses_credential_files_even_when_unfenced(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+    fence: str | None,
+) -> None:
+    """Fence unset or '*': the always-on blocklist still refuses a .env file, and no
+    upload (POST) is ever attempted."""
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "import_source_dirs", fence)
+    secret = tmp_path / ".env"
+    secret.write_text("LF_PASSWORD=hunter2")
+
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    result = await server.import_document(100, "env.txt", str(secret))
+
+    assert result["mode"] == "error"
+    assert result["error"] == "source_path_not_allowed"
+    assert result["kind"] == "permission_denied"
+    assert "credential" in result["reason"]
+    assert not [r for r in httpx_mock.get_requests() if r.method == "POST"]
+
+
+@pytest.mark.asyncio
+async def test_import_document_star_fence_imports_ordinary_file(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+) -> None:
+    settings = server._get_settings()
+    monkeypatch.setattr(settings, "read_only", False)
+    monkeypatch.setattr(settings, "import_source_dirs", "*")
+    f = tmp_path / "doc.txt"
+    f.write_bytes(b"hello")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/Entries/100/doc.txt?autoRename=false",
+        status_code=201,
+        json={"entryCreate": {"entryId": 500}},
+    )
+    result = await server.import_document(100, "doc.txt", str(f))
+    assert result.get("entryCreate", {}).get("entryId") == 500
+
+
+@pytest.mark.asyncio
+async def test_import_document_logs_resolved_source_path(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+    import os
+
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    f = tmp_path / "doc.txt"
+    f.write_bytes(b"hello")
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/100",
+        json={"id": 100, "name": "Parent", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE}/Entries/100/doc.txt?autoRename=false",
+        status_code=201,
+        json={"entryCreate": {"entryId": 500}},
+    )
+    with caplog.at_level(logging.INFO, logger="laserfiche_mcp"):
+        await server.import_document(100, "doc.txt", str(f))
+    assert any(os.path.realpath(f) in r.getMessage() for r in caplog.records)

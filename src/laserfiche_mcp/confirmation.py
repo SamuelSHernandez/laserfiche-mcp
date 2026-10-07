@@ -30,6 +30,16 @@ Bindings carried in the token:
     entry_name_hash — sha256(entry_name)[:16]. If the entry was renamed
                       between preview and execute (or a different entry now
                       sits at this id), the token is rejected.
+    caller          — the verified identity of whoever requested the preview
+                      (OAuth ``sub``, else the client id); "-" on transports
+                      with no per-caller identity (stdio, static token). A
+                      token cannot be executed by a different caller, so one
+                      user's preview can never authorize another user's call.
+    version         — the entry's last-modified time at preview. If the entry
+                      changed in the meantime (including by executing this very
+                      operation) the token is rejected. This makes replay
+                      self-defeating without any server-side state, and means
+                      the user confirmed the entry as it actually was.
     params          — per-parameter hashes of the operation's execute-
                       relevant arguments (page_range for delete_pages,
                       new_name for rename_entry, new_parent_id + new_name
@@ -93,6 +103,33 @@ def _signing_key() -> bytes:
     return _SERVER_SECRET
 
 
+def _short_hash(value: object) -> str:
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:12]
+
+
+def _caller_segment() -> str:
+    """Hash of the verified caller identity for this request, or ``"-"`` if none.
+
+    Read from the MCP SDK's per-request auth context, which the OAuth verifier
+    populates before any tool runs. Under stdio or the static bearer token there
+    is exactly one principal and nothing to bind to, so the segment is ``"-"``.
+    """
+    try:
+        from mcp.server.auth.middleware.auth_context import get_access_token  # noqa: PLC0415
+
+        token = get_access_token()
+    except Exception:  # noqa: BLE001 — no request context (e.g. direct calls in tests)
+        return "-"
+    if token is None:
+        return "-"
+    identity = getattr(token, "subject", None) or getattr(token, "client_id", None)
+    return _short_hash(identity) if identity else "-"
+
+
+def _version_segment(version: object | None) -> str:
+    return "-" if version is None else _short_hash(version)
+
+
 def _entry_name_hash(entry_name: str) -> str:
     return hashlib.sha256(entry_name.encode("utf-8")).hexdigest()[:16]
 
@@ -141,6 +178,7 @@ def create_token(
     entry_name: str,
     *,
     params: Mapping[str, object] | None = None,
+    version: object | None = None,
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
 ) -> str:
     """Issue a confirmation token bound to (operation, entry_id, entry_name, params).
@@ -156,7 +194,10 @@ def create_token(
     expiry = int(time.time()) + ttl_seconds
     name_hash = _entry_name_hash(entry_name)
     params_seg = _encode_params(params)
-    payload = f"{operation}:{entry_id}:{name_hash}:{params_seg}:{expiry}"
+    payload = (
+        f"{operation}:{entry_id}:{name_hash}:{_caller_segment()}:"
+        f"{_version_segment(version)}:{params_seg}:{expiry}"
+    )
     sig = _sign(payload)
     raw = f"{payload}:{sig}".encode("ascii")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -169,6 +210,7 @@ def verify_token(
     entry_name: str,
     *,
     params: Mapping[str, object] | None = None,
+    version: object | None = None,
 ) -> tuple[bool, str | None]:
     """Validate a confirmation token.
 
@@ -178,7 +220,29 @@ def verify_token(
 
     Returns ``(ok, reason)``. If ``ok`` is False, ``reason`` is a
     human-readable explanation suitable for surfacing back to the LLM.
+
+    **Total**: this never raises, whatever it is handed. A malformed, hostile or
+    non-string token is simply "not valid"; verification failing closed must not
+    depend on every parsing step guarding itself. (Fuzzed in the test suite.)
     """
+    try:
+        return _verify_token(token, operation, entry_id, entry_name, params=params, version=version)
+    except Exception as exc:  # noqa: BLE001 — fail closed on anything unforeseen
+        logger.warning("confirmation token verification failed unexpectedly: %r", exc)
+        return False, "Token could not be verified. Request a fresh preview."
+
+
+def _verify_token(
+    token: str,
+    operation: str,
+    entry_id: int,
+    entry_name: str,
+    *,
+    params: Mapping[str, object] | None = None,
+    version: object | None = None,
+) -> tuple[bool, str | None]:
+    if not isinstance(token, str):
+        return False, "Token is not valid base64."
     try:
         padded = token + "=" * (-len(token) % 4)
         decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii")
@@ -186,17 +250,28 @@ def verify_token(
         return False, "Token is not valid base64."
 
     parts = decoded.split(":")
-    if len(parts) != 6:
+    if len(parts) != 8:
         return False, "Token is structurally invalid."
 
-    tok_op, tok_id_str, tok_name_hash, tok_params_seg, tok_exp_str, tok_sig = parts
+    (
+        tok_op,
+        tok_id_str,
+        tok_name_hash,
+        tok_caller,
+        tok_version,
+        tok_params_seg,
+        tok_exp_str,
+        tok_sig,
+    ) = parts
     try:
         tok_id = int(tok_id_str)
         tok_exp = int(tok_exp_str)
     except ValueError:
         return False, "Token contains non-integer fields."
 
-    payload = f"{tok_op}:{tok_id}:{tok_name_hash}:{tok_params_seg}:{tok_exp}"
+    payload = (
+        f"{tok_op}:{tok_id}:{tok_name_hash}:{tok_caller}:{tok_version}:{tok_params_seg}:{tok_exp}"
+    )
     expected = _sign(payload)
     if not hmac.compare_digest(expected, tok_sig):
         return (
@@ -216,6 +291,19 @@ def verify_token(
             "may have been renamed, or a different entry now sits at this "
             "id. Call the tool again without confirmation_token to get a "
             "fresh preview."
+        )
+
+    if tok_caller != _caller_segment():
+        return False, (
+            "Token was issued to a different caller. A preview authorizes only the "
+            "identity that requested it — call the tool again without "
+            "confirmation_token to get a fresh preview as yourself."
+        )
+    if tok_version != _version_segment(version):
+        return False, (
+            "The entry has changed since the preview (or this token was already used: "
+            "executing the operation modifies the entry). Call the tool again without "
+            "confirmation_token to preview the entry's current state."
         )
 
     expected_params_seg = _encode_params(params)

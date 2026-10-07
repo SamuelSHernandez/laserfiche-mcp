@@ -61,7 +61,9 @@
 | `delete_edoc`       | `laserfiche_document_edoc_delete`    | Wipe the electronic-document content; entry + metadata remain                    | yes             |
 | `delete_pages`      | `laserfiche_document_pages_delete`   | Delete specific page ranges; refuses empty `page_range` (would mean "delete all") | yes             |
 
-Tools with **two-step token** return a preview + HMAC-signed
+Tools with **two-step token** (a speed bump for the model, not a human
+approval — see [Safety model](safety.md#what-the-confirmation-token-is--and-is-not))
+return a preview + HMAC-signed
 `confirmation_token` on first call. Surface the preview to the user; on
 go-ahead, re-call with the same arguments plus the token. Tokens are
 bound to `(operation, entry_id, entry_name)` **and the operation's own

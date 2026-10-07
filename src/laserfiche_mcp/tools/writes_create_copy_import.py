@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 import os
 from typing import Annotated, Any
@@ -26,6 +27,8 @@ from ._validators import (
     validate_tag_names,
     validate_template_name,
 )
+
+logger = logging.getLogger("laserfiche_mcp")
 
 
 @register(v2_name="laserfiche_folder_create", is_write=True)
@@ -433,7 +436,29 @@ async def import_document(
             reason=source_reason,
         )
 
-    file_bytes, file_err = _read_import_file(file_path, settings.import_max_bytes)
+    blocked = permissions.sensitive_source_reason(file_path)
+    if blocked is not None:
+        return local_error(
+            "import_document",
+            "source_path_not_allowed",
+            file_path=file_path,
+            reason=(
+                f"Refusing to import {file_path!r}: {blocked}. Credential files and "
+                "key material are never imported, regardless of LF_IMPORT_SOURCE_DIRS."
+            ),
+        )
+
+    # Read the exact path that was just checked. Re-resolving the caller's string
+    # at open() time would leave a window to swap a symlink in after the fence
+    # check and the blocklist; the resolved path closes it.
+    resolved_path = os.path.realpath(file_path)
+    logger.info(
+        "import_document reading local file %s into parent %s as %r",
+        resolved_path,
+        parent_id,
+        name,
+    )
+    file_bytes, file_err = _read_import_file(resolved_path, settings.import_max_bytes)
     if file_err is not None:
         return file_err
 

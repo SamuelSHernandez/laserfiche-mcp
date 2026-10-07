@@ -39,7 +39,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JSON tool-call logs omit content-bearing arguments (`fields`, `comment`,
   `query`, ...).
 
+### Added
+- **Trust an internal CA without disabling TLS verification.** `LF_USE_SYSTEM_CA=true`
+  trusts the operating system's certificate store; `LF_CA_BUNDLE=<pem>` trusts an extra
+  CA file (they combine). Previously httpx trusted only its bundled public CAs, so a
+  server with an internal-CA certificate left `LF_VERIFY_SSL=false` as the only option —
+  which turns checking off entirely. Hostname verification stays on. Applies to the
+  Repository API, the password/OAuth/Cloud token exchanges, and `diagnose` now prints the
+  TLS mode. `LF_REQUIRE_HTTPS=true` refuses to start on a plain `http://` URL for a
+  non-loopback host (off by default; plain http still just warns).
+
+### Changed
+- **Error boundary.** Every tool is wrapped so no raw exception ever reaches the
+  model: anything unexpected becomes a structured error (new subkinds
+  `network_error`, `local_io_error`, `internal_error`, `outcome_unknown`,
+  `writes_disabled`) with the usual `kind` and `request_id`, the traceback goes to
+  the server log, and configured secrets are scrubbed from error responses. The
+  HTTP client now normalizes *every* `httpx` failure type (previously only a
+  handful), and a write that may have been applied is reported as
+  `outcome_unknown` rather than a generic server error. Previously 38 of 50
+  tool x failure combinations I tried surfaced as `Error executing tool …`.
+- `confirmation.verify_token` is now provably total (never raises; fuzz-tested)
+  and fails closed on anything unforeseen.
+
+### Deprecated
+- Leaving `LF_IMPORT_SOURCE_DIRS` unset while writes are enabled. It still works
+  (nothing changes for existing setups), but logs a startup warning and shows in
+  `diagnose`; a future major release is planned to refuse imports until a folder
+  is configured. `LF_IMPORT_SOURCE_DIRS=*` accepts any path explicitly.
+
 ### Security
+- **Confirmation tokens are now bound to the caller and to the entry state.** A token
+  can only be executed by the identity that requested the preview (OAuth user, else
+  client id; empty under stdio / static token), and only while the entry is unchanged
+  since the preview (last-modified time). Executing an operation changes the entry,
+  so the token that authorized it is refused if replayed — without server-side state,
+  which is why tokens are not single-use (rationale in docs/safety.md). Tokens issued
+  by an older version are rejected as "structurally invalid"; re-preview. **Behaviour
+  change:** a preview made by one identity (e.g. an unattended agent) can no longer be
+  executed by another (e.g. a human with the destructive scope) — the human previews
+  too, which is also what they should be doing.
+- OAuth: `LF_HTTP_OAUTH_ISSUER` and `LF_HTTP_OAUTH_JWKS_URL` must be `https://`
+  (loopback http allowed for local testing) or the server refuses to start. The key
+  fetch honours `LF_USE_SYSTEM_CA` / `LF_CA_BUNDLE` and is never weakened by
+  `LF_VERIFY_SSL=false`.
+- `import_document` always refuses well-known credential files (SSH/cloud keys,
+  `.env` files, `.claude.json`, private-key material, OS credential stores),
+  even with no fence or `*`; it reads from the exact resolved path that passed
+  the check (closing a symlink-swap race) and logs each source path.
+- Startup warnings when writes are enabled with `LF_IMPORT_SOURCE_DIRS` unset
+  (any readable local file can be imported), and when `LF_REPO_API_URL` /
+  `LF_OAUTH_TOKEN_URL` use plain `http://` (credentials and content unencrypted).
+- OAuth: a discovered or configured `jwks_uri` must be `https://` (loopback http
+  allowed), have a host and carry no embedded credentials, or signing keys are
+  not fetched.
+- Release job installs a pinned, SHA-256-verified `mcp-publisher` instead of
+  `latest`.
+- Docs state plainly that the destructive-op confirmation token is not a human
+  approval step.
 - Raised the `pypdf` floor to 6.19 (memory/CPU DoS advisories on crafted PDFs)
   and refreshed the lock (mcp, starlette, pyjwt, cryptography, anyio, idna,
   pydantic-settings, python-multipart). CI now runs `pip-audit`.

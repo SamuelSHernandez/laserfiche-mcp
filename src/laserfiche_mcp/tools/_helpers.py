@@ -151,6 +151,18 @@ def entry_type(entry: dict[str, Any] | None) -> str:
     return entry.get("entryType") or entry.get("EntryType") or ""
 
 
+def entry_version(entry: dict[str, Any] | None) -> str | None:
+    """The entry's last-modified time: the state a confirmation token is bound to.
+
+    ``None`` when the server doesn't report it — binding then degrades to the
+    other bindings (entry, name, parameters, caller) rather than failing.
+    """
+    if entry is None:
+        return None
+    value = entry.get("lastModifiedTime") or entry.get("LastModifiedTime")
+    return None if value is None else str(value)
+
+
 def entry_path(entry: dict[str, Any] | None) -> str | None:
     """Pull ``fullPath``/``FullPath`` out of an entry, ``None`` only when
     genuinely absent.
@@ -273,6 +285,7 @@ def verify_confirmation_token(
     current_name: str,
     *,
     params: Mapping[str, object] | None = None,
+    version: object | None = None,
 ) -> dict[str, Any] | None:
     """Verify a destructive tool's execute-leg token. Returns None on
     success, or the structured error to return verbatim on failure.
@@ -288,6 +301,7 @@ def verify_confirmation_token(
         entry_id,
         current_name,
         params=params,
+        version=version,
     )
     if not ok:
         return invalid_token_response(operation, entry_id, reason)

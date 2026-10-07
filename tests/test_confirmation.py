@@ -112,7 +112,7 @@ def test_token_rejected_when_structurally_short() -> None:
 def test_token_rejected_with_non_integer_fields() -> None:
     import base64
 
-    bad = base64.urlsafe_b64encode(b"delete_entry:notanint:abc:-:123:sig").decode().rstrip("=")
+    bad = base64.urlsafe_b64encode(b"delete_entry:notanint:abc:-:-:-:123:sig").decode().rstrip("=")
     ok, reason = confirmation.verify_token(bad, "delete_entry", 1, "x")
     assert ok is False
     assert reason is not None

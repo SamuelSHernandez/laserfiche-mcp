@@ -152,7 +152,10 @@ you assign to `LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE` from that client's grant.
 The agent can still call `delete_entry`/`delete_edoc`/`delete_pages` to get
 a **preview** — useful for it to reason about and surface to a human — but
 executing refuses with `destructive_scope_required` until a human's own
-token (which does carry the scope) makes the actual call. `move_entry` and
+token (which does carry the scope) makes the actual call. Confirmation
+tokens are bound to the identity that requested them, so the human can't
+reuse the agent's token: they run the preview themselves (a read-only call)
+and then execute with the token *they* were given. `move_entry` and
 `rename_entry` are unaffected by this gate: they're reversible, so an
 unattended agent can execute those on its own.
 
@@ -206,7 +209,7 @@ Both need a **public HTTPS URL**. Two common paths:
 
 ## Security checklist before exposing to a network
 
-- If writes are enabled, set `LF_IMPORT_SOURCE_DIRS`; unset, `import_document` can read any file the server process can.
+- If writes are enabled, set `LF_IMPORT_SOURCE_DIRS` to the folder(s) imports may come from; unset, `import_document` can read any file the server process can (except credential files, which are always refused).
 
 - [ ] An auth mode is configured: OAuth (`LF_HTTP_OAUTH_ISSUER`) for multi-user,
       or at least a long random `LF_HTTP_AUTH_TOKEN` for single-tenant.

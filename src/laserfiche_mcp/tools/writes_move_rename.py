@@ -15,6 +15,7 @@ from ._helpers import (
     entry_name,
     entry_path,
     entry_type,
+    entry_version,
     fetch_entry_for_op,
     require_writes_enabled,
     verify_confirmation_token,
@@ -33,7 +34,11 @@ def _rename_preview(
     # Bind new_name: the user confirms renaming to THIS name, so an
     # execute call with a different new_name must fail token verification.
     token = confirmation.create_token(
-        "rename_entry", entry_id, current_name, params={"new_name": new_name}
+        "rename_entry",
+        entry_id,
+        current_name,
+        params={"new_name": new_name},
+        version=entry_version(entry),
     )
     current_path = entry.get("fullPath") or entry.get("FullPath") or ""
     folder_path = entry.get("folderPath") or entry.get("FolderPath")
@@ -136,6 +141,7 @@ async def rename_entry(
         entry_id,
         current_name,
         params={"new_name": new_name},
+        version=entry_version(entry),
     )
     if token_err is not None:
         return token_err
@@ -176,6 +182,7 @@ def _move_preview(
         entry_id,
         current_name,
         params={"new_parent_id": new_parent_id, "new_name": new_name},
+        version=entry_version(entry),
     )
     final_name = new_name or current_name
     would_be_path = f"{target_path}\\{final_name}".rstrip("\\") if target_path else final_name
@@ -300,6 +307,7 @@ async def move_entry(
         entry_id,
         current_name,
         params={"new_parent_id": new_parent_id, "new_name": new_name},
+        version=entry_version(entry),
     )
     if token_err is not None:
         return token_err
