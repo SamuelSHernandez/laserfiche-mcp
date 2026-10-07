@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
+
 from .observability import get_request_id_or_new
 
 
@@ -40,10 +42,20 @@ class LaserficheError(Exception):
         message: str,
         status_code: int | None = None,
         detail: object | None = None,
+        *,
+        outcome_unknown: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.detail = detail
+        # True when the request may have reached the server and been applied
+        # before the failure (timeout after send, dropped reply). Callers must
+        # verify state before repeating a non-idempotent operation.
+        self.outcome_unknown = outcome_unknown
+
+
+class WritesDisabledError(RuntimeError):
+    """A write tool was invoked while ``LF_READ_ONLY=true`` (defense in depth)."""
 
 
 # Known Laserfiche-specific error codes (the ``errorCode`` field on
@@ -129,7 +141,12 @@ _SUBKIND_TO_KIND: dict[str, str] = {
     "extraction_failed": "invalid_input",
     "backend_unavailable": "invalid_input",
     "pypdf_unavailable": "invalid_input",
+    "writes_disabled": "permission_denied",
     # upstream_unavailable
+    "network_error": "upstream_unavailable",
+    "local_io_error": "upstream_unavailable",
+    "internal_error": "upstream_unavailable",
+    "outcome_unknown": "upstream_unavailable",
     "server_error": "upstream_unavailable",
     "method_not_allowed": "upstream_unavailable",
     "endpoint_disabled": "upstream_unavailable",
@@ -244,6 +261,13 @@ def classify_lf_error(
     status = exc.status_code
 
     slug, reason = _resolve_slug_and_reason(error_code, status, title, exc)
+    if exc.outcome_unknown:
+        slug = "outcome_unknown"
+        reason = (
+            "The request may have been received and applied before the connection "
+            "failed, and was NOT retried automatically. Check the entry's current "
+            "state (e.g. get_entry) before repeating this operation."
+        )
 
     out: dict[str, Any] = {
         "mode": "error",
@@ -323,3 +347,54 @@ def invalid_token_response(
             "preview and a new token."
         ),
     }
+
+
+def unexpected_error(
+    operation: str,
+    exc: BaseException,
+    *,
+    entry_id: int | None = None,
+) -> dict[str, Any]:
+    """Turn ANY exception that escaped a tool into a structured error.
+
+    The last line of defense: tools catch what they expect, and this makes
+    sure nothing else reaches the model as an opaque ``Error executing tool``
+    string. The returned text deliberately never includes ``str(exc)`` for
+    unknown failures — exception messages can carry paths, URLs or fragments
+    of credentials. The type name and ``request_id`` are enough to find the
+    full traceback in the server log.
+    """
+    payload = getattr(exc, "payload", None)  # ToolAbortedError carries its response
+    if isinstance(payload, dict) and payload.get("mode") == "error":
+        return payload
+    if isinstance(exc, LaserficheError):
+        return classify_lf_error(operation, exc, entry_id=entry_id)
+
+    extra: dict[str, Any] = {} if entry_id is None else {"entry_id": entry_id}
+    kind_name = type(exc).__name__
+
+    if isinstance(exc, WritesDisabledError):
+        return local_error(operation, "writes_disabled", reason=str(exc), **extra)
+    if isinstance(exc, (httpx.HTTPError, httpx.InvalidURL)):
+        subkind, reason = (
+            "network_error",
+            f"Network failure talking to Laserfiche ({kind_name}). It may be transient; "
+            "retrying can help.",
+        )
+    elif isinstance(exc, OSError):
+        subkind, reason = (
+            "local_io_error",
+            f"Local file or disk error on the MCP server ({kind_name}).",
+        )
+    else:
+        subkind, reason = (
+            "internal_error",
+            f"Unexpected error in the MCP server ({kind_name}). The details are in the "
+            "server log under this request_id.",
+        )
+    out = local_error(operation, subkind, reason=reason, **extra)
+    out["user_hint"] = (
+        "This needs whoever set up the Laserfiche connection. Give them this "
+        f"request id: {out['request_id']}."
+    )
+    return out

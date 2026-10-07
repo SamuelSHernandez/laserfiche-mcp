@@ -25,6 +25,7 @@ from ..auth import AuthStrategy
 from ..config import ApiVersion, AuthMode, Settings
 from ..errors import LaserficheError
 from ..observability import redact
+from ..tls import certificate_hint, tls_verify
 
 logger = logging.getLogger("laserfiche_mcp.client")
 
@@ -166,7 +167,7 @@ class _CoreClient:
     async def __aenter__(self: _SelfCore) -> _SelfCore:
         self._http = httpx.AsyncClient(
             timeout=self._settings.request_timeout_seconds,
-            verify=self._settings.verify_ssl,
+            verify=tls_verify(self._settings),
             headers={"Accept": "application/json"},
         )
         return self
@@ -234,7 +235,8 @@ class _CoreClient:
                         f"Network error on {request.method} {self._redact_url(request.url)}: "
                         f"{exc!r}. The request may have been received and applied, so it "
                         "was NOT retried automatically — outcome unknown. Check the "
-                        "entry's current state before repeating this operation."
+                        "entry's current state before repeating this operation.",
+                        outcome_unknown=True,
                     ) from exc
                 if attempt + 1 >= attempts:
                     break
@@ -250,6 +252,16 @@ class _CoreClient:
                 )
                 await asyncio.sleep(delay)
                 continue
+            except (httpx.HTTPError, httpx.InvalidURL) as exc:
+                # Everything else httpx can raise (WriteError, DecodingError,
+                # ProxyError, TooManyRedirects, UnsupportedProtocol, ...). Not
+                # retried — none of these is a known-transient condition — but
+                # always normalized, so no httpx type escapes the client.
+                raise LaserficheError(
+                    f"Network error on {request.method} {self._redact_url(request.url)}: "
+                    f"{type(exc).__name__}: {exc}",
+                    outcome_unknown=request.method not in _IDEMPOTENT_METHODS,
+                ) from exc
 
             if (
                 response.status_code in _RETRYABLE_STATUS
@@ -272,7 +284,8 @@ class _CoreClient:
             return response
 
         raise LaserficheError(
-            f"Network error after {attempts} attempt(s): {last_exc}",
+            f"Network error after {attempts} attempt(s): {last_exc}"
+            + certificate_hint(str(last_exc)),
         ) from last_exc
 
     async def _request_json(

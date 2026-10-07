@@ -622,6 +622,8 @@ async def test_copy_entry_ambiguous_timeout_is_not_replayed_and_reports_unknown_
     result = await server.copy_entry(42, 100, "Copy", auto_rename=True)
 
     assert result["mode"] == "error"
-    assert "outcome unknown" in str(result)
+    assert result["error"] == "outcome_unknown"
+    assert result["kind"] == "upstream_unavailable"
+    assert "state" in result["reason"]  # tells the model to verify before retrying
     posts = [r for r in httpx_mock.get_requests() if r.method == "POST"]
     assert len(posts) == 1

@@ -123,6 +123,26 @@ class Settings(BaseSettings):
         description="Verify the server's TLS certificate. Set false only for "
         "self-signed cert dev environments — emits a warning when disabled.",
     )
+    use_system_ca: bool = Field(
+        default=False,
+        description="Trust the operating system's certificate store instead of the "
+        "built-in list of public CAs. Set this when the Laserfiche server uses a "
+        "certificate from your organisation's internal CA (which is already installed "
+        "on managed machines) — it is the safe alternative to LF_VERIFY_SSL=false.",
+    )
+    ca_bundle: str | None = Field(
+        default=None,
+        description="Path to a PEM file of additional CA certificate(s) to trust "
+        "(e.g. your internal root CA). Added on top of the built-in public CAs, or on "
+        "top of the OS store when LF_USE_SYSTEM_CA=true.",
+    )
+    require_https: bool = Field(
+        default=False,
+        description="Refuse to start when LF_REPO_API_URL or LF_OAUTH_TOKEN_URL uses "
+        "plain http:// on a non-loopback host. Off by default so existing setups keep "
+        "working (they get a startup warning instead); turn it on to make plain HTTP "
+        "impossible.",
+    )
     request_timeout_seconds: float = Field(default=30.0, gt=0)
     retry_attempts: int = Field(
         default=3,
@@ -294,10 +314,12 @@ class Settings(BaseSettings):
         "resolve (symlinks included) to one of these directories or a "
         "descendant of one. Mirrors LF_WRITE_PATHS_ALLOW but fences the "
         "LOCAL source side of an import instead of the repository "
-        "destination. When unset (default), import_document will read any "
-        "local path the MCP process has filesystem access to — set this in "
-        "shared or multi-tenant deployments to restrict which directories "
-        "can be sourced from.",
+        "destination. Set '*' to allow any path explicitly (silences the "
+        "startup warning). When unset (default, deprecated), import_document "
+        "will read any local path the MCP process can read except an "
+        "always-on blocklist of credential files (SSH/cloud keys, .env files, "
+        "key material) — and a startup warning is logged. Unset is planned "
+        "to be refused in a future major release.",
     )
     web_client_url_template: str | None = Field(
         default=None,
@@ -480,6 +502,29 @@ class Settings(BaseSettings):
                 + ". See .env.example for the full list."
             )
 
+        if self.ca_bundle is not None and not os.path.isfile(self.ca_bundle):
+            raise ValueError(
+                f"LF_CA_BUNDLE {self.ca_bundle!r} is not a readable file. Point it at a "
+                "PEM file containing the CA certificate(s) to trust."
+            )
+
+        if self.require_https:
+            from urllib.parse import urlsplit  # noqa: PLC0415
+
+            for name, url in (
+                ("LF_REPO_API_URL", self.repo_api_url),
+                ("LF_OAUTH_TOKEN_URL", self.oauth_token_url),
+            ):
+                if url is None or url.scheme != "http":
+                    continue
+                host = urlsplit(str(url)).hostname or ""
+                if host not in ("127.0.0.1", "::1", "localhost"):
+                    raise ValueError(
+                        f"LF_REQUIRE_HTTPS=true but {name} is plain http:// ({host}). "
+                        "Use an https:// URL (see LF_USE_SYSTEM_CA / LF_CA_BUNDLE if the "
+                        "certificate comes from an internal CA)."
+                    )
+
         if cloud_mode and self.api_version is not ApiVersion.V2:
             raise ValueError(
                 "LF_DEPLOYMENT_MODE=cloud requires LF_API_VERSION=v2 — "
@@ -527,6 +572,19 @@ class Settings(BaseSettings):
             )
 
         if self.http_oauth_issuer is not None:
+            from .tls import validate_secure_url  # noqa: PLC0415
+
+            # The issuer decides whose tokens are believed; the JWKS URL decides which
+            # keys sign them. Both must be https (loopback http only, for local tests).
+            validate_secure_url(
+                str(self.http_oauth_issuer), source="LF_HTTP_OAUTH_ISSUER", what="issuer URL"
+            )
+            if self.http_oauth_jwks_url is not None:
+                validate_secure_url(
+                    str(self.http_oauth_jwks_url),
+                    source="LF_HTTP_OAUTH_JWKS_URL",
+                    what="JWKS URL",
+                )
             if self.http_public_url is None:
                 raise ValueError(
                     "LF_HTTP_PUBLIC_URL is required when LF_HTTP_OAUTH_ISSUER is set "

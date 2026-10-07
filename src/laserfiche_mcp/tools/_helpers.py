@@ -19,7 +19,13 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 
 from .. import _app, confirmation, permissions
 from .._app import get_settings
-from ..errors import LaserficheError, classify_lf_error, invalid_token_response, local_error
+from ..errors import (
+    LaserficheError,
+    WritesDisabledError,
+    classify_lf_error,
+    invalid_token_response,
+    local_error,
+)
 from ._registry import v2_rename_map
 
 # Every tool that returns text pulled out of a Laserfiche document body
@@ -105,7 +111,7 @@ def require_writes_enabled() -> None:
     """Defense-in-depth: write tools shouldn't be registered when read-only,
     but if anything slipped through, refuse to act."""
     if get_settings().read_only:
-        raise RuntimeError(
+        raise WritesDisabledError(
             "Write operations are disabled (LF_READ_ONLY=true). Restart with "
             "LF_READ_ONLY=false to enable write tools."
         )

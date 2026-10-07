@@ -80,6 +80,25 @@ non-2xx response. Direct unit tests cover every slug.
 | `rate_limited`             | HTTP 429                                                                       | `rate_limited`          | Back off and retry after a delay; the client also retries 429 with exponential backoff up to `LF_RETRY_ATTEMPTS`. |
 | `server_error`             | HTTP 5xx or any unrecognized failure                                           | `upstream_unavailable`  | Retry once, then surface to the user.                                               |
 
+## Safety-net errors (any tool)
+
+Every tool runs inside an error boundary (`safety.py`). Tools return precise
+errors for the failures they expect; anything else — a network error type the
+client doesn't special-case, a local disk error, a bug — is converted into one of
+these instead of reaching you as a raw `Error executing tool …` string. The full
+traceback is written to the server log under the response's `request_id`; the
+response itself never contains the exception's message (it can carry paths or
+fragments of credentials), and configured secrets are scrubbed from every error
+response.
+
+| Subkind            | When                                                                                          | Kind                    | What to do                                                                 |
+| ------------------ | --------------------------------------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------- |
+| `outcome_unknown`  | A write may have reached the server before the connection failed; it was **not** retried.      | `upstream_unavailable`  | **Check the entry's state (`get_entry`) before repeating** — it may have been applied. |
+| `network_error`    | A network-layer failure the client doesn't classify further (proxy, protocol, decoding, ...).  | `upstream_unavailable`  | Retry once; if it persists, give the user the `request_id`.                 |
+| `local_io_error`   | A local file/disk error on the MCP server.                                                    | `upstream_unavailable`  | Operator issue (permissions, disk space); relay the `request_id`.           |
+| `internal_error`   | An unexpected exception in the MCP server itself.                                              | `upstream_unavailable`  | Don't retry blindly; relay the `request_id` — the log has the traceback.    |
+| `writes_disabled`  | A write tool ran while `LF_READ_ONLY=true` (defense in depth; normally not registered).        | `permission_denied`     | Writes are off; the operator must set `LF_READ_ONLY=false`.                 |
+
 ## Tool-specific pre-server errors
 
 Some tools have additional `mode: "error"` shapes that fire **before**
@@ -99,7 +118,7 @@ literal `"error"`, like every other failure):
 | `missing_required_fields`     | `assign_template`                                                  | `LF_VALIDATE_REQUIRED_FIELDS=true` and one or more `isRequired` fields are unset and not supplied via `fields=`. Response includes `missing` (names) and `field_details` (full metadata). | `invalid_input`         |
 | `tool_not_allowed`            | every write tool                                                   | Tool name isn't in `LF_WRITE_TOOLS_ALLOWED`. (Belt-and-suspenders to the registration-time gate.) | `permission_denied`     |
 | `destructive_scope_required`  | `delete_entry`, `delete_edoc`, `delete_pages` (execute leg only)   | `LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE` is configured and the caller's OAuth token doesn't carry it. OAuth mode only. | `permission_denied`     |
-| `source_path_not_allowed`     | `import_document`                                                  | The local `file_path` doesn't resolve (symlinks included) under one of `LF_IMPORT_SOURCE_DIRS`. | `permission_denied`     |
+| `source_path_not_allowed`     | `import_document`                                                  | The local `file_path` doesn't resolve (symlinks included) under one of `LF_IMPORT_SOURCE_DIRS`, or it is a credential/key file (always refused). | `permission_denied`     |
 | `preview_does_not_accept_token` | every `..._preview` split tool                                   | `confirmation_token` was passed to the preview-only half of a split pair. Use the matching `..._execute` tool instead. | `invalid_input`         |
 | `execute_requires_token`      | every `..._execute` split tool                                    | `confirmation_token` is missing or empty on the execute-only half of a split pair. | `invalid_input`         |
 | `conflicting_modes`           | `tag_update`                                                       | Both `replace` and `add`/`remove` were passed — pick one.                             | `invalid_input`         |

@@ -27,6 +27,7 @@ from .client import LaserficheClient
 from .config import Settings, unknown_env_keys
 from .errors import LaserficheError
 from .observability import configure_logging
+from .tls import describe_tls
 
 logger = logging.getLogger("laserfiche_mcp")
 
@@ -426,6 +427,10 @@ def _print_write_mode_report(settings: Settings) -> None:
             "Write tools allowed",
             settings.write_tools_allowed or "(none — all write tools registered)",
         )
+        line(
+            "Import source fence",
+            settings.import_source_dirs or "(unset — any readable local file; deprecated)",
+        )
         line("Delete batch cap", str(settings.delete_folder_max_descendants))
         line("Audit reason required", str(settings.require_audit_reason).lower())
         line("Validate required fields", str(settings.validate_required_fields).lower())
@@ -539,6 +544,13 @@ async def _run_diagnose(settings: Settings) -> int:
     target_url = str(settings.repo_api_url).rstrip("/")
     print(f"  Target: {target_url}/{settings.repository_id} (API {settings.api_version.value})")
     print(f"  Auth:   mode={settings.auth_mode.value}, user={settings.username or '(none)'}")
+    scheme = settings.repo_api_url.scheme if settings.repo_api_url else ""
+    tls_summary = (
+        describe_tls(settings)
+        if scheme == "https"
+        else "NONE — plain http:// (traffic is unencrypted)"
+    )
+    print(f"  TLS:    {tls_summary}")
     print()
     print("Endpoint probes:")
 
@@ -657,6 +669,53 @@ def _warn_on_unknown_env_keys() -> None:
             ".env.example for the full list of recognized names.",
             ", ".join(unknown),
         )
+
+
+def risky_config_warnings(settings: Settings) -> list[str]:
+    """Plain-language warnings about configurations that are legal but risky.
+
+    Pure (no logging, no I/O) so it can be unit-tested and reused by
+    ``diagnose``. Each entry is one self-contained message.
+    """
+    from . import permissions  # noqa: PLC0415
+    from .http_transport import is_loopback  # noqa: PLC0415
+
+    out: list[str] = []
+
+    if not settings.read_only:
+        import_ok, _ = permissions.tool_allowed(
+            ("import_document", "laserfiche_document_import"), settings.write_tools_allowed
+        )
+        if import_ok and not settings.import_source_dirs:
+            out.append(
+                "Writes are enabled and LF_IMPORT_SOURCE_DIRS is not set: the "
+                "import_document tool can read ANY file this process can read "
+                "(SSH keys, other users' documents, config files) and upload it into "
+                "the repository (credential files such as SSH keys and .env files are "
+                "always blocked, but everything else is reachable). Set "
+                "LF_IMPORT_SOURCE_DIRS to the folder(s) imports may come from, or "
+                "LF_IMPORT_SOURCE_DIRS=* to accept any path explicitly and silence this "
+                "warning, or exclude import_document via LF_WRITE_TOOLS_ALLOWED. Leaving "
+                "it unset is deprecated and is planned to be refused in a future "
+                "major release."
+            )
+
+    for name, url in (
+        ("LF_REPO_API_URL", settings.repo_api_url),
+        ("LF_OAUTH_TOKEN_URL", settings.oauth_token_url),
+    ):
+        if url is not None and url.scheme == "http" and not is_loopback(url.host or ""):
+            out.append(
+                f"{name} uses plain http:// ({url.host}): the Laserfiche username and "
+                "password (or bearer tokens) and all document content cross the network "
+                "unencrypted. Use https:// if the server offers it."
+            )
+    return out
+
+
+def _warn_on_risky_config(settings: Settings) -> None:
+    for message in risky_config_warnings(settings):
+        logger.warning(message)
 
 
 def _url_problem(url: str) -> str | None:
@@ -941,6 +1000,7 @@ def main(register_writes: Callable[[], None]) -> None:
         sys.exit(run_command(settings, args))
 
     register_writes()
+    _warn_on_risky_config(settings)
 
     if args.http:
         # CLI overrides win over LF_HTTP_* env for this run.

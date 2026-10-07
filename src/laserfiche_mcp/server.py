@@ -44,6 +44,7 @@ from .cli import (
     main as _cli_main,
 )
 from .observability import tool_logger
+from .safety import safe_tool
 
 # Import every tool module so each ``@register`` fires and the registry
 # is populated before _register_read_tools() runs below.
@@ -106,13 +107,14 @@ def _register_one(spec: ToolSpec) -> None:
     shim through v2.x, registered only when ``LF_LEGACY_TOOL_NAMES=true``
     (opt-in as of v2.3.0 — see ``_legacy_names_enabled``).
 
-    The function is wrapped with ``tool_logger`` so every call (regardless
+    Every tool is wrapped with ``safe_tool`` (the error boundary: no raw
+    exception or secret ever reaches the model) and then ``tool_logger`` so every call (regardless
     of which name the agent used) emits one structured log event with a
     UUID4 ``request_id`` propagated via ContextVar to ``classify_lf_error``.
     The decorator is idempotent, so applying it once and registering the
     same wrapped function under both names gives one log line per call.
     """
-    wrapped = tool_logger(spec.fn)
+    wrapped = tool_logger(safe_tool(spec.fn))
     if _legacy_names_enabled():
         mcp.tool(name=spec.legacy_name)(wrapped)
     mcp.tool(name=spec.v2_name)(wrapped)

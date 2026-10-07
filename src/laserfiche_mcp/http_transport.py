@@ -157,10 +157,19 @@ def _configure_oauth(mcp: object, settings: Settings) -> str:
     verifier = build_token_verifier(settings)
     # AuthSettings coerces str -> AnyHttpUrl at runtime; the ignores are just for
     # the annotated-URL parameter types.
+    auth_kwargs: dict[str, object] = {}
+    if "validate_token_resource" in AuthSettings.model_fields:
+        # Newer mcp releases will default this to True, comparing the token's
+        # resource to the public URL. Our verifier already enforces the `aud`
+        # claim against LF_HTTP_OAUTH_AUDIENCE (which may legitimately differ
+        # from the public URL, e.g. api://laserfiche-mcp), so the SDK's check
+        # would reject valid tokens. State the choice explicitly.
+        auth_kwargs["validate_token_resource"] = False
     mcp.settings.auth = AuthSettings(  # type: ignore[attr-defined]
         issuer_url=str(settings.http_oauth_issuer),  # type: ignore[arg-type]
         resource_server_url=str(settings.http_public_url),  # type: ignore[arg-type]
         required_scopes=settings.oauth_required_scopes or None,
+        **auth_kwargs,  # type: ignore[arg-type]
     )
     # Both must be set together — FastMCP only validates this pairing at
     # construction, which we bypass by injecting post-hoc.

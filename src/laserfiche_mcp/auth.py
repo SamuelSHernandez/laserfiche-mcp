@@ -43,6 +43,7 @@ import asyncio
 import base64
 import json
 import logging
+import ssl
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -54,6 +55,7 @@ from pydantic import SecretStr
 from ._pyjwt_support import require_pyjwt
 from .config import ApiVersion, AuthMode, Settings
 from .errors import LaserficheError
+from .tls import certificate_hint, tls_verify
 
 logger = logging.getLogger("laserfiche_mcp.auth")
 
@@ -95,7 +97,7 @@ async def _post_token(
         raise LaserficheError(
             f"Could not reach the Laserfiche token endpoint for the "
             f"{grant} grant: {exc!r}. Check LF_REPO_API_URL and network "
-            f"reachability."
+            f"reachability." + certificate_hint(str(exc))
         ) from exc
 
     if resp.status_code >= 400:
@@ -141,7 +143,7 @@ class PasswordGrantStrategy(AuthStrategy):
         username: str,
         password: SecretStr,
         api_version: ApiVersion = ApiVersion.V1,
-        verify_ssl: bool = True,
+        verify_ssl: bool | ssl.SSLContext = True,
         timeout_seconds: float = 30.0,
     ) -> None:
         if not base_url.endswith("/"):
@@ -212,7 +214,7 @@ class OAuthClientCredentialsStrategy(AuthStrategy):
         client_id: str,
         client_secret: SecretStr,
         scope: str | None = None,
-        verify_ssl: bool = True,
+        verify_ssl: bool | ssl.SSLContext = True,
         timeout_seconds: float = 30.0,
     ) -> None:
         self._token_url = token_url
@@ -326,7 +328,7 @@ class CloudServiceAppStrategy(AuthStrategy):
         access_key_b64: str,
         service_principal_key: SecretStr,
         scope: str | None = None,
-        verify_ssl: bool = True,
+        verify_ssl: bool | ssl.SSLContext = True,
         timeout_seconds: float = 30.0,
     ) -> None:
         access_key = _decode_cloud_access_key(access_key_b64)
@@ -473,7 +475,7 @@ def build_auth_strategy(settings: Settings) -> AuthStrategy:
             username=settings.username,
             password=settings.password,
             api_version=settings.api_version,
-            verify_ssl=settings.verify_ssl,
+            verify_ssl=tls_verify(settings),
             timeout_seconds=settings.request_timeout_seconds,
         )
 
@@ -484,7 +486,7 @@ def build_auth_strategy(settings: Settings) -> AuthStrategy:
             client_id=settings.client_id,
             client_secret=settings.client_secret,
             scope=settings.oauth_scope,
-            verify_ssl=settings.verify_ssl,
+            verify_ssl=tls_verify(settings),
             timeout_seconds=settings.request_timeout_seconds,
         )
 
@@ -495,7 +497,7 @@ def build_auth_strategy(settings: Settings) -> AuthStrategy:
             access_key_b64=settings.cloud_access_key.get_secret_value(),
             service_principal_key=settings.cloud_service_principal_key,
             scope=settings.oauth_scope,
-            verify_ssl=settings.verify_ssl,
+            verify_ssl=tls_verify(settings),
             timeout_seconds=settings.request_timeout_seconds,
         )
 

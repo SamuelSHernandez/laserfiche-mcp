@@ -229,7 +229,8 @@ laserfiche-mcp diagnose
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `diagnose` says UNREACHABLE | Wrong URL, VPN down, or self-signed certificate | Fix the URL; for internal certs only, `LF_VERIFY_SSL=false` (dev use) |
+| `diagnose` says UNREACHABLE | Wrong URL, VPN down, or an `https://` server whose certificate comes from your internal CA | Fix the URL; for an internal CA set `LF_USE_SYSTEM_CA=true` (or `LF_CA_BUNDLE=<pem>`) — not `LF_VERIFY_SSL=false`, which switches checking off |
+| `CERTIFICATE_VERIFY_FAILED ... hostname mismatch` | The URL's host isn't a name on the certificate (e.g. short name vs. the full `host.domain` name) | Use the host name on the certificate in `LF_REPO_API_URL` |
 | `diagnose` suggests the other API version | `LF_API_VERSION` mismatch | Use the version it names |
 | HTTP 401, or Laserfiche error 9528 | Bad credentials (9528's "LFDS unreachable" wording is misleading) | Re-run `laserfiche-mcp setup` |
 | A setting seems ignored | A misspelled `LF_*` name — unknown names are silently skipped | `diagnose` lists any `LF_*` variable it doesn't recognize |
