@@ -86,6 +86,7 @@ class _EntriesMixin(_CoreClient):
                 "POST",
                 self._repo_path("SimpleSearches"),
                 json={"searchCommand": query},
+                retry_ambiguous=True,
             )
             value = raw.get("value")
             if isinstance(value, list) and len(value) > max_results:
@@ -96,6 +97,7 @@ class _EntriesMixin(_CoreClient):
             self._repo_path("SimpleSearches"),
             params={"$top": max_results},
             json={"searchCommand": query},
+            retry_ambiguous=True,
         )
 
     async def get_field_values(self, entry_id: int) -> dict[str, Any]:
@@ -183,10 +185,14 @@ class _EntriesMixin(_CoreClient):
         entry_id: int,
         *,
         part: str = "Edoc",
+        max_bytes: int | None = None,
     ) -> tuple[bytes, str | None]:
         """Like :meth:`export_entry` but also returns the response Content-Type.
 
         Same v1/v2 routing rules apply. v1 only supports ``part='Edoc'``.
+        With ``max_bytes``, the body is streamed and :class:`EdocTooLarge` is
+        raised the moment it passes the cap, so memory stays bounded even when
+        the server sends no Content-Length.
         """
         if self._api_version is ApiVersion.V1:
             if part != "Edoc":
@@ -196,16 +202,26 @@ class _EntriesMixin(_CoreClient):
                     f"bytes) is supported on v1; set LF_API_VERSION=v2 if "
                     f"your server supports it."
                 )
-            return await self._request_bytes_with_meta(
-                "GET",
-                self._repo_path(f"Entries/{entry_id}/Laserfiche.Repository.Document/edoc"),
-            )
+            v1_url = self._repo_path(f"Entries/{entry_id}/Laserfiche.Repository.Document/edoc")
+            if max_bytes is not None:
+                return await self._request_bytes_capped("GET", v1_url, max_bytes=max_bytes)
+            return await self._request_bytes_with_meta("GET", v1_url)
 
+        export_url = self._repo_path(f"Entries/{entry_id}/Export")
+        if max_bytes is not None:
+            return await self._request_bytes_capped(
+                "POST",
+                export_url,
+                json={"part": part},
+                max_bytes=max_bytes,
+                follow_download_pointer=True,
+            )
         return await self._request_bytes_with_meta(
             "POST",
-            self._repo_path(f"Entries/{entry_id}/Export"),
+            export_url,
             json={"part": part},
             follow_download_pointer=True,
+            retry_ambiguous=True,
         )
 
     async def export_entry_to_file(

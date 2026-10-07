@@ -80,6 +80,25 @@ non-2xx response. Direct unit tests cover every slug.
 | `rate_limited`             | HTTP 429                                                                       | `rate_limited`          | Back off and retry after a delay; the client also retries 429 with exponential backoff up to `LF_RETRY_ATTEMPTS`. |
 | `server_error`             | HTTP 5xx or any unrecognized failure                                           | `upstream_unavailable`  | Retry once, then surface to the user.                                               |
 
+## Safety-net errors (any tool)
+
+Every tool runs inside an error boundary (`safety.py`). Tools return precise
+errors for the failures they expect; anything else — a network error type the
+client doesn't special-case, a local disk error, a bug — is converted into one of
+these instead of reaching you as a raw `Error executing tool …` string. The full
+traceback is written to the server log under the response's `request_id`; the
+response itself never contains the exception's message (it can carry paths or
+fragments of credentials), and configured secrets are scrubbed from every error
+response.
+
+| Subkind            | When                                                                                          | Kind                    | What to do                                                                 |
+| ------------------ | --------------------------------------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------- |
+| `outcome_unknown`  | A write may have reached the server before the connection failed; it was **not** retried.      | `upstream_unavailable`  | **Check the entry's state (`get_entry`) before repeating** — it may have been applied. |
+| `network_error`    | A network-layer failure the client doesn't classify further (proxy, protocol, decoding, ...).  | `upstream_unavailable`  | Retry once; if it persists, give the user the `request_id`.                 |
+| `local_io_error`   | A local file/disk error on the MCP server.                                                    | `upstream_unavailable`  | Operator issue (permissions, disk space); relay the `request_id`.           |
+| `internal_error`   | An unexpected exception in the MCP server itself.                                              | `upstream_unavailable`  | Don't retry blindly; relay the `request_id` — the log has the traceback.    |
+| `writes_disabled`  | A write tool ran while `LF_READ_ONLY=true` (defense in depth; normally not registered).        | `permission_denied`     | Writes are off; the operator must set `LF_READ_ONLY=false`.                 |
+
 ## Tool-specific pre-server errors
 
 Some tools have additional `mode: "error"` shapes that fire **before**
@@ -99,7 +118,7 @@ literal `"error"`, like every other failure):
 | `missing_required_fields`     | `assign_template`                                                  | `LF_VALIDATE_REQUIRED_FIELDS=true` and one or more `isRequired` fields are unset and not supplied via `fields=`. Response includes `missing` (names) and `field_details` (full metadata). | `invalid_input`         |
 | `tool_not_allowed`            | every write tool                                                   | Tool name isn't in `LF_WRITE_TOOLS_ALLOWED`. (Belt-and-suspenders to the registration-time gate.) | `permission_denied`     |
 | `destructive_scope_required`  | `delete_entry`, `delete_edoc`, `delete_pages` (execute leg only)   | `LF_HTTP_OAUTH_DESTRUCTIVE_SCOPE` is configured and the caller's OAuth token doesn't carry it. OAuth mode only. | `permission_denied`     |
-| `source_path_not_allowed`     | `import_document`                                                  | The local `file_path` doesn't resolve (symlinks included) under one of `LF_IMPORT_SOURCE_DIRS`. | `permission_denied`     |
+| `source_path_not_allowed`     | `import_document`                                                  | The local `file_path` doesn't resolve (symlinks included) under one of `LF_IMPORT_SOURCE_DIRS`, or it is a credential/key file (always refused). | `permission_denied`     |
 | `preview_does_not_accept_token` | every `..._preview` split tool                                   | `confirmation_token` was passed to the preview-only half of a split pair. Use the matching `..._execute` tool instead. | `invalid_input`         |
 | `execute_requires_token`      | every `..._execute` split tool                                    | `confirmation_token` is missing or empty on the execute-only half of a split pair. | `invalid_input`         |
 | `conflicting_modes`           | `tag_update`                                                       | Both `replace` and `add`/`remove` were passed — pick one.                             | `invalid_input`         |
@@ -126,6 +145,8 @@ literal `"error"`, like every other failure):
 | `pdf_encrypted` / `pdf_open_failed` / `extraction_failed` | `get_document_edoc(mode="text")` | The PDF is password-protected, unparseable, or a local scratch-file failure interrupted extraction. | `invalid_input`         |
 | `pdf_extraction_failed`       | `get_document_edoc(mode="text")`                                   | A pypdf-internal failure not otherwise classified (encrypted/open-failed have their own subkinds above). | `invalid_input`         |
 | `pypdf_unavailable`           | `get_document_edoc(mode="text")`                                   | `pypdf` isn't importable in this environment (it's a base dependency; only reachable on a broken/incomplete install). | `invalid_input`         |
+| `image_too_large`             | `get_document_image`                                               | Image over `LF_IMAGE_MAX_BYTES` (or the download cap) and Pillow isn't installed to downscale it, or it couldn't be shrunk enough. | `invalid_input`         |
+| `unsupported_image_format`    | `get_document_image`                                               | Not PNG/JPEG/GIF/WebP and Pillow isn't installed to convert it (`laserfiche-mcp[images]`). | `invalid_input`         |
 | `unsupported_format`          | `get_document_edoc(mode="text")`                                   | No extractor for this format (typically a scanned image with no text layer). `hint` routes to `search_content`, which reads the OCR index. | `invalid_input`         |
 | `legacy_office_format`        | `get_document_edoc(mode="text")`                                   | Binary .doc/.xls/.ppt need an external converter; message names the path. | `invalid_input`         |
 | `not_a_zip` / `malformed_docx` / `xlsx_open_failed` / `msg_open_failed` / `malformed_eml` | `get_document_edoc(mode="text")` | The file claims an OOXML/mail format but cannot be parsed (`malformed_eml` covers .eml, e.g. an unrecognized charset). | `invalid_input`         |

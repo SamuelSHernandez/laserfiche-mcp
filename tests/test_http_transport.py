@@ -197,3 +197,57 @@ def test_build_http_app_static_token_clears_fastmcp_auth(
     from laserfiche_mcp import _app
 
     assert _app.mcp.settings.auth is None
+
+
+# --- audit regressions -------------------------------------------------------
+
+
+def test_bearer_middleware_non_ascii_header_is_401_not_500() -> None:
+    client = _client_with_token("letmein")
+    resp = client.get("/", headers={"Authorization": "Bearer café".encode("latin-1")})
+    assert resp.status_code == 401
+
+
+def test_public_host_allowed_and_unknown_host_rejected() -> None:
+    # One app lifespan per process (FastMCP's session manager is a singleton),
+    # so both Host cases share a single client.
+    from laserfiche_mcp.http_transport import build_http_app
+    from laserfiche_mcp.server import mcp
+
+    # The session manager (which captures transport security) is built lazily
+    # once per FastMCP instance; reset it so earlier tests can't pin it.
+    mcp._session_manager = None
+
+    settings = Settings(
+        _env_file=None,
+        repo_api_url="https://lf.example.com/LFRepositoryAPI",
+        repository_id="r",
+        username="u",
+        password="p",
+        http_host="0.0.0.0",
+        http_auth_token="secret",
+        http_public_url="https://mcp.example.org/mcp",
+    )
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "t", "version": "1"},
+        },
+    }
+
+    def post(client: TestClient, host: str) -> int:
+        headers = {
+            "Authorization": "Bearer secret",
+            "Accept": "application/json, text/event-stream",
+            "Host": host,
+        }
+        return client.post("/mcp", json=init, headers=headers).status_code
+
+    with TestClient(build_http_app(settings), raise_server_exceptions=False) as client:
+        assert post(client, "mcp.example.org") == 200
+        assert post(client, "evil.example.net") == 421
+    mcp._session_manager = None

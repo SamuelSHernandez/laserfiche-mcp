@@ -49,7 +49,13 @@ Laserfiche accounts, useless to an end user who doesn't.
 | `LF_VALIDATE_NAMES`                 | `true`  | Pre-flight field / tag / template / link-type names against cached schema definitions; returns `invalid_*_name` instead of an opaque 400 |
 | `LF_SCHEMA_CACHE_TTL_SECONDS`       | `300`   | Cache window for the schema-definition lookups that back `LF_VALIDATE_NAMES` and `LF_VALIDATE_REQUIRED_FIELDS`. Set to `0` to disable caching. |
 | `LF_IMPORT_MAX_BYTES`               | `25 MB` | Client-side cap on `import_document` payload size                                |
-| `LF_IMPORT_SOURCE_DIRS`             | unset   | Comma-separated local directories `import_document` may read `file_path` from (symlinks resolved before comparison). Unset: any path the MCP process can read is accepted. |
+| `LF_IMPORT_SOURCE_DIRS`             | unset   | Comma-separated local directories `import_document` may read `file_path` from (symlinks resolved before comparison). `*` = accept any path explicitly. **Unset is deprecated**: any readable path is accepted (except the always-on credential-file blocklist) and a startup warning is logged. |
+| `LF_USE_SYSTEM_CA`                  | `false` | Trust the OS certificate store — Windows certificate store, or the Linux CA directory; on macOS use `LF_CA_BUNDLE` (instead of the built-in public CAs). Set this when the server's certificate is from your internal CA — the safe alternative to `LF_VERIFY_SSL=false` |
+| `LF_CA_BUNDLE`                      | unset   | PEM file of extra CA certificate(s) to trust; combines with `LF_USE_SYSTEM_CA` |
+| `LF_REQUIRE_HTTPS`                  | `false` | Refuse to start if `LF_REPO_API_URL` / `LF_OAUTH_TOKEN_URL` is plain `http://` on a non-loopback host (otherwise a startup warning) |
+| `LF_IMAGE_WARN_TOKENS`              | `1000`  | Estimated token cost above which `get_document_image` returns a cost warning instead of the image until `acknowledge_cost=true` (0 = always warn) |
+| `LF_IMAGE_MAX_BYTES`                | `5 MB`  | Largest image returned to the model; larger ones are downscaled with Pillow (`laserfiche-mcp[images]`) or refused |
+| `LF_IMAGE_MAX_EDGE`                 | `1568`  | Longest edge (px) images are downscaled to when Pillow is installed |
 | `LF_EDOC_MAX_BYTES`                 | `25 MB` | Cap on `get_document_edoc` downloads in `bytes`/`text` modes                     |
 | `LF_SEARCH_TIMEOUT_SECONDS`         | `60`    | How long `search_content` waits for an async search before abandoning it         |
 | `LF_SEARCH_POLL_INTERVAL_SECONDS`   | `1`     | Delay between `search_content` status polls; backs off toward 2s on long searches |

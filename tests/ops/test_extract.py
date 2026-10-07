@@ -353,3 +353,20 @@ def test_sanitize_prefixes_reserved_device_names() -> None:
 def test_sanitize_falls_back_when_nothing_survives() -> None:
     assert extract.sanitize_filename("???", fallback="42.bin") == "42.bin"
     assert extract.sanitize_filename("", fallback="42.bin") == "42.bin"
+
+
+def test_ooxml_zip_bomb_is_refused(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
+    import zipfile
+
+    from laserfiche_mcp.ops import extract as ex
+
+    bomb = tmp_path / "bomb.docx"
+    with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("word/document.xml", "<w:document/>" + " " * 4096)
+    monkeypatch.setattr(ex, "_MAX_OOXML_UNCOMPRESSED_BYTES", 1024)
+    try:
+        ex.extract(bomb, content_type=None, filename="bomb.docx")
+    except ex.ExtractionError as exc:
+        assert exc.slug == "archive_too_large"
+    else:
+        raise AssertionError("expected ExtractionError")

@@ -213,15 +213,30 @@ def _extract_pdf(path: Path) -> ExtractedText:
     return ExtractedText(text="\n".join(pages), backend="pypdf", pages=pages, warnings=warnings)
 
 
+# Zip-bomb guard: a tiny OOXML file can declare gigabytes of uncompressed XML.
+# ``ZipFile.read()`` honors the declared size, so refusing on the declared total
+# bounds memory without having to decompress anything.
+_MAX_OOXML_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+
+
 def _open_ooxml(path: Path) -> zipfile.ZipFile:
     try:
-        return zipfile.ZipFile(path)
+        archive = zipfile.ZipFile(path)
     except zipfile.BadZipFile as exc:
         raise ExtractionError(
             "not_a_zip",
             "File is not a valid OOXML package (expected a zip container). "
             "It may be a legacy binary Office file with a modern extension.",
         ) from exc
+    declared = sum(info.file_size for info in archive.infolist())
+    if declared > _MAX_OOXML_UNCOMPRESSED_BYTES:
+        archive.close()
+        raise ExtractionError(
+            "archive_too_large",
+            f"Package declares {declared} bytes uncompressed, over the "
+            f"{_MAX_OOXML_UNCOMPRESSED_BYTES}-byte safety limit (possible zip bomb).",
+        )
+    return archive
 
 
 def _docx_paragraph_text(paragraph: ElementTree.Element) -> str:

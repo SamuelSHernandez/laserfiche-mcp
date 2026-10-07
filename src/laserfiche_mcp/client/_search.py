@@ -60,6 +60,7 @@ class _SearchMixin(_CoreClient):
             "POST",
             self._repo_path(suffix),
             json={"searchCommand": query},
+            retry_ambiguous=True,
         )
         # v1 answers {"token": ...}; v2 answers {"taskId": ...}. Some builds
         # PascalCase both. Accept whichever is present rather than branching on

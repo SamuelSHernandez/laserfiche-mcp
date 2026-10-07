@@ -19,7 +19,13 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 
 from .. import _app, confirmation, permissions
 from .._app import get_settings
-from ..errors import LaserficheError, classify_lf_error, invalid_token_response, local_error
+from ..errors import (
+    LaserficheError,
+    WritesDisabledError,
+    classify_lf_error,
+    invalid_token_response,
+    local_error,
+)
 from ._registry import v2_rename_map
 
 # Every tool that returns text pulled out of a Laserfiche document body
@@ -105,7 +111,7 @@ def require_writes_enabled() -> None:
     """Defense-in-depth: write tools shouldn't be registered when read-only,
     but if anything slipped through, refuse to act."""
     if get_settings().read_only:
-        raise RuntimeError(
+        raise WritesDisabledError(
             "Write operations are disabled (LF_READ_ONLY=true). Restart with "
             "LF_READ_ONLY=false to enable write tools."
         )
@@ -143,6 +149,18 @@ def entry_type(entry: dict[str, Any] | None) -> str:
     if entry is None:
         return ""
     return entry.get("entryType") or entry.get("EntryType") or ""
+
+
+def entry_version(entry: dict[str, Any] | None) -> str | None:
+    """The entry's last-modified time: the state a confirmation token is bound to.
+
+    ``None`` when the server doesn't report it — binding then degrades to the
+    other bindings (entry, name, parameters, caller) rather than failing.
+    """
+    if entry is None:
+        return None
+    value = entry.get("lastModifiedTime") or entry.get("LastModifiedTime")
+    return None if value is None else str(value)
 
 
 def entry_path(entry: dict[str, Any] | None) -> str | None:
@@ -267,6 +285,7 @@ def verify_confirmation_token(
     current_name: str,
     *,
     params: Mapping[str, object] | None = None,
+    version: object | None = None,
 ) -> dict[str, Any] | None:
     """Verify a destructive tool's execute-leg token. Returns None on
     success, or the structured error to return verbatim on failure.
@@ -282,6 +301,7 @@ def verify_confirmation_token(
         entry_id,
         current_name,
         params=params,
+        version=version,
     )
     if not ok:
         return invalid_token_response(operation, entry_id, reason)

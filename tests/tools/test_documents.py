@@ -900,3 +900,72 @@ async def test_edoc_info_mode_surfaces_http_errors_structurally(
     assert result["mode"] == "error"
     assert result["error"] == "not_found"
     assert result["entry_id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_edoc_unknown_length_over_cap_returns_size_exceeds_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_client: LaserficheClient,
+) -> None:
+    """Server omits Content-Length; the capped download aborts mid-stream and the
+    tool must surface the usual structured size_exceeds_cap error ('at least')."""
+    from laserfiche_mcp.client import EdocTooLarge
+
+    async def probe(entry_id: int, *, part: str = "Edoc") -> tuple[int | None, str | None]:
+        return None, "application/pdf"
+
+    async def download(entry_id: int, *, part: str = "Edoc", max_bytes: int | None = None):  # type: ignore[no-untyped-def]
+        raise EdocTooLarge(2_049, max_bytes or 0)
+
+    monkeypatch.setattr(patched_client, "export_entry_meta_only", probe)
+    monkeypatch.setattr(patched_client, "export_entry_with_meta", download)
+
+    result = await server.get_document_edoc(entry_id=42, mode="text", max_bytes=2_048)
+
+    assert result["error"] == "size_exceeds_cap"
+    assert result["max_bytes"] == 2_048
+    assert "at least" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_text_mode_on_an_image_routes_to_ocr_then_image_tool(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """An image has no text layer. The error must point at the cheap path (Laserfiche's
+    OCR) first and the costly one (looking at the picture) second, not dead-end."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=b"\x89PNG\r\n\x1a\n" + b"0" * 64,
+        headers={"content-type": "image/png"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42",
+        json={"id": 42, "name": "Sample.png", "entryType": "Document"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert result["error"] == "unsupported_format"
+    assert "search_content" in result["hint"]
+    assert "get_document_image" in result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_info_mode_on_an_image_mentions_the_image_tool(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        content=b"x" * 10,
+        headers={"content-type": "image/jpeg"},
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="info")
+
+    assert "get_document_image" in result["hint"]

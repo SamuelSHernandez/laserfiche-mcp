@@ -98,6 +98,14 @@ _REDACT_KEYS: frozenset[str] = frozenset(
     }
 )
 
+# Tool arguments that carry repository content (field values, free-text
+# comments, search text) rather than identifiers. They are omitted from the
+# per-call log event so personal or confidential record data never reaches log
+# aggregators; identifiers (entry_id, names, paths) are still logged.
+_CONTENT_ARG_KEYS: frozenset[str] = frozenset(
+    {"fields", "field_values", "values", "comment", "query", "search_text"}
+)
+
 REDACTED = "<redacted>"
 REDACTED_HOST = "<repo_host>"
 REDACTED_REPO = "<repo_id>"
@@ -159,6 +167,10 @@ def _redact_string(s: str, *, host: str | None, repo_id: str | None) -> str:
     return out
 
 
+def _omit_content(kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {k: ("<omitted>" if k in _CONTENT_ARG_KEYS else v) for k, v in kwargs.items()}
+
+
 def _host_and_repo_from_settings() -> tuple[str | None, str | None]:
     """Read the configured host + repo_id without raising at import time.
 
@@ -217,7 +229,9 @@ def tool_logger(fn: ToolFn) -> ToolFn:
         start = time.perf_counter()
         host, repo_id = _host_and_repo_from_settings()
         args_redacted = redact(
-            {"args": list(args), "kwargs": kwargs} if args else kwargs,
+            {"args": list(args), "kwargs": _omit_content(kwargs)}
+            if args
+            else _omit_content(kwargs),
             host=host,
             repo_id=repo_id,
         )

@@ -123,6 +123,83 @@ def path_allowed(
     return True, None
 
 
+# --- Local import source: always-on credential-file blocklist ----------------
+#
+# Defense in depth for ``import_document``, which reads a file off the MCP
+# process's own disk and uploads it. Independent of LF_IMPORT_SOURCE_DIRS and
+# applied even when that is "*": nobody legitimately files an SSH key, a cloud
+# credentials file or a browser password store into a document repository, and
+# if a model is steered into doing it the blast radius is the whole machine.
+# This is a short list of well-known secret locations, NOT a security boundary
+# (a fence directory is the boundary); it exists so the unfenced default is not
+# also the default that can exfiltrate keys.
+
+IMPORT_SOURCE_ANY = "*"  # LF_IMPORT_SOURCE_DIRS value meaning "any path, I accept that"
+
+_SENSITIVE_DIR_NAMES = frozenset({".ssh", ".aws", ".gnupg", ".azure", ".kube"})
+_SENSITIVE_FILE_NAMES = frozenset(
+    {
+        ".netrc",
+        "_netrc",
+        ".git-credentials",
+        ".pgpass",
+        ".npmrc",
+        ".pypirc",
+        ".claude.json",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "login data",  # Chromium-family saved passwords
+        "ntuser.dat",
+        "shadow",
+        "sudoers",
+    }
+)
+_ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template", ".env.dist"})
+_SENSITIVE_SUFFIXES = (".key", ".pfx", ".p12", ".ppk", ".kdbx", ".keystore", ".jks")
+# Directory trees (compared after realpath + normcase, as path segments).
+_SENSITIVE_TREES = (
+    ("proc",),
+    ("sys",),
+    ("dev",),
+    ("windows", "system32", "config"),
+    ("appdata", "roaming", "microsoft", "credentials"),
+    ("appdata", "roaming", "microsoft", "protect"),
+    ("appdata", "local", "microsoft", "credentials"),
+)
+
+
+def sensitive_source_reason(file_path: str) -> str | None:
+    """Return why ``file_path`` is on the credential blocklist, or None if it isn't.
+
+    Operates on the symlink-resolved path, so a harmless-looking link to
+    ``~/.ssh/id_rsa`` is caught as well.
+    """
+    resolved = os.path.normcase(os.path.realpath(file_path))
+    parts = [p.lower() for p in re.split(r"[\\/]+", resolved) if p]
+    name = parts[-1] if parts else ""
+
+    is_env_file = name == ".env" or (name.startswith(".env.") and name not in _ENV_TEMPLATE_NAMES)
+    if name in _SENSITIVE_FILE_NAMES or is_env_file:
+        return f"{name!r} is a credential/secret file"
+    if name.endswith(_SENSITIVE_SUFFIXES):
+        return f"{name!r} looks like private key material"
+    for seg in parts[:-1]:
+        if seg in _SENSITIVE_DIR_NAMES:
+            return f"it is inside a {seg!r} credentials directory"
+    lowered = list(parts)
+    for tree in _SENSITIVE_TREES:
+        n = len(tree)
+        # Windows trees may sit under any drive/profile, so match anywhere. The
+        # POSIX roots (proc/sys/dev) only count as the FIRST segment — which on
+        # Windows is a drive letter ("c:"), so C:\dev\docs is never mistaken for /dev.
+        starts = (0,) if tree[0] in ("proc", "sys", "dev") else range(len(lowered) - n + 1)
+        if any(tuple(lowered[i : i + n]) == tree for i in starts if i >= 0):
+            return f"it is under a protected system location ({'/'.join(tree)})"
+    return None
+
+
 def local_source_path_allowed(
     file_path: str,
     allow_csv: str | None,
@@ -134,9 +211,12 @@ def local_source_path_allowed(
     than the repository destination. Returns ``(ok, reason)``.
 
     Behavior:
-        * ``allow_csv`` unset/empty -> always OK. Fencing is opt-in so
-          existing single-user/single-machine deployments keep working
-          unchanged until they set ``LF_IMPORT_SOURCE_DIRS``.
+        * ``allow_csv`` unset/empty, or containing ``*`` -> always OK. Fencing
+          is opt-in so existing single-user/single-machine deployments keep
+          working unchanged until they set ``LF_IMPORT_SOURCE_DIRS``; ``*``
+          is the explicit "I know, allow any path" form (it silences the
+          startup warning). The credential-file blocklist
+          (:func:`sensitive_source_reason`) applies either way.
         * Otherwise ``file_path`` must resolve (symlinks included, via
           ``os.path.realpath``) to a path equal to, or nested under, one
           of the configured directories. Resolving symlinks stops a
@@ -147,7 +227,7 @@ def local_source_path_allowed(
           elsewhere, matching platform path semantics.
     """
     allow = _parse_csv(allow_csv)
-    if not allow:
+    if not allow or IMPORT_SOURCE_ANY in allow:
         return True, None
 
     resolved = os.path.normcase(os.path.realpath(file_path))

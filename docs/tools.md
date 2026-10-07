@@ -22,6 +22,7 @@
 | `get_entry_by_path`          | `laserfiche_entry_get_by_path`         | Resolve a full path to an entry                                          |
 | `get_field_values`           | `laserfiche_field_values_get`          | Read all template fields assigned to an entry                            |
 | `get_document_text`          | `laserfiche_document_get_text`         | Server-side extracted text (v2 only; v1 use `get_document_edoc(mode="text")`) |
+| `get_document_image`         | `laserfiche_document_get_image`        | Show an image entry (PNG/JPEG/GIF/WebP) to the model so it can describe/label it. **Token-heavy**: over `LF_IMAGE_WARN_TOKENS` it returns a `cost_warning` first and needs `acknowledge_cost=true` |
 | `get_document_edoc`          | `laserfiche_document_get_edoc`         | Inspect edoc (`info`), download bytes (`bytes`), or extract text (`text`) |
 | `compare_entries`            | `laserfiche_entry_compare`             | Diff two entries' metadata and template fields — is this a re-scanned duplicate or a real difference? |
 | `find_duplicate_documents`   | `laserfiche_document_find_duplicates`  | Scan a folder tree for byte-identical documents (size-then-hash, downloads almost nothing on a mostly-distinct tree) |
@@ -60,7 +61,9 @@
 | `delete_edoc`       | `laserfiche_document_edoc_delete`    | Wipe the electronic-document content; entry + metadata remain                    | yes             |
 | `delete_pages`      | `laserfiche_document_pages_delete`   | Delete specific page ranges; refuses empty `page_range` (would mean "delete all") | yes             |
 
-Tools with **two-step token** return a preview + HMAC-signed
+Tools with **two-step token** (a speed bump for the model, not a human
+approval — see [Safety model](safety.md#what-the-confirmation-token-is--and-is-not))
+return a preview + HMAC-signed
 `confirmation_token` on first call. Surface the preview to the user; on
 go-ahead, re-call with the same arguments plus the token. Tokens are
 bound to `(operation, entry_id, entry_name)` **and the operation's own

@@ -56,7 +56,11 @@ def _build_auth_middleware(token: str) -> type[BaseHTTPMiddleware]:
         async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
             header = request.headers.get("authorization", "")
             scheme, _, presented = header.partition(" ")
-            if scheme.lower() != "bearer" or not hmac.compare_digest(presented, token):
+            # Compare as bytes: hmac.compare_digest raises TypeError on non-ASCII
+            # str, which would turn a junk header into a 500 instead of a 401.
+            if scheme.lower() != "bearer" or not hmac.compare_digest(
+                presented.encode("utf-8"), token.encode("utf-8")
+            ):
                 return JSONResponse(
                     {
                         "error": "unauthorized",
@@ -67,6 +71,33 @@ def _build_auth_middleware(token: str) -> type[BaseHTTPMiddleware]:
             return await call_next(request)
 
     return BearerTokenMiddleware
+
+
+def _configure_transport_security(mcp: object, settings: Settings) -> None:
+    """Allow the public hostname through FastMCP's DNS-rebinding protection.
+
+    FastMCP builds its allowed-Host list at construction time from its default
+    (loopback) host, so behind a reverse proxy that forwards the original
+    ``Host`` header every request is rejected with 421. When
+    ``LF_HTTP_PUBLIC_URL`` is set, add its host (and origin) to the loopback
+    defaults; protection stays enabled for every other Host.
+    """
+    from urllib.parse import urlsplit
+
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    origins = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+    if settings.http_public_url is not None:
+        parts = urlsplit(str(settings.http_public_url))
+        if parts.netloc:
+            hosts += [parts.netloc, parts.hostname or parts.netloc]
+            origins.append(f"{parts.scheme}://{parts.netloc}")
+    mcp.settings.transport_security = TransportSecuritySettings(  # type: ignore[attr-defined]
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=origins,
+    )
 
 
 def build_http_app(settings: Settings) -> Starlette:
@@ -82,6 +113,7 @@ def build_http_app(settings: Settings) -> Starlette:
     mcp.settings.host = settings.http_host
     mcp.settings.port = settings.http_port
     mcp.settings.streamable_http_path = settings.http_path
+    _configure_transport_security(mcp, settings)
 
     # Auth precedence: OAuth (per-user) > static bearer token > none.
     if settings.oauth_enabled:
@@ -125,10 +157,19 @@ def _configure_oauth(mcp: object, settings: Settings) -> str:
     verifier = build_token_verifier(settings)
     # AuthSettings coerces str -> AnyHttpUrl at runtime; the ignores are just for
     # the annotated-URL parameter types.
+    auth_kwargs: dict[str, object] = {}
+    if "validate_token_resource" in AuthSettings.model_fields:
+        # Newer mcp releases will default this to True, comparing the token's
+        # resource to the public URL. Our verifier already enforces the `aud`
+        # claim against LF_HTTP_OAUTH_AUDIENCE (which may legitimately differ
+        # from the public URL, e.g. api://laserfiche-mcp), so the SDK's check
+        # would reject valid tokens. State the choice explicitly.
+        auth_kwargs["validate_token_resource"] = False
     mcp.settings.auth = AuthSettings(  # type: ignore[attr-defined]
         issuer_url=str(settings.http_oauth_issuer),  # type: ignore[arg-type]
         resource_server_url=str(settings.http_public_url),  # type: ignore[arg-type]
         required_scopes=settings.oauth_required_scopes or None,
+        **auth_kwargs,  # type: ignore[arg-type]
     )
     # Both must be set together — FastMCP only validates this pairing at
     # construction, which we bypass by injecting post-hoc.

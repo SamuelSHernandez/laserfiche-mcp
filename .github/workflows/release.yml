@@ -130,9 +130,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install mcp-publisher
+      # Pinned to an exact release and verified against its published SHA-256.
+      # This step runs in a job that holds an OIDC token, so it must not fetch
+      # "latest" and execute whatever is there. To upgrade: pick a release at
+      # https://github.com/modelcontextprotocol/registry/releases, copy the
+      # digest GitHub shows for mcp-publisher_linux_amd64.tar.gz, update both.
+      - name: Install mcp-publisher (pinned + checksum-verified)
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.1
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+          rm mcp-publisher.tar.gz
 
       - name: Log in via GitHub OIDC
         run: ./mcp-publisher login github-oidc

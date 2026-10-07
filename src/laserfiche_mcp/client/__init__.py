@@ -65,7 +65,7 @@ concerns stay under ~250 lines without sacrificing the single-class public API.
 from __future__ import annotations
 
 from ..errors import LaserficheError
-from ._core import build_repo_path
+from ._core import EdocTooLarge, build_repo_path
 from ._definitions import _DefinitionsMixin
 from ._entries import _EntriesMixin
 from ._search import _SearchMixin
@@ -90,6 +90,7 @@ class LaserficheClient(_EntriesMixin, _DefinitionsMixin, _SearchMixin, _WritesMi
 __all__ = [
     "LaserficheClient",
     "LaserficheError",
+    "EdocTooLarge",
     "build_repo_path",
     "extract_multistatus_exceptions",
 ]

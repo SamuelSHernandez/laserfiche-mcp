@@ -22,6 +22,7 @@ from ._helpers import (
     check_write_permission,
     entry_name,
     entry_path,
+    entry_version,
     fetch_entry_for_op,
     require_writes_enabled,
     verify_confirmation_token,
@@ -77,7 +78,9 @@ async def delete_edoc(
     current_name = entry_name(entry)
 
     if confirmation_token is None:
-        token = confirmation.create_token("delete_edoc", entry_id, current_name)
+        token = confirmation.create_token(
+            "delete_edoc", entry_id, current_name, version=entry_version(entry)
+        )
         return {
             "mode": "preview",
             "operation": "delete_edoc",
@@ -108,6 +111,7 @@ async def delete_edoc(
         "delete_edoc",
         entry_id,
         current_name,
+        version=entry_version(entry),
     )
     if token_err is not None:
         return token_err
@@ -212,6 +216,7 @@ async def delete_pages(
             entry_id,
             current_name,
             params={"page_range": page_range, "page_count": current_page_count},
+            version=entry_version(entry),
         )
         return {
             "mode": "preview",
@@ -244,6 +249,7 @@ async def delete_pages(
         entry_id,
         current_name,
         params={"page_range": page_range, "page_count": current_page_count},
+        version=entry_version(entry),
     )
     if token_err is not None:
         return token_err
