@@ -18,7 +18,7 @@ change them. The same program is also a command-line tool (`ls`, `cat`,
 
 **Read-only by default.** Writes are off until you set `LF_READ_ONLY=false`,
 and destructive actions always need a second confirmation step.
-Current release: **v2.6.0** — see the [CHANGELOG](CHANGELOG.md).
+Current release: **v2.6.1** — see the [CHANGELOG](CHANGELOG.md).
 
 ## Quick start
 
