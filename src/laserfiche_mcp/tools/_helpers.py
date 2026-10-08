@@ -151,16 +151,43 @@ def entry_type(entry: dict[str, Any] | None) -> str:
     return entry.get("entryType") or entry.get("EntryType") or ""
 
 
-def entry_version(entry: dict[str, Any] | None) -> str | None:
-    """The entry's last-modified time: the state a confirmation token is bound to.
+# The entry attributes a confirmation token is bound to, as (camelCase, PascalCase) pairs.
+# Laserfiche does NOT reliably bump lastModifiedTime on rename or move (verified against a
+# self-hosted v1 server), so the timestamp alone can't tell "the operation already ran".
+# The other fields change exactly when a destructive operation takes effect: moving changes
+# the parent, deleting the electronic file flips isElectronicDocument and zeroes its size,
+# deleting pages changes pageCount. (Renames are covered by the entry-name binding.)
+_STATE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("lastModifiedTime", "LastModifiedTime"),
+    ("parentId", "ParentId"),
+    ("isElectronicDocument", "IsElectronicDocument"),
+    ("elecDocumentSize", "ElecDocumentSize"),
+    ("pageCount", "PageCount"),
+)
 
-    ``None`` when the server doesn't report it — binding then degrades to the
-    other bindings (entry, name, parameters, caller) rather than failing.
+
+def entry_version(entry: dict[str, Any] | None) -> str | None:
+    """A fingerprint of the entry's state: what a confirmation token is bound to.
+
+    Built from the last-modified time, parent folder, electronic-file flag and size,
+    and page count. If the entry changes in any of these between preview and execute
+    — including because the previewed operation itself already ran — the token no
+    longer matches. ``None`` when the server reports none of them, in which case
+    binding degrades to the other bindings (entry, name, parameters, caller).
+
+    Limit: this is state, not a one-time nonce. If the entry is changed and then put
+    back to exactly the previewed state within the token's lifetime (moved away and
+    back again), the original token matches again.
     """
     if entry is None:
         return None
-    value = entry.get("lastModifiedTime") or entry.get("LastModifiedTime")
-    return None if value is None else str(value)
+    parts: list[str] = []
+    seen = False
+    for camel, pascal in _STATE_FIELDS:
+        value = entry.get(camel) if camel in entry else entry.get(pascal)
+        seen = seen or value is not None
+        parts.append("" if value is None else str(value))
+    return "|".join(parts) if seen else None
 
 
 def entry_path(entry: dict[str, Any] | None) -> str | None:

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-10-08
+
+### Fixed
+- **Confirmation-token state binding was too weak (found by testing against a real
+  server).** Laserfiche does not update an entry's last-modified time when it is
+  renamed or moved, so 2.6.0's claim that executing an operation invalidates its own
+  token did not hold for **move** (and could not be relied on for delete-edoc). Tokens
+  are now bound to a fingerprint of the entry's state — last-modified time, parent
+  folder, electronic-file flag and size, and page count — so an immediate replay of a
+  move, delete-edoc or delete-pages token is refused. Documented limit: an entry
+  moved away and back to its previewed state within the 5-minute window revalidates
+  the original token (no single-use record; see docs/safety.md).
+
 ## [2.6.0] - 2026-10-07
 
 ### Added

@@ -38,7 +38,7 @@ What it *does* guarantee is what the preview was about. A token is bound to:
 | operation + entry id + entry name | can't be used for a different operation or entry, or after a rename |
 | the operation's parameters (`page_range`, `new_name`, destination, …) | "preview pages 1–2, execute 1–9999" fails |
 | **the caller** (OAuth user, else client id) | one identity's preview can't authorize another's call — an agent's preview can't be executed by a human's token or vice versa; each must preview as themselves |
-| **the entry's state** (last-modified time) | if the entry changed after the preview, the user confirmed something that no longer exists — the call is refused and must be re-previewed |
+| **the entry's state** (last-modified time, parent folder, electronic-file flag and size, page count) | if the entry changed after the preview, the user confirmed something that no longer exists — the call is refused and must be re-previewed |
 | five-minute expiry | a forgotten token can't wait indefinitely |
 
 Under stdio or a static bearer token there is exactly one principal, so the caller
@@ -46,20 +46,32 @@ binding is empty there; it applies wherever the server can tell callers apart.
 
 **Why tokens are not single-use.** A ledger of used tokens would need server-side
 state (per process, so useless across instances sharing a signing key) and would
-add a failure mode (a legitimate retry after a transient error is refused). It
-isn't needed for the property it would buy, which is "the same authorization can't
-be spent twice":
+add a failure mode (a legitimate retry after a transient error is refused). The
+property it would buy is "the same authorization can't be spent twice", and the
+state binding already delivers most of it:
 
-- the token is bound to the entry's state, and *executing the operation changes the
-  entry* — so the token that authorized it no longer matches afterwards, and a
-  replay is refused before anything reaches Laserfiche. That holds for delete,
-  rename, move, delete-edoc and delete-pages alike (and pages are additionally
-  bound to the page count, since page numbers shift);
+- the token is bound to the entry's state, and executing each destructive operation
+  changes that state, so an **immediate replay** (a client retry, a model calling
+  execute twice) is refused before anything reaches Laserfiche: a move changes the
+  parent, a delete-edoc flips the electronic-file flag and size, delete-pages changes
+  the page count (and page numbers shift), a rename changes the name, a delete removes
+  the entry;
 - replay needs the token *and* the same caller, who could equally run a fresh
   preview-and-execute — the replay grants no authority the caller didn't already
   have, and the OAuth destructive scope is re-checked on every execute;
-- anything that does change an entry between preview and execute invalidates the
+- anything that changes an entry between preview and execute invalidates the
   token, which also closes the preview-to-execute time-of-check gap.
+
+**Verified against a real server, and a correction.** Laserfiche does **not** update
+an entry's last-modified time on rename or move (checked on a self-hosted v1 server).
+An earlier version of this guide relied on the timestamp alone and so overstated the
+protection for moves; the fingerprint above is what actually changes. One limit
+remains by design: the binding is to *state*, not to a one-time value. If an entry is
+changed and then put back to exactly the previewed state inside the five-minute
+window (for example moved away and back), the original token matches again — observed
+live as a move replayed after the entry had been moved back. It needs the same
+caller, the token, and a deliberate round trip, and it can only repeat the change
+that was already approved. A single-use record would close it; we have not built one.
 
 What this does not cover: a token authorizes exactly the one previewed change and
 nothing more, but it does not make a human approve anything, and a retry after an
