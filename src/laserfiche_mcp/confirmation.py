@@ -35,11 +35,15 @@ Bindings carried in the token:
                       with no per-caller identity (stdio, static token). A
                       token cannot be executed by a different caller, so one
                       user's preview can never authorize another user's call.
-    version         — the entry's last-modified time at preview. If the entry
-                      changed in the meantime (including by executing this very
-                      operation) the token is rejected. This makes replay
-                      self-defeating without any server-side state, and means
-                      the user confirmed the entry as it actually was.
+    version         — a fingerprint of the entry's state at preview (last-modified
+                      time, parent folder, electronic-file flag and size, page
+                      count — see ``tools._helpers.entry_version``). If the entry
+                      changed in the meantime, including because this very
+                      operation already ran, the token is rejected, so an
+                      immediate replay is refused without server-side state.
+                      It is state, not a nonce: moving the entry away and back
+                      to the previewed state inside the TTL revalidates the
+                      token (documented in docs/safety.md).
     params          — per-parameter hashes of the operation's execute-
                       relevant arguments (page_range for delete_pages,
                       new_name for rename_entry, new_parent_id + new_name
@@ -299,13 +303,6 @@ def _verify_token(
             "identity that requested it — call the tool again without "
             "confirmation_token to get a fresh preview as yourself."
         )
-    if tok_version != _version_segment(version):
-        return False, (
-            "The entry has changed since the preview (or this token was already used: "
-            "executing the operation modifies the entry). Call the tool again without "
-            "confirmation_token to preview the entry's current state."
-        )
-
     expected_params_seg = _encode_params(params)
     if tok_params_seg != expected_params_seg:
         drifted = _drifted_param_names(tok_params_seg, expected_params_seg)
@@ -315,6 +312,13 @@ def _verify_token(
             "previewed call. The user confirmed the preview, not these "
             "arguments. Call the tool again without confirmation_token to "
             "get a fresh preview."
+        )
+
+    if tok_version != _version_segment(version):
+        return False, (
+            "The entry has changed since the preview (or this token was already used: "
+            "executing the operation modifies the entry). Call the tool again without "
+            "confirmation_token to preview the entry's current state."
         )
 
     if time.time() >= tok_exp:

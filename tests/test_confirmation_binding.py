@@ -230,3 +230,137 @@ async def test_delete_edoc_token_is_bound_to_the_entry_state(
 
     assert result["error"] == "invalid_confirmation_token"
     assert not [r for r in httpx_mock.get_requests() if r.method == "DELETE"]
+
+
+# --- the state fingerprint (found live: Laserfiche doesn't bump lastModifiedTime on move) ---
+
+
+def test_the_fingerprint_changes_when_each_destructive_operation_takes_effect() -> None:
+    from laserfiche_mcp.tools._helpers import entry_version
+
+    base = {
+        "lastModifiedTime": "2026-10-05T15:23:51-04:00",
+        "parentId": 84486,
+        "isElectronicDocument": True,
+        "elecDocumentSize": 1220,
+        "pageCount": 0,
+    }
+    reference = entry_version(base)
+    assert reference is not None
+    assert entry_version(dict(base)) == reference  # stable when nothing changed
+    assert entry_version({**base, "parentId": 88355}) != reference  # move
+    assert entry_version({**base, "isElectronicDocument": False, "elecDocumentSize": 0}) != (
+        reference
+    )  # delete edoc
+    assert entry_version({**base, "pageCount": 3}) != reference  # delete pages
+    assert entry_version({**base, "lastModifiedTime": "2026-10-08T09:00:00-04:00"}) != reference
+
+
+def test_the_fingerprint_accepts_pascal_case_and_tolerates_missing_fields() -> None:
+    from laserfiche_mcp.tools._helpers import entry_version
+
+    assert entry_version({"ParentId": 5, "PageCount": 2}) == entry_version(
+        {"parentId": 5, "pageCount": 2}
+    )
+    assert entry_version({}) is None
+    assert entry_version(None) is None
+    assert entry_version({"name": "only a name"}) is None
+
+
+def _serve_live_like_entry(
+    httpx_mock: HTTPXMock, state: dict[str, Any], entry_id: int = 42
+) -> None:
+    """An entry whose timestamp NEVER changes (as observed on a real server for rename/move)
+    but whose parent / file state does when an operation runs."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": entry_id,
+                "name": "Doc",
+                "entryType": "Document",
+                "lastModifiedTime": "2026-10-05T15:23:51-04:00",  # constant, like the live server
+                **state,
+            },
+        )
+
+    httpx_mock.add_callback(
+        respond, method="GET", url=f"{_BASE}/Entries/{entry_id}", is_reusable=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_move_token_is_refused_on_immediate_replay_even_if_the_timestamp_never_moves(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    state: dict[str, Any] = {"parentId": 100}
+    _serve_live_like_entry(httpx_mock, state)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/200",
+        json={"id": 200, "name": "Dest", "entryType": "Folder", "fullPath": r"\Dest"},
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="PATCH",
+        url=f"{_BASE}/Entries/42?autoRename=false",
+        json={"id": 42, "name": "Doc", "parentId": 200},
+    )
+
+    token = (await server.move_entry(42, 200))["confirmation_token"]
+    assert (await server.move_entry(42, 200, confirmation_token=token))["mode"] == "executed"
+
+    state["parentId"] = 200  # the move took effect on the server
+    replay = await server.move_entry(42, 200, confirmation_token=token)
+
+    assert replay["error"] == "invalid_confirmation_token"
+    assert "changed since" in replay["reason"]
+    assert len([r for r in httpx_mock.get_requests() if r.method == "PATCH"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_edoc_token_is_refused_on_replay_after_the_file_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    monkeypatch.setattr(server._get_settings(), "read_only", False)
+    state: dict[str, Any] = {"isElectronicDocument": True, "elecDocumentSize": 1220}
+    _serve_live_like_entry(httpx_mock, state)
+    httpx_mock.add_response(
+        method="DELETE",
+        url=f"{_BASE}/Entries/42/Laserfiche.Repository.Document/edoc",
+        json={"value": True},
+    )
+
+    token = (await server.delete_edoc(42))["confirmation_token"]
+    assert (await server.delete_edoc(42, confirmation_token=token))["mode"] == "executed"
+
+    state.update(isElectronicDocument=False, elecDocumentSize=0)  # the file is gone
+    replay = await server.delete_edoc(42, confirmation_token=token)
+
+    assert replay["error"] == "invalid_confirmation_token"
+    assert len([r for r in httpx_mock.get_requests() if r.method == "DELETE"]) == 1
+
+
+def test_known_limit_a_round_trip_back_to_the_previewed_state_revalidates_the_token() -> None:
+    """Characterization, not an endorsement. Binding is to STATE, not a one-time nonce: if
+    the entry moves away and back to exactly the previewed state inside the 5-minute window,
+    the original token matches again. Observed live (A -> B -> A, then the first token moved
+    the entry again). Closing it needs a single-use record; see docs/safety.md."""
+    from laserfiche_mcp.tools._helpers import entry_version
+
+    state_a = {"parentId": 84486, "lastModifiedTime": "T"}
+    token = confirmation.create_token("move_entry", 42, "Doc", version=entry_version(state_a))
+    state_b = {"parentId": 88355, "lastModifiedTime": "T"}
+    assert not confirmation.verify_token(
+        token, "move_entry", 42, "Doc", version=entry_version(state_b)
+    )[0]
+    # ...moved back to A:
+    assert confirmation.verify_token(
+        token, "move_entry", 42, "Doc", version=entry_version(state_a)
+    )[0]
