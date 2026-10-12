@@ -77,6 +77,41 @@ def lf_error_detail(exc: LaserficheError) -> dict[str, Any]:
     return {}
 
 
+_NO_EDOC_SERVER_PHRASE = "entry does not contain an electronic document"
+_LF_ERROR_CODE_INVALID_PARAM = 216
+
+
+def is_no_electronic_document(exc: LaserficheError) -> bool:
+    """Whether the server rejected an Edoc export because the entry has no file.
+
+    A v2 server answers ``Export(part=Edoc)`` on a scanned entry (page images
+    only) with HTTP 400 / ``errorCode`` 216 and "This entry does not contain an
+    electronic document", where v1 sends an empty 200. Code 216 is also the
+    generic bad-parameter code, so the message is what identifies this case; the
+    code, when the body carries one, must still be 216.
+
+    A JSON body is matched only in its message fields (``title``/``detail``/
+    ``message``), so the phrase appearing in some other field (an echoed path,
+    say) does not count; a body that is not a JSON object (plain text) is
+    matched as a whole.
+    """
+    if exc.status_code != 400:
+        return False
+    detail = lf_error_detail(exc)
+    if detail:
+        code = detail.get("errorCode")
+        if code is not None and code != _LF_ERROR_CODE_INVALID_PARAM:
+            return False
+        text = " ".join(
+            v
+            for v in (detail.get("title"), detail.get("detail"), detail.get("message"))
+            if isinstance(v, str)
+        )
+    else:
+        text = str(exc)
+    return _NO_EDOC_SERVER_PHRASE in " ".join(text.lower().split())
+
+
 # Subkind → kind mapping. The five canonical ToolErrorKind values
 # per the v2 error contract. Subkinds preserve the actionable signal
 # of the granular taxonomy; kind lets agents branch on category.

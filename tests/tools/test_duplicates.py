@@ -173,3 +173,51 @@ async def test_bad_folder_id_wraps_laserfiche_error_as_runtime(
     assert result["mode"] == "error"
     assert result["operation"] == "find_duplicate_documents"
     assert result["entry_id"] == 999
+
+
+@pytest.mark.asyncio
+async def test_entries_with_no_electronic_document_are_skipped_not_grouped(
+    httpx_mock: HTTPXMock,
+    patched_client: LaserficheClient,
+) -> None:
+    """A scanned entry has no bytes to compare. v2 rejects the probe with a 400,
+    v1 sends an empty 200; neither may be grouped as a 'duplicate' or called unique."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE}/Entries/1",
+        json={"id": 1, "name": "Docs", "entryType": "Folder"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=_CHILDREN_URL,
+        json={
+            "value": [
+                {"id": 10, "name": "a.pdf", "entryType": "Document"},
+                {"id": 11, "name": "scan-v2.tif", "entryType": "Document"},
+                {"id": 12, "name": "scan-v1.tif", "entryType": "Document"},
+                {"id": 13, "name": "scan-v1-b.tif", "entryType": "Document"},
+            ]
+        },
+    )
+    httpx_mock.add_response(method="GET", url=_edoc_url(10), content=b"a real file")
+    httpx_mock.add_response(
+        method="GET",
+        url=_edoc_url(11),
+        status_code=400,
+        json={
+            "title": "This entry does not contain an electronic document",
+            "status": 400,
+            "errorCode": 216,
+        },
+    )
+    httpx_mock.add_response(method="GET", url=_edoc_url(12), content=b"")
+    httpx_mock.add_response(method="GET", url=_edoc_url(13), content=b"")
+
+    result = await server.find_duplicate_documents(folder_id=1)
+
+    assert result["mode"] == "duplicate_report"
+    assert result["groups"] == []
+    assert result["documents_hashed"] == 0
+    skipped = {row["entry_id"]: row["reason"] for row in result["skipped"]}
+    assert set(skipped) == {11, 12, 13}
+    assert all("no electronic document" in reason for reason in skipped.values())

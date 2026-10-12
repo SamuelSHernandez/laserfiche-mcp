@@ -78,6 +78,11 @@ def lf_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:
         return
     for key, value in _BASE_ENV.items():
         monkeypatch.setenv(key, value)
+    # Settings also reads ``.env`` from the working directory. A developer's
+    # local .env would silently refill any LF_* key a test deletes (e.g. LF_PASSWORD)
+    # so the suite must not depend on it; CI has no .env, which is why the
+    # missing-credential tests only failed locally.
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
     yield dict(_BASE_ENV)
 
 

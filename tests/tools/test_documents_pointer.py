@@ -15,6 +15,7 @@ from pytest_httpx import HTTPXMock
 from laserfiche_mcp import _app, server
 from laserfiche_mcp.client import LaserficheClient
 from laserfiche_mcp.config import Settings
+from laserfiche_mcp.errors import LaserficheError, is_no_electronic_document
 from laserfiche_mcp.tools._helpers import wrap_untrusted_document_text
 from tests.conftest import SAMPLE_PDF_BYTES, SAMPLE_PDF_TEXT, _StubAuth
 
@@ -304,3 +305,257 @@ async def test_get_document_text_redirect_is_a_structured_error_not_empty_text(
 
     assert result["mode"] == "error"
     assert "redirect" in json.dumps(result).lower()
+
+
+# --- scanned entries on a real v2 server -------------------------------------
+# Observed on a real v2 server (password auth): Export(part=Edoc) on a scanned
+# entry is rejected with HTTP 400 / errorCode 216 rather than an empty 200.
+
+_V2_NO_EDOC = {
+    "type": "https://httpstatuses.io/400",
+    "title": "This entry does not contain an electronic document",
+    "status": 400,
+    "errorCode": 216,
+}
+
+
+def _v2_no_edoc(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        method="POST", url=_EXPORT, status_code=400, json=_V2_NO_EDOC, is_reusable=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_v2_scanned_entry_info_flags_missing_document(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    _v2_no_edoc(httpx_mock)
+
+    result = await server.get_document_edoc(entry_id=42, mode="info")
+
+    assert result["mode"] == "info"
+    assert result["byte_size"] == 0
+    assert result["has_electronic_document"] is False
+    assert "warning" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["text", "bytes"])
+async def test_v2_scanned_entry_is_a_structured_no_electronic_document_error(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient, mode: str
+) -> None:
+    _v2_no_edoc(httpx_mock)
+
+    result = await server.get_document_edoc(entry_id=42, mode=mode)  # type: ignore[arg-type]
+
+    assert result["mode"] == "error"
+    assert result["error"] == "no_electronic_document"
+    assert result["kind"] == "not_found"
+    assert result["requested_mode"] == mode
+    assert "search_content" in result["hint"]
+    assert "server_error_code" not in result
+
+
+@pytest.mark.asyncio
+async def test_v2_other_400_216_is_not_mistaken_for_a_missing_document(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url=_EXPORT,
+        status_code=400,
+        json={"title": "Bad parameter", "status": 400, "errorCode": 216},
+        is_reusable=True,
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="info")
+
+    assert result["mode"] == "error"
+    assert result["error"] != "no_electronic_document"
+    assert result["server_error_code"] == 216
+
+
+@pytest.mark.asyncio
+async def test_v2_scanned_entry_image_read_reports_no_electronic_file(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    _v2_no_edoc(httpx_mock)
+
+    result = await server.get_document_image(entry_id=42)
+
+    assert result["mode"] == "error"
+    assert result["error"] == "no_electronic_document"
+    assert result["operation"] == "get_document_image"
+
+
+@pytest.mark.asyncio
+async def test_v2_scanned_entry_recognised_whatever_shape_the_error_body_has(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    """The phrase is matched in the whole error text, not one assumed JSON field."""
+    httpx_mock.add_response(
+        method="POST",
+        url=_EXPORT,
+        status_code=400,
+        content=b"Error 216: This entry does not contain an electronic document.",
+        is_reusable=True,
+    )
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert result["error"] == "no_electronic_document"
+
+
+# --- hardening from adversarial review ---------------------------------------
+
+
+def _lf_error(status: int, detail: object) -> "LaserficheError":  # noqa: UP037
+    return LaserficheError(
+        f"Laserfiche API error {status}: {detail}", status_code=status, detail=detail
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "detail", "expected"),
+    [
+        (400, _V2_NO_EDOC, True),
+        (
+            400,
+            {**_V2_NO_EDOC, "title": "THIS ENTRY  does not\ncontain an electronic document"},
+            True,
+        ),
+        (400, {"error": {"message": "This entry does not contain an electronic document"}}, True),
+        (400, "This entry does not contain an electronic document.", True),
+        (400, {**_V2_NO_EDOC, "errorCode": 9999}, False),  # a different server code
+        (400, {"title": "Bad parameter", "errorCode": 216}, False),
+        # the phrase only inside a non-message field (an echoed path) is not a match
+        (
+            400,
+            {
+                "title": "Invalid part",
+                "errorCode": 216,
+                "instance": "/x/does not contain an electronic document.pdf",
+            },
+            False,
+        ),
+        # a folder 400 with similar wording is a different failure
+        (
+            400,
+            {
+                "title": "Entry 42 is a folder and does not contain an electronic document",
+                "errorCode": 216,
+            },
+            False,
+        ),
+        (404, _V2_NO_EDOC, False),
+        (500, _V2_NO_EDOC, False),
+        (None, _V2_NO_EDOC, False),
+    ],
+)
+def test_is_no_electronic_document_predicate(
+    status: int | None, detail: object, expected: bool
+) -> None:
+    assert is_no_electronic_document(_lf_error(status, detail)) is expected  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_v2_no_edoc_info_hint_does_not_point_at_a_failing_call(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    _v2_no_edoc(httpx_mock)
+
+    result = await server.get_document_edoc(entry_id=42, mode="info")
+
+    assert "mode='text'" not in result["hint"]
+    assert "search_content" in result["hint"]
+    assert "empty file" not in result["warning"]
+
+
+@pytest.mark.asyncio
+async def test_v2_image_error_does_not_tell_a_v2_user_to_switch_to_v2(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    _v2_no_edoc(httpx_mock)
+
+    result = await server.get_document_image(entry_id=42)
+
+    assert "LF_API_VERSION=v2" not in result["hint"]
+    assert "only return page images on v2" not in result["message"]
+    assert "get_document_text" in result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_v2_no_edoc_rejected_at_download_time_is_still_classified(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    """The size probe succeeds, then the real export is rejected."""
+    httpx_mock.add_response(
+        method="POST", url=_EXPORT, content=b"x" * 10, headers={"content-type": "text/plain"}
+    )
+    httpx_mock.add_response(method="POST", url=_EXPORT, status_code=400, json=_V2_NO_EDOC)
+
+    result = await server.get_document_edoc(entry_id=42, mode="text")
+
+    assert result["error"] == "no_electronic_document"
+
+
+@pytest.mark.asyncio
+async def test_v2_image_no_edoc_rejected_at_download_time_is_still_classified(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    httpx_mock.add_response(
+        method="POST", url=_EXPORT, content=b"x" * 10, headers={"content-type": "image/png"}
+    )
+    httpx_mock.add_response(method="POST", url=_EXPORT, status_code=400, json=_V2_NO_EDOC)
+
+    result = await server.get_document_image(entry_id=42)
+
+    assert result["error"] == "no_electronic_document"
+
+
+@pytest.mark.asyncio
+async def test_v2_no_edoc_rejection_on_the_followed_download_is_classified(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    _pointer_response(httpx_mock)
+    httpx_mock.add_response(method="GET", url=_DOWNLOAD, status_code=400, json=_V2_NO_EDOC)
+
+    result = await server.get_document_edoc(entry_id=42, mode="info")
+
+    assert result["has_electronic_document"] is False
+
+
+@pytest.mark.asyncio
+async def test_v2_get_document_text_no_edoc_rejection_is_no_extracted_text(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    """The same 400 / 216 on a Text export is the contract's no_extracted_text,
+    not the raw server error."""
+    _v2_no_edoc(httpx_mock)
+
+    result = await server.get_document_text(entry_id=42)
+
+    assert result["mode"] == "error"
+    assert result["operation"] == "get_document_text"
+    assert result["error"] == "no_extracted_text"
+    assert result["kind"] == "not_found"
+    assert result["entry_id"] == 42
+    assert "search_content" in result["hint"]
+    assert "216" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_v2_get_document_text_unrelated_400_is_not_reworded(
+    httpx_mock: HTTPXMock, v2_client: LaserficheClient
+) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url=_EXPORT,
+        status_code=400,
+        json={"title": "Invalid parameter", "status": 400, "errorCode": 216},
+    )
+
+    result = await server.get_document_text(entry_id=42)
+
+    assert result["mode"] == "error"
+    assert result["error"] != "no_extracted_text"
