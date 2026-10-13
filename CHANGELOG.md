@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.2] - 2026-10-13
+
 ### Fixed
 - **Scanned entries on a v2 server surfaced the raw server error (reported on #27).**
   A v2 server rejects an Edoc export for an entry with no electronic file
