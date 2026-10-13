@@ -120,6 +120,9 @@ async def find_duplicate_documents(
     "skipped": [{"entry_id", "name", "reason"}, ...],
     "folders_unreadable": [<folder_id>, ...]}``. ``groups`` is sorted by
     ``wasted_bytes`` descending (biggest recoverable space first).
+    ``skipped`` also lists entries with no electronic document (scanned page
+    images): they have no bytes to compare, so they are never grouped, and
+    must not be treated as unique or as duplicates of each other.
     ``folders_unreadable`` lists subfolders the walk couldn't list (usually
     permissions) — entries under them are NOT included, so a non-empty list
     means the scan was partial even if ``walk_truncated`` is false. On

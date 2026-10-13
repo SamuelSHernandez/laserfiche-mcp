@@ -32,7 +32,7 @@ from typing import Any
 from .auth import build_auth_strategy
 from .client import LaserficheClient
 from .config import Settings
-from .errors import LaserficheError
+from .errors import LaserficheError, is_no_electronic_document
 from .models import EntrySummary
 from .ops import compare, duplicates, extract, find, manifest
 from .ops.content_search import build_search_command, run_search
@@ -41,6 +41,21 @@ from .ops.pages import parse_page_spec
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
+
+NO_FILE_MESSAGE = (
+    "this entry has no electronic document (for example a scanned document stored "
+    "as page images), so there is no file to read. If Laserfiche has OCR'd it, "
+    "`laserfiche-mcp search` can still show its text."
+)
+
+
+class NoElectronicDocumentError(Exception):
+    """The server answered, but the entry has no file to give.
+
+    v2 rejects the download with HTTP 400 (handled in ``_humanize_error``); v1
+    answers with an empty 200, which surfaces here instead of as a silent
+    zero-byte file or a confusing "unsupported format".
+    """
 
 
 # --- shared plumbing ---------------------------------------------------------
@@ -128,9 +143,11 @@ async def downloaded(
     # that are invalid in local file names on Windows.
     target = scratch / extract.sanitize_filename(filename, fallback=f"{entry_id}.bin")
     try:
-        _, content_type, _ = await client.export_entry_to_file(
+        written, content_type, _ = await client.export_entry_to_file(
             entry_id, target, max_bytes=max_bytes
         )
+        if written == 0:
+            raise NoElectronicDocumentError(NO_FILE_MESSAGE)
         yield target, content_type
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -197,6 +214,10 @@ async def cmd_get(client: LaserficheClient, args: argparse.Namespace) -> int:
     written, content_type, digest = await client.export_entry_to_file(
         entry_id, dest, max_bytes=args.max_bytes
     )
+    if written == 0:
+        # Don't leave a misleading zero-byte file behind.
+        dest.unlink(missing_ok=True)
+        raise NoElectronicDocumentError(NO_FILE_MESSAGE)
 
     if args.json:
         emit_json(
@@ -576,6 +597,9 @@ def run(settings: Settings, args: argparse.Namespace) -> int:
     except LaserficheError as exc:
         warn(f"laserfiche-mcp {args.command}: {_humanize_error(exc)}")
         return EXIT_FAILED
+    except NoElectronicDocumentError as exc:
+        warn(f"laserfiche-mcp {args.command}: {exc}")
+        return EXIT_FAILED
     except (OSError, ValueError) as exc:
         # A local filesystem problem (permission denied, disk full, bad
         # destination path) — one line, not a traceback. ValueError is
@@ -602,6 +626,9 @@ def _humanize_error(exc: LaserficheError) -> str:
             "could not reach the Laserfiche server. Check your network/VPN, "
             "or re-run `laserfiche-mcp setup` to fix the server address."
         )
+
+    if is_no_electronic_document(exc):
+        return NO_FILE_MESSAGE
 
     detail = lf_error_detail(exc)
     title = detail.get("title") or detail.get("message")

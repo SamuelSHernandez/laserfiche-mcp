@@ -196,3 +196,126 @@ async def test_scratch_files_are_cleaned_up(tmp_path: Path) -> None:
 
     after = set(Path(tempfile.gettempdir()).glob("lf-dedupe-*"))
     assert after == before
+
+
+# --- entries with no electronic document ---------------------------------------
+#
+# A scanned entry (page images only) has no file. v2 rejects the export with a
+# 400 / errorCode 216; v1 answers with an empty 200. Either way there are no
+# bytes to compare, so the entry must be skipped with a reason — never grouped
+# with other scanned entries as "duplicates", and never silently treated as
+# unique.
+
+_NO_EDOC_BODY = {
+    "title": "This entry does not contain an electronic document",
+    "status": 400,
+    "errorCode": 216,
+}
+
+
+def _no_edoc_error() -> LaserficheError:
+    return LaserficheError("HTTP 400", status_code=400, detail=_NO_EDOC_BODY)
+
+
+class NoEdocDocs(FakeDocs):
+    """FakeDocs where chosen entries raise the v2 'no electronic document' 400."""
+
+    def __init__(
+        self,
+        contents: dict[int, bytes],
+        *,
+        probe_no_edoc: set[int] | None = None,
+        download_no_edoc: set[int] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__({k: v for k, v in contents.items()}, **kwargs)
+        self.probe_no_edoc = probe_no_edoc or set()
+        self.download_no_edoc = download_no_edoc or set()
+
+    async def export_entry_meta_only(
+        self, entry_id: int, *, part: str = "Edoc"
+    ) -> tuple[int | None, str | None]:
+        if entry_id in self.probe_no_edoc:
+            raise _no_edoc_error()
+        return await super().export_entry_meta_only(entry_id, part=part)
+
+    async def export_entry_to_file(
+        self, entry_id: int, dest: Path, *, part: str = "Edoc", max_bytes: int | None = None
+    ) -> tuple[int, str | None, str]:
+        if entry_id in self.download_no_edoc:
+            raise _no_edoc_error()
+        return await super().export_entry_to_file(entry_id, dest, part=part, max_bytes=max_bytes)
+
+
+@pytest.mark.asyncio
+async def test_v2_no_edoc_rejection_at_probe_is_skipped_with_a_reason() -> None:
+    client = NoEdocDocs({1: b"same", 2: b"same", 3: b""}, probe_no_edoc={3})
+
+    report = await duplicates.find_duplicates(client, _docs(1, 2, 3))
+
+    assert [e["entry_id"] for g in report.groups for e in g.entries] == [1, 2]
+    assert [s["entry_id"] for s in report.skipped] == [3]
+    assert "no electronic document" in report.skipped[0]["reason"]
+    # The reason is the friendly one, not the raw HTTP error.
+    assert "HTTP 400" not in report.skipped[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_two_scanned_entries_are_not_grouped_as_duplicates() -> None:
+    """The v1 failure mode: an empty 200 gives size 0 for every scanned entry,
+    which used to make them all look like identical zero-byte duplicates."""
+    client = FakeDocs({1: b"", 2: b"", 3: b"real"})
+
+    report = await duplicates.find_duplicates(client, _docs(1, 2, 3))
+
+    assert report.groups == []
+    assert sorted(s["entry_id"] for s in report.skipped) == [1, 2]
+    assert all("no electronic document" in s["reason"] for s in report.skipped)
+    assert client.downloaded == []
+
+
+@pytest.mark.asyncio
+async def test_v2_no_edoc_rejection_at_download_is_skipped_with_a_reason() -> None:
+    # Size is unknown (no Content-Length), so the doc reaches pass 2, where the
+    # server rejects the download.
+    client = NoEdocDocs(
+        {1: b"same", 2: b"same", 3: b""},
+        sizes={1: None, 2: None, 3: None},
+        download_no_edoc={3},
+    )
+
+    report = await duplicates.find_duplicates(client, _docs(1, 2, 3))
+
+    assert len(report.groups) == 1
+    assert [s["entry_id"] for s in report.skipped] == [3]
+    assert "no electronic document" in report.skipped[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_size_with_an_empty_body_is_skipped_not_hashed() -> None:
+    client = FakeDocs({1: b"", 2: b""}, sizes={1: None, 2: None})
+
+    report = await duplicates.find_duplicates(client, _docs(1, 2))
+
+    assert report.groups == []
+    assert report.documents_hashed == 0
+    assert sorted(s["entry_id"] for s in report.skipped) == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_an_unrelated_400_keeps_the_raw_probe_reason() -> None:
+    """Only the no-electronic-document 400 is reworded; other failures still say why."""
+
+    class Rejecting(FakeDocs):
+        async def export_entry_meta_only(
+            self, entry_id: int, *, part: str = "Edoc"
+        ) -> tuple[int | None, str | None]:
+            raise LaserficheError(
+                "HTTP 400",
+                status_code=400,
+                detail={"title": "Invalid parameter", "errorCode": 216},
+            )
+
+    report = await duplicates.find_duplicates(Rejecting({1: b"a"}), _docs(1))
+
+    assert report.skipped[0]["reason"].startswith("size probe:")

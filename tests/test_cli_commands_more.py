@@ -424,3 +424,84 @@ async def test_diff_json_carries_the_differences(
     payload = json.loads(capsys.readouterr().out)
     names = [d["name"] for d in payload["differences"]]
     assert "name" in names
+
+
+# --- entries with no electronic document ---------------------------------------
+#
+# v2 rejects the export of a scanned entry (page images only) with a 400 /
+# errorCode 216; v1 answers with an empty 200. Both must read as one clear line,
+# not "HTTP 400: ..." and not a silent zero-byte file.
+
+_NO_EDOC_BODY = {
+    "type": "https://example.test/problem",
+    "title": "This entry does not contain an electronic document",
+    "status": 400,
+    "errorCode": 216,
+}
+
+
+def test_humanize_no_electronic_document_is_actionable() -> None:
+    exc = LaserficheError("HTTP 400", status_code=400, detail=_NO_EDOC_BODY)
+
+    msg = cli_commands._humanize_error(exc)
+
+    assert msg == cli_commands.NO_FILE_MESSAGE
+    assert "HTTP 400" not in msg
+    assert "laserfiche-mcp search" in msg
+
+
+def test_humanize_unrelated_400_is_left_alone() -> None:
+    exc = LaserficheError(
+        "HTTP 400", status_code=400, detail={"title": "Invalid parameter", "errorCode": 216}
+    )
+
+    assert cli_commands._humanize_error(exc) == "HTTP 400: Invalid parameter"
+
+
+def _argv(command: str, dest: Path) -> list[str]:
+    return {
+        "get": ["get", "42", "--to", str(dest)],
+        "cat": ["cat", "42"],
+        "find": ["find", "42", "anything"],
+    }[command]
+
+
+@pytest.fixture
+def real_run(lf_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> Settings:
+    """Let run() build its own client, with the stub auth the other tests use."""
+    monkeypatch.setattr(cli_commands, "open_client", _build_client)
+    return Settings()  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("command", ["get", "cat", "find"])
+def test_v2_rejection_surfaces_as_the_friendly_one_liner(
+    httpx_mock: HTTPXMock, real_run: Settings, args_for, capsys, tmp_path: Path, command: str
+) -> None:
+    """End to end through run(): the 400 from the edoc download is translated."""
+    httpx_mock.add_response(method="GET", url=f"{_BASE}/Entries/42", json=_entry())
+    httpx_mock.add_response(method="GET", url=_EDOC, status_code=400, json=_NO_EDOC_BODY)
+    dest = tmp_path / "out.pdf"
+
+    rc = cli_commands.run(real_run, args_for(_argv(command, dest)))
+
+    err = capsys.readouterr().err
+    assert rc == cli_commands.EXIT_FAILED
+    assert cli_commands.NO_FILE_MESSAGE in err
+    assert "HTTP 400" not in err
+    assert not dest.exists()
+
+
+@pytest.mark.parametrize("command", ["get", "cat", "find"])
+def test_v1_empty_response_is_reported_not_written_as_an_empty_file(
+    httpx_mock: HTTPXMock, real_run: Settings, args_for, capsys, tmp_path: Path, command: str
+) -> None:
+    httpx_mock.add_response(method="GET", url=f"{_BASE}/Entries/42", json=_entry())
+    httpx_mock.add_response(method="GET", url=_EDOC, content=b"")
+    dest = tmp_path / "out.pdf"
+
+    rc = cli_commands.run(real_run, args_for(_argv(command, dest)))
+
+    err = capsys.readouterr().err
+    assert rc == cli_commands.EXIT_FAILED
+    assert cli_commands.NO_FILE_MESSAGE in err
+    assert not dest.exists()

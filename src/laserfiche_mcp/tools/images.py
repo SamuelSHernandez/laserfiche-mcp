@@ -25,7 +25,8 @@ from pydantic import Field
 from .. import _app
 from .._app import get_settings
 from ..client import EdocTooLarge
-from ..errors import LaserficheError, classify_lf_error
+from ..config import ApiVersion
+from ..errors import LaserficheError, classify_lf_error, is_no_electronic_document
 from ..ops import images as ops_images
 from ._helpers import entry_name, entry_path
 from ._registry import register
@@ -44,7 +45,7 @@ def _image_error(entry_id: int, slug: str, message: str, **fields: Any) -> dict[
     return payload
 
 
-def _no_image_file_error(entry_id: int) -> dict[str, Any]:
+def _no_image_file_error(entry_id: int, *, api_v2: bool = False) -> dict[str, Any]:
     """The entry has no electronic file — typically a picture that Laserfiche stored
     as page images (what happens to a JPG/PNG uploaded through the web client)."""
     payload = _no_edoc_error(entry_id, "image", None)
@@ -52,14 +53,19 @@ def _no_image_file_error(entry_id: int) -> dict[str, Any]:
     payload["message"] = (
         "This entry has no electronic file to return. Laserfiche stores pictures "
         "uploaded as images (for example through the web client) as page images, "
-        "and the Repository API can only return page images on v2 servers."
+        "and this tool can only read pictures stored as electronic files."
     )
-    payload["hint"] = (
-        "On a v1 server (LF_API_VERSION=v1) page images cannot be fetched at all. "
+    options = (
+        "Options: store pictures as electronic documents (e.g. via import_document) "
+        "so they can be read; or, if Laserfiche has OCR'd it, read that text with "
+        "get_document_text or search_content."
+        if api_v2
+        else "On a v1 server (LF_API_VERSION=v1) page images cannot be fetched at all. "
         "Options: use a v2 server (LF_API_VERSION=v2); store pictures as electronic "
         "documents (e.g. via import_document) so they can be read; or, if "
         "Laserfiche has OCR'd it, read that text with search_content."
     )
+    payload["hint"] = options
     return payload
 
 
@@ -135,6 +141,7 @@ async def get_document_image(
     settings = get_settings()
     client = _app.get_client()
     pillow = ops_images.pillow_available()
+    api_v2 = settings.api_version is ApiVersion.V2
     edge = max_edge or settings.image_max_edge
 
     # Without Pillow nothing can be shrunk, so the download itself is held to the
@@ -144,9 +151,11 @@ async def get_document_image(
     try:
         declared, _ctype = await client.export_entry_meta_only(entry_id, part="Edoc")
     except LaserficheError as exc:
+        if is_no_electronic_document(exc):
+            return _no_image_file_error(entry_id, api_v2=api_v2)
         return classify_lf_error("get_document_image", exc, entry_id=entry_id)
     if declared == 0:
-        return _no_image_file_error(entry_id)
+        return _no_image_file_error(entry_id, api_v2=api_v2)
     if declared is not None and declared > download_cap:
         return _image_error(
             entry_id,
@@ -173,9 +182,11 @@ async def get_document_image(
             max_bytes=download_cap,
         )
     except LaserficheError as exc:
+        if is_no_electronic_document(exc):
+            return _no_image_file_error(entry_id, api_v2=api_v2)
         return classify_lf_error("get_document_image", exc, entry_id=entry_id)
     if not content:
-        return _no_image_file_error(entry_id)
+        return _no_image_file_error(entry_id, api_v2=api_v2)
 
     try:
         prepared = ops_images.prepare_image(

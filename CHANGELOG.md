@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Scanned entries on a v2 server surfaced the raw server error (reported on #27).**
+  A v2 server rejects an Edoc export for an entry with no electronic file
+  (page images only) with HTTP 400 / `errorCode` 216 "This entry does not contain an
+  electronic document", where v1 answers with an empty 200. Only the empty-body
+  form was recognised, so on v2 `get_document_edoc` and `get_document_image` returned
+  the unclassified server error. Both forms now give the same result:
+  `get_document_edoc(mode="text"|"bytes")` returns `no_electronic_document`,
+  `mode="info"` reports `byte_size: 0` / `has_electronic_document: false`, and
+  `get_document_image` returns its "no electronic file" error. Other 400/216
+  responses are still reported as they were.
+- **The same missing-file case in the rest of the toolset.**
+  `get_document_text` now returns `no_extracted_text` for the v2 rejection instead of
+  the raw error. `find_duplicates` and `laserfiche-mcp dedupe` skip entries with no
+  electronic document and list them in `skipped` with a reason; before, v2 reported
+  the raw HTTP error and v1 grouped every scanned entry as a zero-byte "duplicate" of
+  the others. `laserfiche-mcp get`, `cat` and `find` print one clear line (v2's 400,
+  and v1's empty response, which used to leave a zero-byte file (`get`) or fail with
+  "Could not open PDF ... empty file" (`cat`, `find`)).
+- **Error contract.** `docs/error-contract.md` listed `get_document_text` under
+  `no_electronic_document`; it emits `no_extracted_text`. The two now have separate
+  rows naming the tools that actually return them.
+- **Test suite no longer depends on a developer's local `.env`.** `Settings` reads
+  `.env` from the working directory, which refilled `LF_PASSWORD` in
+  `test_missing_password_for_password_mode_raises` and made it fail locally (CI has no
+  `.env`). The shared `lf_env` fixture now ignores `.env`.
+
 ## [2.6.1] - 2026-10-08
 
 ### Fixed

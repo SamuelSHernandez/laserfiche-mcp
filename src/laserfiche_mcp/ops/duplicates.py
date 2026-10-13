@@ -25,7 +25,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from ..errors import LaserficheError
+from ..errors import LaserficheError, is_no_electronic_document
+
+_NO_FILE_REASON = (
+    "no electronic document (e.g. a scanned entry stored as page images), "
+    "so there are no bytes to compare"
+)
 
 
 class _HashClient(Protocol):
@@ -84,6 +89,11 @@ async def find_duplicates(
     ``max_bytes`` skips individual files larger than the limit rather than
     failing the run; they are listed in ``report.skipped`` so a large file is
     never silently treated as unique.
+
+    Entries with no electronic document (scanned page images) have no bytes to
+    compare, so they are skipped with a reason rather than grouped. v2 signals
+    this with an HTTP 400; v1 answers with an empty 200, which would otherwise
+    make every scanned entry look like a zero-byte duplicate of every other.
     """
     report = DuplicateReport(documents_examined=len(documents))
 
@@ -96,8 +106,15 @@ async def find_duplicates(
         try:
             size, _ = await client.export_entry_meta_only(entry_id)
         except LaserficheError as exc:
+            reason = _NO_FILE_REASON if is_no_electronic_document(exc) else f"size probe: {exc}"
+            report.skipped.append({"entry_id": entry_id, "name": doc.get("name"), "reason": reason})
+            continue
+
+        if size == 0:
+            # v1's way of saying "no electronic document" (indistinguishable from a
+            # genuinely empty file, which has nothing worth deduplicating anyway).
             report.skipped.append(
-                {"entry_id": entry_id, "name": doc.get("name"), "reason": f"size probe: {exc}"}
+                {"entry_id": entry_id, "name": doc.get("name"), "reason": _NO_FILE_REASON}
             )
             continue
 
@@ -145,12 +162,25 @@ async def find_duplicates(
                     # which can fail independently of the network call —
                     # AV locks, a full or locked temp dir. One doc's local
                     # I/O failure shouldn't abort the whole scan.
+                    reason = (
+                        _NO_FILE_REASON
+                        if isinstance(exc, LaserficheError) and is_no_electronic_document(exc)
+                        else str(exc)
+                    )
                     report.skipped.append(
-                        {"entry_id": entry_id, "name": doc.get("name"), "reason": str(exc)}
+                        {"entry_id": entry_id, "name": doc.get("name"), "reason": reason}
                     )
                     continue
                 finally:
                     target.unlink(missing_ok=True)
+
+                if written == 0:
+                    # Size was unknown up front (no Content-Length) and the body
+                    # was empty: same "no file" case as the pass-1 zero check.
+                    report.skipped.append(
+                        {"entry_id": entry_id, "name": doc.get("name"), "reason": _NO_FILE_REASON}
+                    )
+                    continue
 
                 report.documents_hashed += 1
                 report.bytes_downloaded += written
