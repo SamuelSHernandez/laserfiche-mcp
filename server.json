@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.SamuelSHernandez/laserfiche-mcp",
+  "name": "io.github.adventist-gc/laserfiche-mcp",
   "description": "MCP server for self-hosted Laserfiche repositories \u2014 search and read documents from Claude.",
   "repository": {
-    "url": "https://github.com/SamuelSHernandez/laserfiche-mcp",
+    "url": "https://github.com/adventist-gc/laserfiche-mcp",
     "source": "github"
   },
   "version": "2.6.2",

@@ -199,7 +199,7 @@ Separately, an independent 268-agent audit reviewed every module,
 architecture, testing, MCP tool-surface UX/DX, security, observability,
 and doc in this project — 15 dimensions, each finding adversarially
 checked by 3 skeptics before being counted. Full report:
-[`docs/internal/AUDIT_2026-09.md`](https://github.com/SamuelSHernandez/laserfiche-mcp/blob/main/docs/internal/AUDIT_2026-09.md)
+[`docs/internal/AUDIT_2026-09.md`](https://github.com/adventist-gc/laserfiche-mcp/blob/main/docs/internal/AUDIT_2026-09.md)
 (not shipped in the PyPI sdist, same as the other `docs/internal/*`
 working notes). All 83 confirmed findings (27 high, 39 medium, 17 low)
 are fixed below, except two large architecture items the report itself
@@ -1159,17 +1159,17 @@ Writes are off by default. Set `LF_READ_ONLY=false` to register them; otherwise 
 
 Initial public release. **Yanked** — see v0.2.0 for the correct auth flow and endpoint paths.
 
-[Unreleased]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.2.0...HEAD
-[2.2.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.1.0...v2.2.0
-[2.1.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v2.0.0...v2.1.0
-[2.0.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.5.0...v2.0.0
-[1.5.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.4.2...v1.5.0
-[1.4.2]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.4.1...v1.4.2
-[1.4.1]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.4.0...v1.4.1
-[1.4.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.3.0...v1.4.0
-[1.3.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v1.1.0...v1.2.0
-[1.1.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v0.2.1...v1.1.0
-[0.2.1]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/SamuelSHernandez/laserfiche-mcp/releases/tag/v0.1.0
+[Unreleased]: https://github.com/adventist-gc/laserfiche-mcp/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/adventist-gc/laserfiche-mcp/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/adventist-gc/laserfiche-mcp/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/adventist-gc/laserfiche-mcp/compare/v1.5.0...v2.0.0
+[1.5.0]: https://github.com/adventist-gc/laserfiche-mcp/compare/v1.4.2...v1.5.0
+[1.4.2]: https://github.com/adventist-gc/laserfiche-mcp/compare/v1.4.1...v1.4.2
+[1.4.1]: https://github.com/adventist-gc/laserfiche-mcp/compare/v1.4.0...v1.4.1
+[1.4.0]: https://github.com/adventist-gc/laserfiche-mcp/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/adventist-gc/laserfiche-mcp/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/adventist-gc/laserfiche-mcp/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/adventist-gc/laserfiche-mcp/compare/v0.2.1...v1.1.0
+[0.2.1]: https://github.com/adventist-gc/laserfiche-mcp/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/adventist-gc/laserfiche-mcp/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/adventist-gc/laserfiche-mcp/releases/tag/v0.1.0

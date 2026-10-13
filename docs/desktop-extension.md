@@ -9,7 +9,7 @@ Search and read your Laserfiche documents by chatting with Claude. One download,
 You need two things:
 
 - [Claude Desktop](https://claude.ai/download) — the free Claude app for Mac or Windows
-- The extension file: [**download `laserfiche-mcp.mcpb`**](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/latest/download/laserfiche-mcp.mcpb) (always the newest version), or browse the [latest release](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/latest)
+- The extension file: [**download `laserfiche-mcp.mcpb`**](https://github.com/adventist-gc/laserfiche-mcp/releases/latest/download/laserfiche-mcp.mcpb) (always the newest version), or browse the [latest release](https://github.com/adventist-gc/laserfiche-mcp/releases/latest)
 
 ### 2. Double-click & connect
 
@@ -52,7 +52,7 @@ Claude searches, reads, and summarizes — you just ask.
 - **It runs locally.** The extension runs on your machine and talks directly to your Laserfiche server. There's no middleman service.
 - **Your repository, your credentials.** Every person installs their own copy and connects with their own account. Nothing is pooled or shared.
 
-This is a community project under the MIT license, not affiliated with or endorsed by Laserfiche.
+This is an open-source project owned by the General Conference of Seventh-day Adventists, provided as-is under the terms in [LICENSE](../LICENSE). It is not affiliated with or endorsed by Laserfiche. Issues and suggestions are welcome.
 
 ## For IT & advanced users
 

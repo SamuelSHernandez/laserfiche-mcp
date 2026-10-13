@@ -1,14 +1,14 @@
-<!-- mcp-name: io.github.SamuelSHernandez/laserfiche-mcp -->
+<!-- mcp-name: io.github.adventist-gc/laserfiche-mcp -->
 
 # laserfiche-mcp
 
 [![PyPI version](https://img.shields.io/pypi/v/laserfiche-mcp.svg)](https://pypi.org/project/laserfiche-mcp/)
 [![Python versions](https://img.shields.io/pypi/pyversions/laserfiche-mcp.svg)](https://pypi.org/project/laserfiche-mcp/)
-[![CI](https://github.com/SamuelSHernandez/laserfiche-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelSHernandez/laserfiche-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/adventist-gc/laserfiche-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/adventist-gc/laserfiche-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-1f6feb.svg)](https://modelcontextprotocol.io)
 
-> **Community project — not affiliated with or endorsed by Laserfiche.**
+> **Owned by the General Conference of Seventh-day Adventists. Not affiliated with or endorsed by Laserfiche.**
 
 Let Claude (Desktop, Code, or any [MCP](https://modelcontextprotocol.io)
 client) search and read documents in a self-hosted
@@ -94,7 +94,7 @@ Every tool, with details: [docs/tools.md](docs/tools.md).
 
 No terminal, no config files.
 
-1. [Download the extension](https://github.com/SamuelSHernandez/laserfiche-mcp/releases/latest/download/laserfiche-mcp.mcpb) (needs [Claude Desktop](https://claude.ai/download)).
+1. [Download the extension](https://github.com/adventist-gc/laserfiche-mcp/releases/latest/download/laserfiche-mcp.mcpb) (needs [Claude Desktop](https://claude.ai/download)).
 2. Double-click it, click **Install**, and fill in the form:
 
    | Field | What to enter |
@@ -137,7 +137,7 @@ links, logging — is in [docs/configuration.md](docs/configuration.md).
 > [!WARNING]
 > Laserfiche **Cloud** support is **beta** and has never been verified against
 > a live tenant. If you have Cloud access, please
-> [open an issue](https://github.com/SamuelSHernandez/laserfiche-mcp/issues)
+> [open an issue](https://github.com/adventist-gc/laserfiche-mcp/issues)
 > with what worked or broke. Details in
 > [docs/configuration.md](docs/configuration.md).
 
@@ -266,7 +266,7 @@ model whether to retry, ask you, or give up. See
 
 ## Contributing
 
-Issues and PRs welcome. Run the tests with:
+Issues, suggestions, and PRs are encouraged and appreciated. Run the tests with:
 
 ```bash
 uv sync --extra dev
@@ -274,9 +274,16 @@ uv run pytest && uv run ruff check src tests && uv run mypy src
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, where help is most wanted,
-and the opt-in integration tests. This is a community project, **not**
-affiliated with or endorsed by Laserfiche.
+and the opt-in integration tests. This project is **not** affiliated with or
+endorsed by Laserfiche.
 
-## License
+## Ownership and license
 
-Released under the [MIT License](LICENSE). Copyright (c) 2026 Samuel S. Hernandez.
+This is an open-source project owned by the General Conference of
+Seventh-day Adventists and available to the public **as-is**, without
+warranty. It was created by, and is maintained by, Samuel Hernandez on the
+General Conference's behalf; the maintainer holds no copyright in it. See the
+[LICENSE](LICENSE) file for the full terms.
+
+Bug reports, questions, and suggestions are encouraged and appreciated —
+please [open an issue](https://github.com/adventist-gc/laserfiche-mcp/issues).

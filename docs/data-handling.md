@@ -91,7 +91,8 @@ The general shape, to be verified against your own terms:
   Enterprise agreement so the data terms are contractual.
 
 > [!NOTE]
-> This project is a community MCP server. It has no visibility into and makes no
+> This project is an open-source MCP server owned by the General Conference of
+> Seventh-day Adventists. It has no visibility into and makes no
 > promises about Anthropic's data practices — those are governed by the agreement
 > between you and Anthropic. This page explains what the *software* does; the rest
 > is your contract with your AI provider.

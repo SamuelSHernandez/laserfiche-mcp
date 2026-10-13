@@ -199,7 +199,7 @@ The release workflow is set up but the PyPI side isn't trusting it
 yet. Go to
 <https://pypi.org/manage/project/laserfiche-mcp/settings/publishing/>
 and add a GitHub publisher:
-- Owner: `SamuelSHernandez`
+- Owner: `adventist-gc`
 - Repository: `laserfiche-mcp`
 - Workflow: `release.yml`
 - Environment: `pypi`
