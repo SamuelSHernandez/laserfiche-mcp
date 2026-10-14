@@ -6,7 +6,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "Samuel S. Hernandez" },
+    { name = "General Conference of Seventh-day Adventists" },
+]
+maintainers = [
+    { name = "Samuel Hernandez" },
 ]
 keywords = [
     "mcp",
@@ -83,11 +86,11 @@ dev = [
 laserfiche-mcp = "laserfiche_mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/SamuelSHernandez/laserfiche-mcp"
-Repository = "https://github.com/SamuelSHernandez/laserfiche-mcp"
-Documentation = "https://github.com/SamuelSHernandez/laserfiche-mcp#readme"
-Changelog = "https://github.com/SamuelSHernandez/laserfiche-mcp/blob/main/CHANGELOG.md"
-Issues = "https://github.com/SamuelSHernandez/laserfiche-mcp/issues"
+Homepage = "https://github.com/adventist-gc/laserfiche-mcp"
+Repository = "https://github.com/adventist-gc/laserfiche-mcp"
+Documentation = "https://github.com/adventist-gc/laserfiche-mcp#readme"
+Changelog = "https://github.com/adventist-gc/laserfiche-mcp/blob/main/CHANGELOG.md"
+Issues = "https://github.com/adventist-gc/laserfiche-mcp/issues"
 
 [build-system]
 requires = ["hatchling"]

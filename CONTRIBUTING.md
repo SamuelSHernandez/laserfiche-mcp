@@ -6,7 +6,7 @@ in one or two PRs without much process.
 ## Development setup
 
 ```bash
-git clone https://github.com/SamuelSHernandez/laserfiche-mcp
+git clone https://github.com/adventist-gc/laserfiche-mcp
 cd laserfiche-mcp
 uv sync --extra dev
 ```
@@ -97,7 +97,7 @@ enforced, but it keeps `git log` scannable.
 
 ## Reporting bugs
 
-Use [GitHub Issues](https://github.com/SamuelSHernandez/laserfiche-mcp/issues).
+Use [GitHub Issues](https://github.com/adventist-gc/laserfiche-mcp/issues).
 Include: Laserfiche server version, repository deployment (self-hosted vs
 cloud), the tool that failed, and the response payload (with credentials
 redacted).

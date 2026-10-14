@@ -78,7 +78,7 @@ Options:
 
 Exposing --http to a network requires LF_HTTP_AUTH_TOKEN (a bearer token
 checked on every request) and TLS terminated by a reverse proxy in front.
-See https://github.com/SamuelSHernandez/laserfiche-mcp#remote-http-web-clients.
+See https://github.com/adventist-gc/laserfiche-mcp#remote-http-web-clients.
 
 Configuration: run `laserfiche-mcp setup` once, or set LF_* environment
 variables / a .env file in the working directory. (Precedence: env vars,
@@ -89,7 +89,7 @@ then ./.env, then the file setup wrote.) Required at a minimum:
   LF_USERNAME        Service account username
   LF_PASSWORD        Service account password
 
-See https://github.com/SamuelSHernandez/laserfiche-mcp#configure for the
+See https://github.com/adventist-gc/laserfiche-mcp#configure for the
 full list including OAuth, SSL, retry, write-mode safety guards, and
 logging knobs.
 
@@ -123,7 +123,7 @@ def _format_config_error(exc: Exception) -> str:
             "  2. Set LF_REPO_API_URL, LF_REPOSITORY_ID, LF_USERNAME, LF_PASSWORD",
             "     as environment variables (e.g. via your MCP client's `env` block).",
             "",
-            "Docs: https://github.com/SamuelSHernandez/laserfiche-mcp#configure",
+            "Docs: https://github.com/adventist-gc/laserfiche-mcp#configure",
         ]
     )
     return "\n".join(lines)
@@ -588,7 +588,7 @@ async def _run_diagnose(settings: Settings) -> int:
     print()
     print(
         "Done. If anything above failed, see "
-        "https://github.com/SamuelSHernandez/laserfiche-mcp#errors "
+        "https://github.com/adventist-gc/laserfiche-mcp#errors "
         "for the relevant error slug."
     )
     return 0

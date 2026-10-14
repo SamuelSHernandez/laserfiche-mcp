@@ -286,7 +286,7 @@ env var (default `INFO`). Pipe those into whatever your audit pipeline
 expects. Records governance does not get to have a black box at the edge.
 
 If you build something with this, I'd genuinely like to see it.
-[Open an issue](https://github.com/SamuelSHernandez/laserfiche-mcp/issues),
+[Open an issue](https://github.com/adventist-gc/laserfiche-mcp/issues),
 or write to me directly.
 
 ### A note on writes

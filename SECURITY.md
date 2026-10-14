@@ -20,7 +20,7 @@ Only the latest minor release receives security fixes.
 
 The preferred channel is GitHub's private vulnerability reporting. Click the
 **"Report a vulnerability"** button on the
-[Security tab](https://github.com/SamuelSHernandez/laserfiche-mcp/security)
+[Security tab](https://github.com/adventist-gc/laserfiche-mcp/security)
 of this repository.
 
 If you can't use GitHub's reporting flow, email
